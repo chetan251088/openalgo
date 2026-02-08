@@ -2,7 +2,6 @@ import {
   BarChart3,
   Bell,
   BookOpen,
-  Brain,
   ClipboardList,
   Code2,
   Database,
@@ -40,9 +39,6 @@ export const navItems: NavItem[] = [
   { href: '/strategy', label: 'Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
-  { href: '/auto-trade/analytics', label: 'Auto Analytics', icon: BarChart3 },
-  { href: '/auto-trade/tuning', label: 'Auto Tuning', icon: Brain },
-  { href: '/manual-trades/analytics', label: 'Manual Analytics', icon: BarChart3 },
 ]
 
 // Items shown in mobile bottom navigation
@@ -70,9 +66,6 @@ export const profileMenuItems: NavItem[] = [
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
   { href: '/python', label: 'Python Strategies', icon: Code2 },
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
-  { href: '/auto-trade/analytics', label: 'Auto Analytics', icon: BarChart3 },
-  { href: '/auto-trade/tuning', label: 'Auto Tuning', icon: Brain },
-  { href: '/manual-trades/analytics', label: 'Manual Analytics', icon: BarChart3 },
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },

@@ -10,7 +10,7 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(11)
+      expect(navItems).toHaveLength(9)
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
@@ -57,8 +57,6 @@ describe('Navigation Config', () => {
       expect(sheetLabels).toContain('Action Center')
       expect(sheetLabels).toContain('Platforms')
       expect(sheetLabels).toContain('Logs')
-      expect(sheetLabels).toContain('Auto Analytics')
-      expect(sheetLabels).toContain('Auto Tuning')
     })
   })
 

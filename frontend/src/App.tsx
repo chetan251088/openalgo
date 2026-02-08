@@ -40,9 +40,6 @@ const Platforms = lazy(() => import('@/pages/Platforms'))
 const TradingView = lazy(() => import('@/pages/TradingView'))
 const GoCharting = lazy(() => import('@/pages/GoCharting'))
 const PnLTracker = lazy(() => import('@/pages/PnLTracker'))
-const AutoTradeAnalytics = lazy(() => import('@/pages/AutoTradeAnalytics'))
-const AutoTradeModelTuning = lazy(() => import('@/pages/AutoTradeModelTuning'))
-const ManualTradeAnalytics = lazy(() => import('@/pages/ManualTradeAnalytics'))
 
 // Sandbox & Analyzer
 const Sandbox = lazy(() => import('@/pages/Sandbox'))
@@ -59,6 +56,11 @@ const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
+const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
+const VolSurface = lazy(() => import('@/pages/VolSurface'))
+const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
+const IVSmile = lazy(() => import('@/pages/IVSmile'))
+const OIProfile = lazy(() => import('@/pages/OIProfile'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -96,6 +98,11 @@ const TelegramIndex = lazy(() => import('@/pages/telegram/TelegramIndex'))
 const TelegramConfig = lazy(() => import('@/pages/telegram/TelegramConfig'))
 const TelegramUsers = lazy(() => import('@/pages/telegram/TelegramUsers'))
 const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'))
+
+// AI Scalper & Manual Trades pages
+const AutoTradeAnalytics = lazy(() => import('@/pages/AutoTradeAnalytics'))
+const AutoTradeModelTuning = lazy(() => import('@/pages/AutoTradeModelTuning'))
+const ManualTradeAnalytics = lazy(() => import('@/pages/ManualTradeAnalytics'))
 
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
@@ -145,9 +152,6 @@ function App() {
                 <Route path="/tradingview" element={<TradingView />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
-                <Route path="/auto-trade/analytics" element={<AutoTradeAnalytics />} />
-                <Route path="/auto-trade/tuning" element={<AutoTradeModelTuning />} />
-                <Route path="/manual-trades/analytics" element={<ManualTradeAnalytics />} />
                 {/* Phase 4: Sandbox & Analyzer */}
                 <Route path="/sandbox" element={<Sandbox />} />
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
@@ -157,6 +161,11 @@ function App() {
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
                 <Route path="/maxpain" element={<MaxPain />} />
+                <Route path="/straddle" element={<StraddleChart />} />
+                <Route path="/volsurface" element={<VolSurface />} />
+                <Route path="/gex" element={<GEXDashboard />} />
+                <Route path="/ivsmile" element={<IVSmile />} />
+                <Route path="/oiprofile" element={<OIProfile />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
@@ -194,6 +203,10 @@ function App() {
                 <Route path="/telegram/config" element={<TelegramConfig />} />
                 <Route path="/telegram/users" element={<TelegramUsers />} />
                 <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
+                {/* AI Scalper & Manual Trades */}
+                <Route path="/auto-trade/analytics" element={<AutoTradeAnalytics />} />
+                <Route path="/auto-trade/model-tuning" element={<AutoTradeModelTuning />} />
+                <Route path="/manual-trades/analytics" element={<ManualTradeAnalytics />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />
