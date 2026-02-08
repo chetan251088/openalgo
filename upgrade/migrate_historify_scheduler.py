@@ -38,8 +38,9 @@ MIGRATION_VERSION = "011"
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(parent_dir, ".env"))
 
-# Database path
-HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
+# Database path (PATH or URL; multi-instance envs often set URL)
+_def = os.getenv("HISTORIFY_DATABASE_PATH") or os.getenv("HISTORIFY_DATABASE_URL") or "db/historify.duckdb"
+HISTORIFY_DB_PATH = (_def.strip().strip("'\"") if isinstance(_def, str) else None) or "db/historify.duckdb"
 
 
 def get_db_path():

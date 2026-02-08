@@ -142,11 +142,18 @@ def cancel_order_with_auth(
         )
         return True, order_response_data, 200
     else:
-        message = (
-            response_message.get("message", "Failed to cancel order")
-            if isinstance(response_message, dict)
-            else "Failed to cancel order"
-        )
+        message = "Failed to cancel order"
+        if isinstance(response_message, dict):
+            message = (
+                response_message.get("message") or
+                response_message.get("errorMessage") or  # Dhan format
+                "Failed to cancel order"
+            )
+            # Dhan nested error format: {"status": "failed", "data": {"DH-xxx": "msg"}}
+            if message == "Failed to cancel order" and response_message.get("data"):
+                error_data = response_message["data"]
+                if isinstance(error_data, dict) and error_data:
+                    message = next(iter(error_data.values()), message)
         error_response = {"status": "error", "message": message}
         executor.submit(async_log_order, "cancelorder", original_data, error_response)
         return False, error_response, status_code

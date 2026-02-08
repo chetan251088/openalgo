@@ -222,11 +222,24 @@ def place_order_with_auth(
         )
         return True, order_response_data, 200
     else:
-        message = (
-            response_data.get("message", "Failed to place order")
-            if isinstance(response_data, dict)
-            else "Failed to place order"
-        )
+        # Extract error message from response_data
+        # Different brokers use different error keys
+        message = "Failed to place order"
+        if isinstance(response_data, dict):
+            # Try broker-specific error formats
+            message = (
+                response_data.get("errMsg") or          # Kotak format
+                response_data.get("message") or          # Generic format
+                response_data.get("emsg") or             # Alternative Kotak format
+                response_data.get("errorMessage") or     # Dhan format
+                "Failed to place order"
+            )
+            # Dhan nested error format: {"status": "failed", "data": {"DH-xxx": "msg"}}
+            if message == "Failed to place order" and response_data.get("data"):
+                error_data = response_data["data"]
+                if isinstance(error_data, dict) and error_data:
+                    message = next(iter(error_data.values()), message)
+        
         error_response = {"status": "error", "message": message}
         executor.submit(async_log_order, "placeorder", original_data, error_response)
         return False, error_response, res.status if res.status != 200 else 500

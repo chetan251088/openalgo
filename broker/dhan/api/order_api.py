@@ -393,13 +393,22 @@ def modify_order(data, auth):
     logger.debug(f"Modify order response: {data}")
     # return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
 
-    if data["orderId"]:
+    if res.status_code == 200 and data.get("orderId"):
         return {"status": "success", "orderid": data["orderId"]}, 200
     else:
+        message = (
+            data.get("errorMessage") or
+            data.get("message") or
+            "Failed to modify order"
+        )
+        # Handle Dhan nested error format
+        if data.get("data") and isinstance(data["data"], dict):
+            message = next(iter(data["data"].values()), message)
+        logger.error(f"Modify order failed with status {res.status_code}: {data}")
         return {
             "status": "error",
-            "message": data.get("message", "Failed to modify order"),
-        }, res.status
+            "message": message,
+        }, res.status_code
 
 
 def cancel_all_orders_api(data, auth):

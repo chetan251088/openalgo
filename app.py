@@ -38,8 +38,6 @@ from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
-from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
-from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
@@ -47,6 +45,8 @@ from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.master_contract_status import (
     master_contract_status_bp,  # Import the master contract status blueprint
 )
+from blueprints.manual_trades import manual_trades_bp
+from blueprints.mock_replay import mock_replay_bp
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
@@ -58,6 +58,8 @@ from blueprints.react_app import (  # Import React frontend blueprint
     serve_react_app,
 )
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
+from blueprints.scalping import scalping_bp  # Import the scalping interface blueprint
+from blueprints.ai_scalper import ai_scalper_bp
 from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
@@ -206,6 +208,8 @@ def create_app():
 
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
+    csrf.exempt(ai_scalper_bp)
+    csrf.exempt(mock_replay_bp)
 
     # Initialize security middleware before traffic logging
     init_security_middleware(app)
@@ -239,17 +243,16 @@ def create_app():
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
+    app.register_blueprint(scalping_bp)  # Register Scalping interface blueprint
+    app.register_blueprint(ai_scalper_bp)
+    app.register_blueprint(manual_trades_bp)
+    app.register_blueprint(mock_replay_bp)
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
-    app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
-    app.register_blueprint(vol_surface_bp)  # Register vol surface blueprint
-    app.register_blueprint(gex_bp)  # Register GEX blueprint
-    app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
-    app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
@@ -550,6 +553,15 @@ def setup_environment(app):
             logger.debug("Historify scheduler initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+        # Initialize Model Tuner scheduler
+        try:
+            from services.ai_scalper.model_tuner_scheduler import init_model_tuner_scheduler
+
+            init_model_tuner_scheduler()
+            logger.debug("Model tuner scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Model tuner scheduler: {e}")
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI

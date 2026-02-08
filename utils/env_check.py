@@ -82,12 +82,13 @@ def check_env_version_compatibility():
     Returns True if compatible, False if update needed
     """
     base_dir = os.path.dirname(__file__) + "/.."
-    env_path = os.path.join(base_dir, ".env")
+    dotenv_file = os.environ.get("DOTENV_FILE", ".env")
+    env_path = os.path.join(base_dir, dotenv_file)
     sample_env_path = os.path.join(base_dir, ".sample.env")
 
     # Check if both files exist
     if not os.path.exists(env_path):
-        print("\nError: .env file not found.")
+        print(f"\nError: {dotenv_file} file not found.")
         print("Solution: Copy .sample.env to .env and configure your settings")
         return False
 
@@ -201,16 +202,17 @@ def load_and_check_env_variables():
     if not check_env_version_compatibility():
         sys.exit(1)
 
-    # Define the path to the .env file in the main application path
-    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    # Define the path to the env file (supports DOTENV_FILE for multi-instance setups)
+    dotenv_file = os.environ.get("DOTENV_FILE", ".env")
+    env_path = os.path.join(os.path.dirname(__file__), "..", dotenv_file)
 
-    # Check if the .env file exists
+    # Check if the env file exists
     if not os.path.exists(env_path):
-        print("Error: .env file not found at the expected location.")
+        print(f"Error: {dotenv_file} file not found at the expected location.")
         print("\nSolution: Copy .sample.env to .env and configure your settings")
         sys.exit(1)
 
-    # Load environment variables from the .env file with override=True to ensure values are updated
+    # Load environment variables from the env file with override=True to ensure values are updated
     load_dotenv(dotenv_path=env_path, override=True)
 
     # Define the required environment variables

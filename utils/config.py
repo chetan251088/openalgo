@@ -4,8 +4,14 @@ import os
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file with override=True to ensure values are updated
-load_dotenv(override=True)
+# Load environment variables with override=True to ensure values are updated
+# Supports DOTENV_FILE env var for multi-instance setups (e.g. .env.kotak, .env.dhan)
+_dotenv_file = os.environ.get("DOTENV_FILE")
+if _dotenv_file:
+    _dotenv_path = os.path.join(os.path.dirname(__file__), "..", _dotenv_file)
+    load_dotenv(dotenv_path=_dotenv_path, override=True)
+else:
+    load_dotenv(override=True)
 
 
 def get_broker_api_key():

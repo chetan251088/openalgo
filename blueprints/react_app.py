@@ -5,7 +5,7 @@ Serves the pre-built React app for migrated routes.
 
 from pathlib import Path
 
-from flask import Blueprint, send_file, send_from_directory
+from flask import Blueprint, redirect, send_file, send_from_directory
 
 react_bp = Blueprint("react", __name__)
 
@@ -53,6 +53,17 @@ npm run build</pre>
 @react_bp.route("/")
 def react_index():
     return serve_react_app()
+
+
+# Legacy alias for React entry
+@react_bp.route("/react")
+def react_alias():
+    return redirect("/dashboard")
+
+
+@react_bp.route("/react/<path:subpath>")
+def react_alias_subpath(subpath: str):
+    return redirect(f"/{subpath}")
 
 
 # Login route
@@ -209,36 +220,6 @@ def react_maxpain():
     return serve_react_app()
 
 
-# Straddle Chart - Dynamic ATM Straddle analysis
-@react_bp.route("/straddle")
-def react_straddle():
-    return serve_react_app()
-
-
-# Vol Surface - 3D Implied Volatility surface
-@react_bp.route("/volsurface")
-def react_volsurface():
-    return serve_react_app()
-
-
-# GEX Dashboard - Gamma Exposure analysis
-@react_bp.route("/gex")
-def react_gex():
-    return serve_react_app()
-
-
-# IV Smile - Implied Volatility smile curve
-@react_bp.route("/ivsmile")
-def react_ivsmile():
-    return serve_react_app()
-
-
-# OI Profile - Open Interest Profile with futures candles
-@react_bp.route("/oiprofile")
-def react_oiprofile():
-    return serve_react_app()
-
-
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
@@ -276,6 +257,23 @@ def react_sandbox_mypnl():
 # API Request Analyzer
 @react_bp.route("/analyzer")
 def react_analyzer():
+    return serve_react_app()
+
+
+# Auto Trade Analytics & Model Tuning
+@react_bp.route("/auto-trade/analytics", strict_slashes=False)
+def react_auto_trade_analytics():
+    return serve_react_app()
+
+
+@react_bp.route("/auto-trade/tuning", strict_slashes=False)
+def react_auto_trade_tuning():
+    return serve_react_app()
+
+
+# Manual Trade Analytics (Scalping & Chart window trades)
+@react_bp.route("/manual-trades/analytics", strict_slashes=False)
+def react_manual_trades_analytics():
     return serve_react_app()
 
 

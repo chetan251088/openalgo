@@ -1,0 +1,41 @@
+# Manual Upstream Sync Commands
+
+## 1. SAVE WORK
+git add .
+git commit -m "save work before sync"
+git push origin main
+
+## 2. CREATE BACKUP
+git branch backup/sync-%RANDOM%
+
+## 3. SYNC
+git fetch upstream
+git rebase upstream/main
+
+## 4. IF CONFLICTS - CHECK COMMIT TYPE
+git show REBASE_HEAD --stat
+
+### If auto-build commit ([skip ci], static/css, frontend/dist):
+git rebase --skip
+
+### If YOUR commit with many conflicted files:
+# Keep YOUR version for ALL files (bulk command)
+git checkout --ours .
+git add .
+git rebase --continue
+
+### If need to take upstream for specific files:
+git checkout --theirs static/css/main.css
+git checkout --theirs frontend/dist/
+git add .
+git rebase --continue
+
+## 5. PUSH
+git push origin main --force-with-lease
+
+## 6. VERIFY
+git log --oneline -5
+
+## EMERGENCY ABORT
+git rebase --abort
+git reset --hard backup/sync-XXXXX

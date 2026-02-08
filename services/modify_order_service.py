@@ -142,11 +142,18 @@ def modify_order_with_auth(
         )
         return True, response_data, 200
     else:
-        message = (
-            response_message.get("message", "Failed to modify order")
-            if isinstance(response_message, dict)
-            else "Failed to modify order"
-        )
+        message = "Failed to modify order"
+        if isinstance(response_message, dict):
+            message = (
+                response_message.get("message") or
+                response_message.get("errorMessage") or  # Dhan format
+                "Failed to modify order"
+            )
+            # Dhan nested error format: {"status": "failed", "data": {"DH-xxx": "msg"}}
+            if message == "Failed to modify order" and response_message.get("data"):
+                error_data = response_message["data"]
+                if isinstance(error_data, dict) and error_data:
+                    message = next(iter(error_data.values()), message)
         error_response = {"status": "error", "message": message}
         executor.submit(async_log_order, "modifyorder", original_data, error_response)
         return False, error_response, status_code
