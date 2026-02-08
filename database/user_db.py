@@ -146,6 +146,14 @@ def find_user_by_username():
     return User.query.filter_by(is_admin=True).first()
 
 
+def get_email_by_username(username: str):
+    """Get email address for a username"""
+    if not username:
+        return None
+    user = User.query.filter_by(username=username).first()
+    return user.email if user else None
+
+
 def rehash_all_passwords():
     """
     Utility function to rehash all existing passwords with Argon2.

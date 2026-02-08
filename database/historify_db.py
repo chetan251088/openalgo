@@ -25,7 +25,15 @@ logger = get_logger(__name__)
 load_dotenv()
 
 # Database path - in /db folder like other OpenAlgo databases
-HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
+# Prefer PATH; URL is used by multi-instance envs (.env.kotak/dhan/zerodha). One shared DB is sufficient for all brokers.
+def _historify_path():
+    p = os.getenv("HISTORIFY_DATABASE_PATH") or os.getenv("HISTORIFY_DATABASE_URL") or "db/historify.duckdb"
+    if isinstance(p, str):
+        p = p.strip().strip("'\"")
+    return p or "db/historify.duckdb"
+
+
+HISTORIFY_DB_PATH = _historify_path()
 
 
 def get_db_path() -> str:
