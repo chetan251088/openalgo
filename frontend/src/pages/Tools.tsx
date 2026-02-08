@@ -27,36 +27,6 @@ const tools = [
     href: '/maxpain',
     color: 'bg-amber-500',
   },
-  {
-    title: 'Straddle Chart',
-    description: 'Dynamic ATM Straddle chart with rolling strike, Spot, and Synthetic Futures overlay',
-    href: '/straddle',
-    color: 'bg-teal-500',
-  },
-  {
-    title: 'Vol Surface',
-    description: '3D Implied Volatility surface across strikes and expiries using live option chain data',
-    href: '/volsurface',
-    color: 'bg-rose-500',
-  },
-  {
-    title: 'GEX Dashboard',
-    description: 'Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes',
-    href: '/gex',
-    color: 'bg-indigo-500',
-  },
-  {
-    title: 'IV Smile',
-    description: 'Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis',
-    href: '/ivsmile',
-    color: 'bg-cyan-500',
-  },
-  {
-    title: 'OI Profile',
-    description: 'Futures candlestick with OI butterfly and daily OI change across strikes',
-    href: '/oiprofile',
-    color: 'bg-orange-500',
-  },
 ]
 
 export default function Tools() {

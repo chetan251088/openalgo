@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mock Replay – Historify + Synthetic CE/PE</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0f1419; color: #e6edf3; }
+    .layout { display: flex; height: 100vh; }
+    .sidebar { width: 320px; min-width: 280px; background: #161b22; border-right: 1px solid #30363d; padding: 16px; overflow-y: auto; }
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .chart-wrap { flex: 1; position: relative; }
+    #chartContainer { width: 100%; height: 100%; }
+    h2 { font-size: 1rem; margin: 0 0 12px 0; color: #8b949e; }
+    label { display: block; font-size: 0.8rem; margin-top: 10px; color: #8b949e; }
+    input, select, button { width: 100%; padding: 8px 10px; margin-top: 4px; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; color: #e6edf3; font-size: 0.9rem; }
+    button { cursor: pointer; font-weight: 600; }
+    button.primary { background: #238636; border-color: #238636; }
+    button.primary:hover { background: #2ea043; }
+    button.danger { background: #da3633; border-color: #da3633; }
+    button.danger:hover { background: #f85149; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+    .btn-row button { flex: 1; }
+    .status { font-size: 0.8rem; padding: 6px 8px; border-radius: 6px; margin-top: 8px; }
+    .status.connected { background: #23863633; color: #3fb950; }
+    .status.disconnected { background: #da363333; color: #f85149; }
+    .ltp { font-size: 1.25rem; font-weight: 700; margin: 8px 0; color: #58a6ff; }
+    table { width: 100%; font-size: 0.75rem; border-collapse: collapse; margin-top: 8px; }
+    th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #21262d; }
+    th { color: #8b949e; }
+    .panel { margin-top: 16px; padding-top: 16px; border-top: 1px solid #30363d; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Mock Replay</h2>
+      <p style="font-size: 0.8rem; color: #8b949e;">Historify 1m + synthetic CE/PE. Start replay server: <code>uv run python scripts/historify_replay_server.py</code></p>
+
+      <label>Index</label>
+      <select id="indexSymbol">
+        <option value="NIFTY 50">NIFTY 50</option>
+        <option value="NIFTY-INDEX">NIFTY-INDEX</option>
+        <option value="SENSEX">SENSEX</option>
+        <option value="BANK NIFTY">BANK NIFTY</option>
+      </select>
+      <label>Exchange</label>
+      <select id="indexExchange">
+        <option value="NSE_INDEX">NSE_INDEX</option>
+        <option value="BSE_INDEX">BSE_INDEX</option>
+      </select>
+
+      <label>Start date</label>
+      <input type="date" id="startDate" />
+      <label>End date</label>
+      <input type="date" id="endDate" />
+
+      <label>Speed</label>
+      <select id="speed">
+        <option value="1">1x (real time)</option>
+        <option value="5">5x</option>
+        <option value="10">10x</option>
+        <option value="0">Max</option>
+      </select>
+
+      <label>Regime</label>
+      <select id="regime">
+        <option value="none">None</option>
+        <option value="choppy">Choppy</option>
+        <option value="high_vol">High Vol</option>
+        <option value="low_vol">Low Vol</option>
+        <option value="high_momentum">High Momentum</option>
+        <option value="low_momentum">Low Momentum</option>
+        <option value="high_vix">High VIX</option>
+        <option value="low_vix">Low VIX</option>
+      </select>
+
+      <label>Option symbol (optional, synthetic CE/PE)</label>
+      <input type="text" id="optionSymbol" placeholder="e.g. NIFTY28OCT2524000CE" />
+
+      <div class="btn-row">
+        <button id="btnConnect" class="primary">Connect &amp; Replay</button>
+        <button id="btnDisconnect" class="danger" disabled>Disconnect</button>
+      </div>
+      <div id="wsStatus" class="status disconnected">Disconnected</div>
+      <div id="ltpDisplay" class="ltp">LTP: –</div>
+
+      <div class="panel" style="background:#1a2233;border-radius:8px;padding:12px;border:1px solid #238636;">
+        <h2 style="color:#3fb950;">⚡ Auto-Trade Backtest</h2>
+        <p style="font-size:0.75rem;color:#8b949e;margin:4px 0 8px;">Launch auto-trade window with mock replay data to test strategies after market hours.</p>
+        <label>CE Symbol</label>
+        <input type="text" id="atCeSymbol" placeholder="e.g. NIFTY28OCT2524000CE" />
+        <label>PE Symbol</label>
+        <input type="text" id="atPeSymbol" placeholder="e.g. NIFTY28OCT2524000PE" />
+        <label>Underlying</label>
+        <select id="atUnderlying">
+          <option value="NIFTY">NIFTY</option>
+          <option value="SENSEX">SENSEX</option>
+          <option value="BANKNIFTY">BANKNIFTY</option>
+        </select>
+        <label>Strike</label>
+        <input type="number" id="atStrike" placeholder="24000" />
+        <label>Lot Size</label>
+        <input type="number" id="atLotSize" value="75" min="1" />
+        <button id="btnLaunchAutoTrade" class="primary" style="margin-top:10px;">🚀 Launch Auto-Trade Window</button>
+        <p id="atHint" style="font-size:0.7rem;color:#8b949e;margin-top:6px;">Start replay first, then launch. The auto-trade window will receive the same ticks.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Mock trading</h2>
+        <label>Symbol</label>
+        <input type="text" id="orderSymbol" placeholder="NIFTY28OCT2524000CE" />
+        <label>Action</label>
+        <select id="orderAction">
+          <option value="BUY">BUY</option>
+          <option value="SELL">SELL</option>
+        </select>
+        <label>Quantity</label>
+        <input type="number" id="orderQty" value="50" min="1" />
+        <button id="btnPlaceOrder" class="primary">Place mock order (at LTP)</button>
+      </div>
+
+      <div class="panel">
+        <h2>Positions</h2>
+        <div id="positionsList"></div>
+        <button id="btnRefreshPositions">Refresh</button>
+      </div>
+
+      <div class="panel">
+        <h2>Orders</h2>
+        <div id="ordersList"></div>
+        <button id="btnRefreshOrders">Refresh</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div style="display:flex;align-items:center;gap:12px;padding:6px 12px;background:#161b22;border-bottom:1px solid #30363d;">
+        <label style="margin:0;font-size:0.8rem;color:#8b949e;">Timeframe</label>
+        <select id="tfSelect" style="width:auto;padding:4px 8px;font-size:0.8rem;">
+          <option value="5">5s</option>
+          <option value="10">10s</option>
+          <option value="15" selected>15s</option>
+          <option value="30">30s</option>
+          <option value="60">1m</option>
+          <option value="180">3m</option>
+          <option value="300">5m</option>
+        </select>
+        <span id="barCountdown" style="font-size:0.8rem;color:#8b949e;font-variant-numeric:tabular-nums;">Bar: --</span>
+      </div>
+      <div class="chart-wrap">
+        <div id="chartContainer"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/js/lightweight-charts.standalone.production.js"></script>
+  <script>
+(function() {
+  let ws = null;
+  let chart = null;
+  let candleSeries = null;
+  let config = { wsUrl: 'ws://127.0.0.1:8770', regimes: [] };
+  let lastLtp = null;
+  let lastSymbol = null;
+  var candleInterval = 15; // default seconds per candle
+  var lastChartTime = 0;
+  var currentCandle = null;
+  var allCandles = []; // full candle history for timeframe rebuild
+  var allTicks = []; // raw ticks for timeframe rebuild
+  var countdownTimer = null;
+
+  const el = (id) => document.getElementById(id);
+  const indexSymbol = () => el('indexSymbol').value;
+  const indexExchange = () => el('indexExchange').value;
+
+  function setStatus(connected) {
+    const s = el('wsStatus');
+    const c = el('btnConnect');
+    const d = el('btnDisconnect');
+    if (connected) {
+      s.textContent = 'Connected (replay)';
+      s.className = 'status connected';
+      c.disabled = true;
+      d.disabled = false;
+    } else {
+      s.textContent = 'Disconnected';
+      s.className = 'status disconnected';
+      c.disabled = false;
+      d.disabled = true;
+    }
+  }
+
+  var _lastCountdownCandle = 0;
+
+  function initChart() {
+    const container = el('chartContainer');
+    if (!container || !window.LightweightCharts) return;
+    if (chart) chart.remove();
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    chart = LightweightCharts.createChart(container, {
+      layout: { background: { color: '#0f1419' }, textColor: '#d1d4dc' },
+      grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#30363d' },
+      timeScale: {
+        borderColor: '#30363d',
+        timeVisible: true,
+        secondsVisible: candleInterval < 60,
+      },
+    });
+    candleSeries = chart.addCandlestickSeries({
+      upColor: '#26a69a', downColor: '#ef5350',
+      borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+      wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+    lastChartTime = 0;
+    currentCandle = null;
+    allCandles = [];
+    allTicks = [];
+    _lastCountdownCandle = 0;
+    // start countdown timer
+    countdownTimer = setInterval(updateCountdown, 200);
+  }
+
+  function updateCountdown() {
+    if (!currentCandle) { el('barCountdown').textContent = 'Bar: --'; return; }
+    var elapsed = Math.floor(Date.now() / 1000) - _lastCountdownCandle;
+    if (_lastCountdownCandle === 0) { el('barCountdown').textContent = 'Bar: --'; return; }
+    var remaining = Math.max(0, candleInterval - elapsed);
+    el('barCountdown').textContent = 'Bar: ' + remaining + 's';
+  }
+
+  function updateChart(tsMs, value) {
+    if (!candleSeries || value == null) return;
+    // store raw tick
+    allTicks.push({ ts: tsMs, price: value });
+    var tRaw = Math.floor(tsMs / 1000);
+    var t = tRaw - (tRaw % candleInterval); // snap to candle boundary
+
+    if (t < lastChartTime) return;
+
+    if (!currentCandle || t > currentCandle.time) {
+      // finalize previous candle
+      if (currentCandle) {
+        allCandles.push(Object.assign({}, currentCandle));
+      }
+      // start new candle
+      currentCandle = { time: t, open: value, high: value, low: value, close: value };
+      if (lastChartTime === 0) {
+        candleSeries.setData([currentCandle]);
+      } else {
+        candleSeries.update(currentCandle);
+      }
+      lastChartTime = t;
+      _lastCountdownCandle = Math.floor(Date.now() / 1000);
+    } else {
+      // update current candle
+      currentCandle.high = Math.max(currentCandle.high, value);
+      currentCandle.low = Math.min(currentCandle.low, value);
+      currentCandle.close = value;
+      candleSeries.update(currentCandle);
+    }
+  }
+
+  function rebuildFromTicks(newInterval) {
+    candleInterval = newInterval;
+    lastChartTime = 0;
+    currentCandle = null;
+    allCandles = [];
+    _lastCountdownCandle = 0;
+    if (!candleSeries) return;
+    if (allTicks.length === 0) {
+      candleSeries.setData([]);
+      return;
+    }
+    // rebuild candles from raw ticks
+    var candles = {};
+    for (var i = 0; i < allTicks.length; i++) {
+      var tick = allTicks[i];
+      var tRaw = Math.floor(tick.ts / 1000);
+      var t = tRaw - (tRaw % candleInterval);
+      if (!candles[t]) {
+        candles[t] = { time: t, open: tick.price, high: tick.price, low: tick.price, close: tick.price };
+      } else {
+        candles[t].high = Math.max(candles[t].high, tick.price);
+        candles[t].low = Math.min(candles[t].low, tick.price);
+        candles[t].close = tick.price;
+      }
+    }
+    var sorted = Object.values(candles).sort(function(a, b) { return a.time - b.time; });
+    if (sorted.length > 0) {
+      currentCandle = sorted[sorted.length - 1];
+      allCandles = sorted.slice(0, -1);
+      lastChartTime = currentCandle.time;
+      _lastCountdownCandle = Math.floor(Date.now() / 1000);
+    }
+    candleSeries.setData(sorted);
+    // update timeScale secondsVisible
+    if (chart) {
+      chart.applyOptions({ timeScale: { secondsVisible: candleInterval < 60 } });
+    }
+  }
+
+  function updateLtp(symbol, exchange, ltp) {
+    lastLtp = ltp;
+    lastSymbol = symbol;
+    el('ltpDisplay').textContent = (symbol || 'LTP') + ': ' + (ltp != null ? ltp : '–');
+  }
+
+  async function loadConfig() {
+    const r = await fetch('/mock-replay/config');
+    const d = await r.json();
+    if (d.wsUrl) config.wsUrl = d.wsUrl;
+    if (d.regimes && d.regimes.length) {
+      const sel = el('regime');
+      sel.innerHTML = '';
+      ['none', ...d.regimes.filter(x => x !== 'none')].forEach(reg => {
+        const opt = document.createElement('option');
+        opt.value = reg;
+        opt.textContent = reg.replace(/_/g, ' ');
+        sel.appendChild(opt);
+      });
+    }
+  }
+
+  async function loadReplayRange() {
+    const symbol = indexSymbol();
+    const exchange = indexExchange();
+    const r = await fetch('/mock-replay/api/replay-range?symbol=' + encodeURIComponent(symbol) + '&exchange=' + encodeURIComponent(exchange));
+    const d = await r.json();
+    if (d.data && d.data.first_timestamp != null && d.data.last_timestamp != null) {
+      const first = new Date(d.data.first_timestamp * 1000);
+      const last = new Date(d.data.last_timestamp * 1000);
+      el('startDate').value = first.toISOString().slice(0, 10);
+      el('endDate').value = last.toISOString().slice(0, 10);
+    }
+  }
+
+  function connect() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    const symbols = [{ symbol: indexSymbol(), exchange: indexExchange() }];
+    const optSym = (el('optionSymbol').value || '').trim();
+    if (optSym) symbols.push({ symbol: optSym, exchange: 'NFO' });
+    const startDate = el('startDate').value;
+    const endDate = el('endDate').value;
+    const speed = parseFloat(el('speed').value) || 1;
+    const regime = el('regime').value || 'none';
+
+    ws = new WebSocket(config.wsUrl);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ action: 'authenticate' }));
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === 'auth' && data.status === 'success') {
+          setStatus(true);
+          ws.send(JSON.stringify({
+            action: 'subscribe',
+            symbols,
+            start_date: startDate || undefined,
+            end_date: endDate || undefined,
+            speed,
+            regime,
+          }));
+        } else if (data.type === 'market_data' && data.data) {
+          const ltp = data.data.ltp;
+          const ts = data.data.timestamp;
+          updateLtp(data.symbol, data.exchange, ltp);
+          updateChart(ts, ltp);
+        } else if (data.status === 'subscribed') {
+          console.log('Subscribed:', data);
+        }
+      } catch (e) { console.warn(e); }
+    };
+    ws.onclose = () => setStatus(false);
+    ws.onerror = () => setStatus(false);
+    initChart();
+  }
+
+  function disconnect() {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    setStatus(false);
+  }
+
+  async function placeOrder() {
+    const symbol = (el('orderSymbol').value || '').trim();
+    const action = el('orderAction').value;
+    const qty = parseInt(el('orderQty').value, 10) || 1;
+    const ltp = lastLtp;
+    if (!symbol) {
+      alert('Enter symbol');
+      return;
+    }
+    const body = { symbol, exchange: 'NFO', action, quantity: qty, order_type: 'MARKET' };
+    if (ltp != null) body.ltp = ltp;
+    const r = await fetch('/mock-replay/api/orders/place', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (d.status === 'success') {
+      refreshOrders();
+      refreshPositions();
+    } else {
+      alert(d.message || 'Failed');
+    }
+  }
+
+  async function refreshPositions() {
+    const r = await fetch('/mock-replay/api/positions');
+    const d = await r.json();
+    const div = el('positionsList');
+    if (!d.data || !d.data.length) {
+      div.innerHTML = '<p style="font-size:0.8rem;color:#8b949e">No positions</p>';
+      return;
+    }
+    let html = '<table><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Close</th></tr>';
+    d.data.forEach(pos => {
+      html += '<tr><td>' + pos.symbol + '</td><td>' + pos.side + '</td><td>' + pos.quantity + '</td><td>' + pos.entry_price + '</td>';
+      html += '<td><button class="danger" style="width:auto;padding:4px 8px" data-symbol="' + pos.symbol + '" data-exchange="' + pos.exchange + '">Close</button></td></tr>';
+    });
+    html += '</table>';
+    div.innerHTML = html;
+    div.querySelectorAll('button[data-symbol]').forEach(btn => {
+      btn.onclick = async () => {
+        const symbol = btn.dataset.symbol;
+        const exchange = btn.dataset.exchange || 'NFO';
+        const price = lastLtp != null ? lastLtp : 0;
+        const r = await fetch('/mock-replay/api/positions/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, exchange, ltp: price }),
+        });
+        const res = await r.json();
+        if (res.status === 'success') refreshPositions(); else alert(res.message || 'Failed');
+      };
+    });
+  }
+
+  async function refreshOrders() {
+    const r = await fetch('/mock-replay/api/orders?limit=20');
+    const d = await r.json();
+    const div = el('ordersList');
+    if (!d.data || !d.data.length) {
+      div.innerHTML = '<p style="font-size:0.8rem;color:#8b949e">No orders</p>';
+      return;
+    }
+    let html = '<table><tr><th>Order</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Filled</th></tr>';
+    d.data.forEach(o => {
+      html += '<tr><td>' + o.order_id + '</td><td>' + o.symbol + '</td><td>' + o.action + '</td><td>' + o.quantity + '</td><td>' + o.status + '</td><td>' + (o.filled_price != null ? o.filled_price : '–') + '</td></tr>';
+    });
+    html += '</table>';
+    div.innerHTML = html;
+  }
+
+  function launchAutoTrade() {
+    var ce = (el('atCeSymbol').value || '').trim();
+    var pe = (el('atPeSymbol').value || '').trim();
+    var underlying = el('atUnderlying').value;
+    var strike = el('atStrike').value || '';
+    var lotSize = el('atLotSize').value || '75';
+    if (!ce && !pe) {
+      alert('Enter at least one CE or PE symbol');
+      return;
+    }
+    var exchange = (underlying === 'SENSEX') ? 'BSE_INDEX' : 'NSE_INDEX';
+    var symbol = ce || pe;
+    var initialSide = ce ? 'CE' : 'PE';
+    var params = new URLSearchParams({
+      symbol: symbol,
+      ceSymbol: ce,
+      peSymbol: pe,
+      initialSide: initialSide,
+      underlying: underlying,
+      exchange: exchange,
+      optionType: initialSide,
+      strike: strike,
+      expiry: 'MOCK',
+      lotSize: lotSize,
+      wsUrl: config.wsUrl
+    });
+    var w = 1400, h = 900;
+    var left = Math.round((screen.width - w) / 2);
+    var top = Math.round((screen.height - h) / 2);
+    window.open(
+      '/auto_trading_window.html?' + params.toString(),
+      'mock_autotrade',
+      'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top + ',resizable=yes,scrollbars=no,status=no'
+    );
+    console.log('[mock-replay] Launched auto-trade with wsUrl:', config.wsUrl);
+  }
+
+  el('btnConnect').onclick = connect;
+  el('btnDisconnect').onclick = disconnect;
+  el('btnPlaceOrder').onclick = placeOrder;
+  el('btnRefreshPositions').onclick = refreshPositions;
+  el('btnRefreshOrders').onclick = refreshOrders;
+  el('btnLaunchAutoTrade').onclick = launchAutoTrade;
+  el('tfSelect').onchange = function() {
+    rebuildFromTicks(parseInt(this.value, 10));
+  };
+
+  // Auto-populate CE/PE fields from option symbol input
+  el('optionSymbol').addEventListener('input', function() {
+    var sym = this.value.trim();
+    if (!sym) return;
+    var m = sym.match(/^(NIFTY|SENSEX|BANKNIFTY)(\d{2}[A-Z]{3}\d{2})(\d+)(CE|PE)$/i);
+    if (!m) return;
+    var base = m[1].toUpperCase(), expiry = m[2], strike = m[3], type = m[4].toUpperCase();
+    var otherType = type === 'CE' ? 'PE' : 'CE';
+    var otherSym = base + expiry + strike + otherType;
+    el('atCeSymbol').value = type === 'CE' ? sym : otherSym;
+    el('atPeSymbol').value = type === 'PE' ? sym : otherSym;
+    el('atStrike').value = strike;
+    el('orderSymbol').value = sym;
+    // sync underlying dropdown
+    if (base === 'SENSEX') el('atUnderlying').value = 'SENSEX';
+    else if (base === 'BANKNIFTY') el('atUnderlying').value = 'BANKNIFTY';
+    else el('atUnderlying').value = 'NIFTY';
+    // sync lot size
+    if (base === 'SENSEX') el('atLotSize').value = '10';
+    else if (base === 'BANKNIFTY') el('atLotSize').value = '30';
+    else el('atLotSize').value = '75';
+  });
+
+  candleInterval = parseInt(el('tfSelect').value, 10) || 15;
+  loadConfig().then(loadReplayRange);
+  initChart();
+  refreshPositions();
+  refreshOrders();
+})();
+  </script>
+</body>
+</html>
