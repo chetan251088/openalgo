@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="200" viewBox="0 0 720 200">
+  <rect width="720" height="200" fill="#0f141b"/>
+  <rect x="30" y="30" width="660" height="140" rx="12" fill="#151c24" stroke="#2a3542"/>
+  <text x="50" y="60" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="14">Scalp Radar</text>
+  <rect x="50" y="85" width="520" height="14" rx="7" fill="#253140" stroke="#2f3b4b"/>
+  <rect x="50" y="85" width="360" height="14" rx="7" fill="#36d399"/>
+  <text x="590" y="98" fill="#e6edf5" font-family="Arial, sans-serif" font-size="12">Score 69</text>
+  <text x="50" y="135" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="12">COOL / WARM / HOT meter mirrors Scalp Score</text>
+</svg>

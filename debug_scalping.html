@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Debug Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #0a0e27;
+            color: #00ff88;
+            padding: 20px;
+        }
+
+        .log {
+            background: #1a1f3a;
+            border: 1px solid #00ff88;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .error {
+            color: #ff3366;
+        }
+
+        .success {
+            color: #00ff88;
+        }
+
+        .info {
+            color: #00d4ff;
+        }
+
+        button {
+            background: #00d4ff;
+            color: #0a0e27;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px;
+            font-weight: bold;
+        }
+
+        input {
+            background: #1a1f3a;
+            border: 1px solid #00d4ff;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            width: 400px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🔍 WebSocket Connection Debugger</h1>
+
+    <div>
+        <label>API Key:</label><br>
+        <input type="text" id="apiKey" placeholder="Enter your 64-character API key">
+        <button onclick="testConnection()">Test WebSocket Connection</button>
+        <button onclick="testAPIKey()">Test API Key</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <h2>Connection Log:</h2>
+    <div class="log" id="log"></div>
+
+    <script>
+        let ws = null;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = type;
+            entry.textContent = `[${time}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[${type}] ${message}`);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        async function testAPIKey() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+
+            if (!apiKey) {
+                log('❌ Please enter an API key', 'error');
+                return;
+            }
+
+            log(`Testing API key: ${apiKey.substring(0, 10)}...`, 'info');
+            log(`API key length: ${apiKey.length} characters (should be 64)`, 'info');
+
+            try {
+                // Test with a simple API call
+                const response = await fetch('http://127.0.0.1:5000/api/v1/quotes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        apikey: apiKey,
+                        symbol: 'NIFTY',
+                        exchange: 'NSE_INDEX'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    log('✅ API key is VALID!', 'success');
+                    log(`Response: ${JSON.stringify(data, null, 2)}`, 'success');
+                } else {
+                    log(`❌ API key validation failed: ${data.message}`, 'error');
+                    log(`Full response: ${JSON.stringify(data, null, 2)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ API test failed: ${error.message}`, 'error');
+                log('Is OpenAlgo server running on port 5000?', 'error');
+            }
+        }
+
+        function testConnection() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+
+            if (!apiKey) {
+                log('❌ Please enter an API key first', 'error');
+                return;
+            }
+
+            log('🔄 Starting WebSocket connection test...', 'info');
+            log(`Connecting to: ws://127.0.0.1:8765`, 'info');
+
+            // Close existing connection if any
+            if (ws) {
+                log('Closing existing connection...', 'info');
+                ws.close();
+            }
+
+            ws = new WebSocket('ws://127.0.0.1:8765');
+
+            ws.onopen = () => {
+                log('✅ WebSocket CONNECTED!', 'success');
+                log('Sending authentication...', 'info');
+
+                const authMessage = {
+                    action: 'authenticate',
+                    api_key: apiKey
+                };
+
+                log(`Auth message: ${JSON.stringify(authMessage)}`, 'info');
+                ws.send(JSON.stringify(authMessage));
+            };
+
+            ws.onmessage = (event) => {
+                log('📥 Received message from server:', 'success');
+
+                try {
+                    const data = JSON.parse(event.data);
+                    log(JSON.stringify(data, null, 2), 'success');
+
+                    if (data.status === 'authenticated') {
+                        log('🎉 AUTHENTICATION SUCCESS!', 'success');
+                        log('WebSocket is fully operational!', 'success');
+                    } else if (data.status === 'error') {
+                        log(`❌ Server returned error: ${data.message}`, 'error');
+                    }
+                } catch (e) {
+                    log(`Raw message: ${event.data}`, 'info');
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`❌ WebSocket ERROR: ${error}`, 'error');
+                log('Check if WebSocket server is running on port 8765', 'error');
+            };
+
+            ws.onclose = (event) => {
+                log(`WebSocket CLOSED (code: ${event.code}, reason: ${event.reason})`, 'error');
+
+                if (event.code === 1006) {
+                    log('💡 Code 1006 = Connection failed. Is port 8765 accessible?', 'info');
+                } else if (event.code === 1000) {
+                    log('Connection closed normally', 'info');
+                } else {
+                    log(`Unexpected close code: ${event.code}`, 'error');
+                }
+            };
+        }
+
+        // Auto-load saved API key
+        window.onload = () => {
+            const savedApiKey = localStorage.getItem('openalgo_api_key');
+            if (savedApiKey) {
+                document.getElementById('apiKey').value = savedApiKey;
+                log('Loaded saved API key from localStorage', 'info');
+            }
+            log('Ready! Enter your API key and click "Test WebSocket Connection"', 'info');
+        };
+    </script>
+</body>
+
+</html>

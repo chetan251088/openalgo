@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="240" viewBox="0 0 720 240">
+  <rect width="720" height="240" fill="#0f141b"/>
+  <rect x="30" y="20" width="660" height="200" rx="12" fill="#151c24" stroke="#2a3542"/>
+  <text x="50" y="50" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="14">Depth Scout</text>
+  <rect x="50" y="70" width="620" height="30" rx="6" fill="#1b2430" stroke="#2a3542"/>
+  <text x="60" y="90" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="11">Bid Qty</text>
+  <text x="190" y="90" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="11">Bid</text>
+  <text x="360" y="90" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="11">Ask</text>
+  <text x="520" y="90" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="11">Ask Qty</text>
+  <rect x="50" y="105" width="620" height="22" rx="4" fill="#12261a"/>
+  <rect x="50" y="131" width="620" height="22" rx="4" fill="#1d1a16"/>
+  <rect x="50" y="157" width="620" height="22" rx="4" fill="#12261a"/>
+  <text x="60" y="120" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">150</text>
+  <text x="190" y="120" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">214.10</text>
+  <text x="360" y="120" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">214.20</text>
+  <text x="520" y="120" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">120</text>
+  <text x="60" y="145" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">90</text>
+  <text x="190" y="145" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">214.05</text>
+  <text x="360" y="145" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">214.25</text>
+  <text x="520" y="145" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">80</text>
+  <text x="60" y="171" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">60</text>
+  <text x="190" y="171" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="11">214.00</text>
+  <text x="360" y="171" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">214.30</text>
+  <text x="520" y="171" fill="#fca5a5" font-family="Arial, sans-serif" font-size="11">55</text>
+  <text x="50" y="205" fill="#9fb0c3" font-family="Arial, sans-serif" font-size="11">Click a price to stage a BUY or SELL from depth</text>
+</svg>
