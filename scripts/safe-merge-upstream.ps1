@@ -10,13 +10,17 @@ This script automates a safe upstream merge workflow:
 4) Merges upstream/<branch> into <branch>
 5) Auto-resolves known generated-file conflicts by keeping local side
 6) Optionally resolves all remaining conflicts by keeping local side
-7) Commits merge and pushes <branch>
+7) Optionally rebuilds frontend dist and commits refreshed bundles
+8) Pushes <branch>
 
 .EXAMPLE
 pwsh -File .\scripts\safe-merge-upstream.ps1
 
 .EXAMPLE
 pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -PreferOursOnRemainingConflicts
+
+.EXAMPLE
+pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -BuildFrontendDist
 #>
 
 [CmdletBinding()]
@@ -26,7 +30,8 @@ param(
     [string]$UpstreamUrl = "https://github.com/marketcalls/openalgo.git",
     [string]$OriginRemote = "origin",
     [switch]$NoPush,
-    [switch]$PreferOursOnRemainingConflicts
+    [switch]$PreferOursOnRemainingConflicts,
+    [switch]$BuildFrontendDist
 )
 
 Set-StrictMode -Version Latest
@@ -102,6 +107,41 @@ function Resolve-ByRemoving {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Build-FrontendDist {
+    Write-Step "Building frontend dist (npm run build)"
+
+    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npmCmd) {
+        throw "npm is not available on PATH. Install Node.js/npm or run without -BuildFrontendDist."
+    }
+
+    $frontendDir = Join-Path (Get-Location) "frontend"
+    if (-not (Test-Path $frontendDir)) {
+        throw "frontend directory not found at: $frontendDir"
+    }
+
+    Push-Location $frontendDir
+    try {
+        Write-Host ">> npm run build" -ForegroundColor DarkGray
+        & npm run build
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend build failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+
+    Invoke-Git -Args @("add", "-A", "frontend/dist") | Out-Null
+
+    $distChanges = Get-Text((Invoke-Git -Args @("status", "--porcelain", "--", "frontend/dist")).Output)
+    if ($distChanges) {
+        Invoke-Git -Args @("commit", "-m", "chore(frontend): refresh dist after upstream merge") | Out-Null
+        Write-Host "Committed refreshed frontend/dist bundles." -ForegroundColor Green
+    } else {
+        Write-Host "No frontend/dist changes after build." -ForegroundColor Gray
+    }
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Safe Upstream Merge" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -175,6 +215,7 @@ if ($mergeResult.ExitCode -ne 0) {
 
     $oursPreferPatterns = @(
         "frontend/dist/*",
+        "frontend\dist\*",
         "static/css/main.css"
     )
 
@@ -221,6 +262,10 @@ if ($mergeResult.ExitCode -ne 0) {
 
     # Merge commit may not be created yet after manual conflict resolutions.
     Invoke-Git -Args @("commit", "--no-edit") | Out-Null
+}
+
+if ($BuildFrontendDist) {
+    Build-FrontendDist
 }
 
 if (-not $NoPush) {
