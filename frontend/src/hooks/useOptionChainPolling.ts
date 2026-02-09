@@ -70,6 +70,9 @@ export function useOptionChainPolling(
       const controller = new AbortController()
       abortControllerRef.current = controller
 
+      // Backend expects expiry without hyphens (e.g. "10FEB26" not "10-FEB-26")
+      const expiryForAPI = expiryDate.replace(/-/g, '').toUpperCase()
+
       const response = await fetch('/api/v1/optionchain', {
         method: 'POST',
         headers: {
@@ -79,7 +82,7 @@ export function useOptionChainPolling(
           apikey: apiKey,
           underlying,
           exchange,
-          expiry_date: expiryDate,
+          expiry_date: expiryForAPI,
           strike_count: strikeCount,
         }),
         signal: controller.signal,

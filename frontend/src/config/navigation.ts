@@ -20,6 +20,7 @@ import {
   User,
   Workflow,
   Wrench,
+  Zap,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -39,6 +40,7 @@ export const navItems: NavItem[] = [
   { href: '/strategy', label: 'Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/scalping', label: 'Scalping', icon: Zap },
 ]
 
 // Items shown in mobile bottom navigation

@@ -99,6 +99,9 @@ const TelegramConfig = lazy(() => import('@/pages/telegram/TelegramConfig'))
 const TelegramUsers = lazy(() => import('@/pages/telegram/TelegramUsers'))
 const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'))
 
+// Scalping Dashboard
+const ScalpingDashboard = lazy(() => import('@/pages/scalping'))
+
 // AI Scalper & Manual Trades pages
 const AutoTradeAnalytics = lazy(() => import('@/pages/AutoTradeAnalytics'))
 const AutoTradeModelTuning = lazy(() => import('@/pages/AutoTradeModelTuning'))
@@ -229,6 +232,8 @@ function App() {
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
                 {/* Flow Editor (full-width for canvas) */}
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
+                {/* Scalping Dashboard */}
+                <Route path="/scalping" element={<ScalpingDashboard />} />
               </Route>
 
               {/* 404 Not Found */}

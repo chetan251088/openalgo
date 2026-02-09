@@ -4,6 +4,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 const tools = [
   {
+    title: 'Scalping Dashboard',
+    description: 'Unified options scalping with 3 live charts, hotkeys, auto-trade engine, and ghost signals',
+    href: '/scalping',
+    color: 'bg-yellow-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',

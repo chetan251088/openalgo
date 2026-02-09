@@ -483,6 +483,12 @@ def react_historify():
     return serve_react_app()
 
 
+# Scalping Dashboard (React, replaces old Jinja2 scalping interface)
+@react_bp.route("/scalping", strict_slashes=False)
+def react_scalping():
+    return serve_react_app()
+
+
 # ============================================================
 # Flow Routes - Visual Workflow Automation
 # ============================================================

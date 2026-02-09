@@ -790,3 +790,25 @@
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* =============================================================================
+   SCALPING DASHBOARD - Price Flash Animations
+   ============================================================================= */
+
+.flash-green {
+  animation: flash-green-anim 300ms ease-out;
+}
+
+.flash-red {
+  animation: flash-red-anim 300ms ease-out;
+}
+
+@keyframes flash-green-anim {
+  0% { color: #22c55e; background-color: rgba(34, 197, 94, 0.15); }
+  100% { color: inherit; background-color: transparent; }
+}
+
+@keyframes flash-red-anim {
+  0% { color: #ef4444; background-color: rgba(239, 68, 68, 0.15); }
+  100% { color: inherit; background-color: transparent; }
+}

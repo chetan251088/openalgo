@@ -46,6 +46,7 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 | [10-Flow Architecture](./10-flow/) | Visual workflow builder |
 | [13-Chartink](./13-chartink/) | Chartink scanner integration |
 | [14-TradingView & GoCharting](./14-tradingview-gocharting/) | Alert webhook setup |
+| [Options Scalping Framework Improvement](./options-scalping-framework-improvement-design.md) | Design: options tools + auto-trade integration |
 
 ### Paper Trading
 | Module | Description |
