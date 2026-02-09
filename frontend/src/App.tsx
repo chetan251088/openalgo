@@ -234,6 +234,7 @@ function App() {
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
                 {/* Scalping Dashboard */}
                 <Route path="/scalping" element={<ScalpingDashboard />} />
+                <Route path="/scalping-v2" element={<ScalpingDashboard />} />
               </Route>
 
               {/* 404 Not Found */}

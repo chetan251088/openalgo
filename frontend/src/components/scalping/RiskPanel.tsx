@@ -6,9 +6,17 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useMarketClock } from '@/hooks/useMarketClock'
 import { useTradeLogger } from '@/hooks/useTradeLogger'
 
-export function RiskPanel() {
+interface RiskPanelProps {
+  liveOpenPnl?: number
+  isLivePnl?: boolean
+}
+
+export function RiskPanel({ liveOpenPnl, isLivePnl = false }: RiskPanelProps) {
   const sessionPnl = useScalpingStore((s) => s.sessionPnl)
   const tradeCount = useScalpingStore((s) => s.tradeCount)
+  const paperMode = useScalpingStore((s) => s.paperMode)
+
+  const displayedPnl = paperMode ? sessionPnl : (liveOpenPnl ?? sessionPnl)
 
   const clock = useMarketClock()
   const { getStats } = useTradeLogger()
@@ -20,7 +28,7 @@ export function RiskPanel() {
   const [profitProtectPct, setProfitProtectPct] = useState(50)
   const [coolingOffTrades, setCoolingOffTrades] = useState(3)
 
-  const isLimitHit = sessionPnl < 0 && Math.abs(sessionPnl) >= dailyLossLimit
+  const isLimitHit = displayedPnl < 0 && Math.abs(displayedPnl) >= dailyLossLimit
 
   return (
     <div className="p-2 space-y-3 text-xs">
@@ -146,13 +154,20 @@ export function RiskPanel() {
 
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Session P&L</span>
-          <span
-            className={`font-bold tabular-nums ${
-              sessionPnl > 0 ? 'text-green-500' : sessionPnl < 0 ? 'text-red-500' : ''
-            }`}
-          >
-            {sessionPnl >= 0 ? '+' : ''}{sessionPnl.toFixed(0)}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`font-bold tabular-nums ${
+                displayedPnl > 0 ? 'text-green-500' : displayedPnl < 0 ? 'text-red-500' : ''
+              }`}
+            >
+              {displayedPnl >= 0 ? '+' : ''}{displayedPnl.toFixed(0)}
+            </span>
+            {!paperMode && (
+              <span className={`text-[10px] ${isLivePnl ? 'text-green-500' : 'text-muted-foreground'}`}>
+                {isLivePnl ? 'LIVE' : 'REST'}
+              </span>
+            )}
+          </div>
         </div>
 
         {stats.count > 0 && (

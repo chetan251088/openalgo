@@ -14,7 +14,12 @@ const TABS: { id: ControlTab; label: string }[] = [
   { id: 'orders', label: 'Orders' },
 ]
 
-export function ControlPanel() {
+interface ControlPanelProps {
+  liveOpenPnl?: number
+  isLivePnl?: boolean
+}
+
+export function ControlPanel({ liveOpenPnl, isLivePnl = false }: ControlPanelProps) {
   const controlTab = useScalpingStore((s) => s.controlTab)
   const setControlTab = useScalpingStore((s) => s.setControlTab)
 
@@ -42,7 +47,7 @@ export function ControlPanel() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {controlTab === 'manual' && <ManualTradeTab />}
         {controlTab === 'auto' && <AutoTradeTab />}
-        {controlTab === 'risk' && <RiskPanel />}
+        {controlTab === 'risk' && <RiskPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />}
         {controlTab === 'depth' && <DepthScoutTab />}
         {controlTab === 'orders' && <OrdersTab />}
       </div>

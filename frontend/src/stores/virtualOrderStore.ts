@@ -20,6 +20,7 @@ interface VirtualOrderActions {
   addTriggerOrder: (order: TriggerOrder) => void
   removeTriggerOrder: (id: string) => void
   updateTriggerOrder: (id: string, updates: Partial<TriggerOrder>) => void
+  clearTriggerOrders: () => void
 
   // Bulk
   clearAll: () => void
@@ -85,6 +86,8 @@ export const useVirtualOrderStore = create<VirtualOrderStore>()(
           }
         }),
 
+      clearTriggerOrders: () => set({ triggerOrders: {} }),
+
       clearAll: () => set({ virtualTPSL: {}, triggerOrders: {} }),
 
       clearForSymbol: (symbol) =>
@@ -100,6 +103,18 @@ export const useVirtualOrderStore = create<VirtualOrderStore>()(
     }),
     {
       name: 'openalgo-scalping-orders',
+      version: 2,
+      // Trigger orders are session-scoped and should never survive reloads.
+      partialize: (state) => ({
+        virtualTPSL: state.virtualTPSL,
+      }),
+      migrate: (persistedState) => {
+        const state = (persistedState ?? {}) as Partial<VirtualOrderState>
+        return {
+          virtualTPSL: state.virtualTPSL ?? {},
+          triggerOrders: {},
+        }
+      },
     }
   )
 )

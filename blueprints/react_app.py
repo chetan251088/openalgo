@@ -485,6 +485,7 @@ def react_historify():
 
 # Scalping Dashboard (React, replaces old Jinja2 scalping interface)
 @react_bp.route("/scalping", strict_slashes=False)
+@react_bp.route("/scalping-v2", strict_slashes=False)
 def react_scalping():
     return serve_react_app()
 

@@ -25,15 +25,42 @@ export function useTrailingMonitor() {
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const updateVirtualTPSL = useVirtualOrderStore((s) => s.updateVirtualTPSL)
 
+  // Keep runtime/config values in refs so subscription callback doesn't force resubscribe loops.
+  const configRef = useRef(config)
+  const trailStageRef = useRef(trailStage)
+  const highSinceEntryRef = useRef(highSinceEntry)
+  const optionsContextRef = useRef(optionsContext)
   const prevSLRef = useRef<number | null>(null)
 
   useEffect(() => {
-    const entries = Object.values(virtualTPSL)
-    if (entries.length === 0) return
+    configRef.current = config
+  }, [config])
 
-    // Monitor the first active position
-    const active = entries[0]
+  useEffect(() => {
+    trailStageRef.current = trailStage
+  }, [trailStage])
+
+  useEffect(() => {
+    highSinceEntryRef.current = highSinceEntry
+  }, [highSinceEntry])
+
+  useEffect(() => {
+    optionsContextRef.current = optionsContext
+  }, [optionsContext])
+
+  const active = Object.values(virtualTPSL)[0]
+  const activeKey = active
+    ? `${active.id}:${active.symbol}:${active.entryPrice}:${active.action}`
+    : ''
+
+  useEffect(() => {
     if (!active || active.slPrice == null) return
+
+    // Initialize refs for this active position lifecycle.
+    prevSLRef.current = active.slPrice
+    if (!highSinceEntryRef.current || highSinceEntryRef.current <= 0) {
+      highSinceEntryRef.current = active.entryPrice
+    }
 
     const isBuy = active.action === 'BUY'
     const mdm = MarketDataManager.getInstance()
@@ -48,32 +75,39 @@ export function useTrailingMonitor() {
 
         // Update high water mark
         const currentHigh = isBuy
-          ? Math.max(highSinceEntry || active.entryPrice, ltp)
-          : Math.min(highSinceEntry || active.entryPrice, ltp)
+          ? Math.max(highSinceEntryRef.current || active.entryPrice, ltp)
+          : Math.min(highSinceEntryRef.current || active.entryPrice, ltp)
 
-        if (currentHigh !== highSinceEntry) {
+        if (currentHigh !== highSinceEntryRef.current) {
+          highSinceEntryRef.current = currentHigh
           setHighSinceEntry(currentHigh)
         }
 
         // Calculate trailing stop
+        const currentStage = trailStageRef.current
         const result = calculateTrailingStop(
-          trailStage,
+          currentStage,
           active.entryPrice,
           ltp,
           currentHigh,
           isBuy,
-          config,
-          optionsContext
+          configRef.current,
+          optionsContextRef.current
         )
 
         // Update stage if changed
-        if (result.newStage !== trailStage) {
+        if (result.newStage !== currentStage) {
+          trailStageRef.current = result.newStage
           setTrailStage(result.newStage)
         }
 
-        // Update SL if changed
+        // Update SL only on meaningful changes to avoid update loops.
         const roundedSL = Math.round(result.newSL / 0.05) * 0.05
-        if (prevSLRef.current == null || Math.abs(roundedSL - prevSLRef.current) >= 0.05) {
+        const currentSL = useVirtualOrderStore.getState().virtualTPSL[active.id]?.slPrice ?? null
+        const slChangedFromStore = currentSL == null || Math.abs(roundedSL - currentSL) >= 0.05
+        const slChangedFromPrev = prevSLRef.current == null || Math.abs(roundedSL - prevSLRef.current) >= 0.05
+
+        if (slChangedFromStore && slChangedFromPrev) {
           prevSLRef.current = roundedSL
           updateVirtualTPSL(active.id, { slPrice: roundedSL })
         }
@@ -85,7 +119,11 @@ export function useTrailingMonitor() {
       prevSLRef.current = null
     }
   }, [
-    virtualTPSL, optionExchange, config, trailStage, highSinceEntry,
-    optionsContext, setTrailStage, setHighSinceEntry, updateVirtualTPSL,
+    active,
+    activeKey,
+    optionExchange,
+    setTrailStage,
+    setHighSinceEntry,
+    updateVirtualTPSL,
   ])
 }

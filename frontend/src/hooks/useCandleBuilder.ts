@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useMarketData } from './useMarketData'
 import { mergeTickIntoCandle, type Candle, type Tick } from '@/lib/candleUtils'
+import { isWithinIndiaMarketHours } from '@/lib/indiaMarketTime'
 
 interface UseCandleBuilderOptions {
   symbol: string
   exchange: string
   intervalSec?: number
   enabled?: boolean
+  useIndiaMarketHours?: boolean
   maxCandles?: number
   onCandleUpdate?: (candle: Candle, isNew: boolean) => void
 }
@@ -21,11 +23,13 @@ export function useCandleBuilder({
   exchange,
   intervalSec = 1,
   enabled = true,
+  useIndiaMarketHours = false,
   maxCandles = 500,
   onCandleUpdate,
 }: UseCandleBuilderOptions) {
   const candlesRef = useRef<Candle[]>([])
   const currentCandleRef = useRef<Candle | null>(null)
+  const lastProcessedTickKeyRef = useRef<string | null>(null)
   const callbackRef = useRef(onCandleUpdate)
   callbackRef.current = onCandleUpdate
 
@@ -47,13 +51,25 @@ export function useCandleBuilder({
     const symbolData = wsData.get(key)
     if (!symbolData?.data?.ltp) return
 
+    const tickTimestamp = symbolData.lastUpdate
+    if (!tickTimestamp || !Number.isFinite(tickTimestamp)) return
+    const tickEpochSeconds = Math.floor(tickTimestamp / 1000)
+    if (useIndiaMarketHours && !isWithinIndiaMarketHours(tickEpochSeconds)) return
+
+    // Ignore stale/cached ticks being replayed on dependency changes (e.g. timeframe switch).
+    const tickKey = `${key}:${tickTimestamp}`
+    if (lastProcessedTickKeyRef.current === tickKey) return
+    lastProcessedTickKeyRef.current = tickKey
+
     const tick: Tick = {
       price: symbolData.data.ltp,
       volume: symbolData.data.volume,
-      timestamp: symbolData.lastUpdate ?? Date.now(),
+      timestamp: tickTimestamp,
     }
 
-    const [candle, isNew] = mergeTickIntoCandle(tick, currentCandleRef.current, intervalSec)
+    const [candle, isNew] = mergeTickIntoCandle(tick, currentCandleRef.current, intervalSec, {
+      alignToIndiaSession: useIndiaMarketHours,
+    })
 
     if (isNew && currentCandleRef.current) {
       // Finalize previous candle
@@ -65,7 +81,7 @@ export function useCandleBuilder({
 
     currentCandleRef.current = candle
     callbackRef.current?.(candle, isNew)
-  }, [wsData, symbol, exchange, intervalSec, enabled, maxCandles])
+  }, [wsData, symbol, exchange, intervalSec, enabled, maxCandles, useIndiaMarketHours])
 
   const getCandles = useCallback((): Candle[] => {
     const all = [...candlesRef.current]
@@ -76,11 +92,34 @@ export function useCandleBuilder({
   const reset = useCallback(() => {
     candlesRef.current = []
     currentCandleRef.current = null
+    // Keep lastProcessedTickKeyRef intact so we don't replay the same cached tick after reset.
   }, [])
+
+  const seed = useCallback(
+    (candles: Candle[]) => {
+      if (!candles?.length) {
+        candlesRef.current = []
+        currentCandleRef.current = null
+        return
+      }
+
+      const clipped = candles.slice(-maxCandles)
+      if (clipped.length === 1) {
+        candlesRef.current = []
+        currentCandleRef.current = clipped[0]
+        return
+      }
+
+      candlesRef.current = clipped.slice(0, -1)
+      currentCandleRef.current = clipped[clipped.length - 1]
+    },
+    [maxCandles]
+  )
 
   return {
     getCandles,
     reset,
+    seed,
     isConnected,
   }
 }

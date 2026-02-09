@@ -4,6 +4,7 @@ import { usePageVisibility } from './usePageVisibility'
 
 interface UseOptionChainPollingOptions {
   enabled: boolean
+  /** Set to 0 to fetch once and disable periodic polling */
   refreshInterval?: number
   pauseWhenHidden?: boolean
 }
@@ -38,6 +39,7 @@ export function useOptionChainPolling(
 ) {
   const { enabled, refreshInterval = 30000, pauseWhenHidden = true } = options
   const { isVisible } = usePageVisibility()
+  const shouldAutoRefresh = refreshInterval > 0
 
   const [state, setState] = useState<UseOptionChainPollingState>({
     data: null,
@@ -148,8 +150,10 @@ export function useOptionChainPolling(
     // Fetch immediately when becoming visible
     fetchData()
 
-    // Set up interval
-    intervalRef.current = setInterval(fetchData, refreshInterval)
+    // Set up interval only when periodic refresh is enabled
+    if (shouldAutoRefresh) {
+      intervalRef.current = setInterval(fetchData, refreshInterval)
+    }
 
     return () => {
       if (intervalRef.current) {
@@ -161,7 +165,7 @@ export function useOptionChainPolling(
         abortControllerRef.current = null
       }
     }
-  }, [shouldPoll, fetchData, refreshInterval, enabled])
+  }, [shouldPoll, fetchData, refreshInterval, enabled, shouldAutoRefresh])
 
   const refetch = useCallback(() => {
     fetchData()

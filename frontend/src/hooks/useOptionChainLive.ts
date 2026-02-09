@@ -16,22 +16,24 @@ interface UseOptionChainLiveOptions {
   enabled: boolean
   /** Polling interval for OI/Volume data in ms (default: 30000) */
   oiRefreshInterval?: number
+  /** WebSocket mode: Quote gives LTP+volume updates, LTP is lighter */
+  wsMode?: 'LTP' | 'Quote'
   /** Pause WebSocket and polling when tab is hidden (default: true) */
   pauseWhenHidden?: boolean
 }
 
+/** Merge throttle interval in ms */
+const MERGE_INTERVAL = 100
+
 /**
  * Hook for real-time option chain data using hybrid approach:
- * - WebSocket for real-time LTP/Bid/Ask updates
+ * - WebSocket for real-time LTP updates (LTP mode for performance)
  * - REST polling for OI/Volume data (less frequent)
  *
- * @param apiKey - OpenAlgo API key
- * @param underlying - Underlying symbol (NIFTY, BANKNIFTY, etc.)
- * @param exchange - Exchange code for underlying (NSE_INDEX, BSE_INDEX)
- * @param optionExchange - Exchange code for options (NFO, BFO)
- * @param expiryDate - Expiry date in DDMMMYY format
- * @param strikeCount - Number of strikes to fetch
- * @param options - Live options
+ * Performance optimizations:
+ * - LTP mode instead of Depth (chain only shows LTP, not bid/ask)
+ * - Merge throttled to 100ms via ref + setTimeout
+ * - rAF-batched WebSocket updates from useMarketData
  */
 export function useOptionChainLive(
   apiKey: string | null,
@@ -42,7 +44,12 @@ export function useOptionChainLive(
   strikeCount: number,
   options: UseOptionChainLiveOptions = { enabled: true, oiRefreshInterval: 30000, pauseWhenHidden: true }
 ) {
-  const { enabled, oiRefreshInterval = 30000, pauseWhenHidden = true } = options
+  const {
+    enabled,
+    oiRefreshInterval = 30000,
+    wsMode = 'LTP',
+    pauseWhenHidden = true,
+  } = options
 
   // Track merged data with WebSocket updates
   const [mergedData, setMergedData] = useState<OptionChainResponse | null>(null)
@@ -69,7 +76,6 @@ export function useOptionChainLive(
     const symbols: Array<{ symbol: string; exchange: string }> = []
 
     // Add underlying index symbol for real-time spot price
-    // Map exchange to index exchange (NSE_INDEX for NFO, BSE_INDEX for BFO)
     const indexExchange = optionExchange === 'BFO' ? 'BSE_INDEX' : 'NSE_INDEX'
     symbols.push({ symbol: underlying, exchange: indexExchange })
 
@@ -88,7 +94,7 @@ export function useOptionChainLive(
     return symbols
   }, [polledData?.chain, optionExchange, underlying])
 
-  // WebSocket for real-time LTP + Depth (Bid/Ask) updates
+  // WebSocket for real-time LTP updates (LTP mode = less data per tick)
   const {
     data: wsData,
     isConnected: isWsConnected,
@@ -96,101 +102,173 @@ export function useOptionChainLive(
     isPaused: isWsPaused,
   } = useMarketData({
     symbols: wsSymbols,
-    mode: 'Depth', // Get LTP + Bid/Ask depth
+    mode: wsMode,
     enabled: enabled && wsSymbols.length > 0,
   })
 
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
 
-  // Merge WebSocket LTP data into polled option chain data
+  // Throttled merge: accumulate wsData changes, merge at most every MERGE_INTERVAL ms
+  const mergeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestWsDataRef = useRef(wsData)
+  const latestPolledDataRef = useRef(polledData)
+
+  // Keep refs in sync
+  latestWsDataRef.current = wsData
+  latestPolledDataRef.current = polledData
+
+  // The actual merge function (called from throttled timer)
+  const doMerge = useMemo(() => {
+    return () => {
+      mergeTimerRef.current = null
+      const currentPolled = latestPolledDataRef.current
+      const currentWs = latestWsDataRef.current
+
+      if (!currentPolled) {
+        setMergedData(null)
+        return
+      }
+
+      // If no WebSocket data yet, use polled data as-is
+      if (currentWs.size === 0) {
+        setMergedData(currentPolled)
+        return
+      }
+
+      // Create merged chain with WebSocket LTP updates
+      const mergedChain: OptionStrike[] = currentPolled.chain.map((strike) => {
+        let ceChanged = false
+        let peChanged = false
+        let ceLtp = strike.ce?.ltp
+        let peLtp = strike.pe?.ltp
+        let ceVolume = strike.ce?.volume
+        let peVolume = strike.pe?.volume
+        let ceOi = strike.ce?.oi
+        let peOi = strike.pe?.oi
+
+        // Update CE LTP from WebSocket
+        if (strike.ce?.symbol) {
+          const wsKey = `${optionExchange}:${strike.ce.symbol}`
+          const wsSymbolData = currentWs.get(wsKey)
+          const wsPayload = wsSymbolData?.data
+          if (wsPayload?.ltp !== undefined) {
+            const rounded = roundToTickSize(wsPayload.ltp, strike.ce.tick_size)
+            if (rounded !== undefined && rounded !== strike.ce.ltp) {
+              ceLtp = rounded
+              ceChanged = true
+            }
+          }
+          if (wsPayload?.volume !== undefined && wsPayload.volume !== strike.ce.volume) {
+            ceVolume = wsPayload.volume
+            ceChanged = true
+          }
+          const wsOi = wsPayload?.oi ?? wsPayload?.open_interest
+          if (wsOi !== undefined && wsOi !== strike.ce.oi) {
+            ceOi = wsOi
+            ceChanged = true
+          }
+        }
+
+        // Update PE LTP from WebSocket
+        if (strike.pe?.symbol) {
+          const wsKey = `${optionExchange}:${strike.pe.symbol}`
+          const wsSymbolData = currentWs.get(wsKey)
+          const wsPayload = wsSymbolData?.data
+          if (wsPayload?.ltp !== undefined) {
+            const rounded = roundToTickSize(wsPayload.ltp, strike.pe.tick_size)
+            if (rounded !== undefined && rounded !== strike.pe.ltp) {
+              peLtp = rounded
+              peChanged = true
+            }
+          }
+          if (wsPayload?.volume !== undefined && wsPayload.volume !== strike.pe.volume) {
+            peVolume = wsPayload.volume
+            peChanged = true
+          }
+          const wsOi = wsPayload?.oi ?? wsPayload?.open_interest
+          if (wsOi !== undefined && wsOi !== strike.pe.oi) {
+            peOi = wsOi
+            peChanged = true
+          }
+        }
+
+        // Only create new object if something actually changed
+        if (!ceChanged && !peChanged) return strike
+
+        const newStrike = { ...strike }
+        if (ceChanged && strike.ce) {
+          newStrike.ce = {
+            ...strike.ce,
+            ...(ceLtp !== undefined ? { ltp: ceLtp } : {}),
+            ...(ceVolume !== undefined ? { volume: ceVolume } : {}),
+            ...(ceOi !== undefined ? { oi: ceOi } : {}),
+          }
+        }
+        if (peChanged && strike.pe) {
+          newStrike.pe = {
+            ...strike.pe,
+            ...(peLtp !== undefined ? { ltp: peLtp } : {}),
+            ...(peVolume !== undefined ? { volume: peVolume } : {}),
+            ...(peOi !== undefined ? { oi: peOi } : {}),
+          }
+        }
+        return newStrike
+      })
+
+      // Check if any LTP was updated
+      let hasLtpUpdate = false
+      for (const [, symbolData] of currentWs) {
+        if (symbolData.lastUpdate && symbolData.lastUpdate > lastLtpUpdateRef.current) {
+          hasLtpUpdate = true
+          lastLtpUpdateRef.current = symbolData.lastUpdate
+          break
+        }
+      }
+
+      if (hasLtpUpdate) {
+        setLastLtpUpdate(new Date())
+      }
+
+      // Get real-time underlying spot price from WebSocket
+      const indexExchange = optionExchange === 'BFO' ? 'BSE_INDEX' : 'NSE_INDEX'
+      const underlyingKey = `${indexExchange}:${underlying}`
+      const underlyingWsData = currentWs.get(underlyingKey)
+      const underlyingLtp = underlyingWsData?.data?.ltp ?? currentPolled.underlying_ltp
+
+      setMergedData({
+        ...currentPolled,
+        underlying_ltp: underlyingLtp,
+        chain: mergedChain,
+      })
+    }
+  }, [optionExchange, underlying])
+
+  // Trigger throttled merge when wsData or polledData changes
   useEffect(() => {
     if (!polledData) {
       setMergedData(null)
       return
     }
 
-    // If no WebSocket data yet, use polled data as-is
+    // If no WS data, set polled immediately (first load)
     if (wsData.size === 0) {
       setMergedData(polledData)
       return
     }
 
-    // Create merged chain with WebSocket LTP updates
-    const mergedChain: OptionStrike[] = polledData.chain.map((strike) => {
-      const newStrike = { ...strike }
-
-      // Update CE data from WebSocket
-      if (strike.ce?.symbol) {
-        const wsKey = `${optionExchange}:${strike.ce.symbol}`
-        const wsSymbolData = wsData.get(wsKey)
-        if (wsSymbolData?.data) {
-          // Try depth data first (dp packets), fallback to quote data (sf packets)
-          // Depth mode: depth.buy[0].price, depth.buy[0].quantity
-          // Quote mode: bid_price, ask_price, bid_size, ask_size
-          const depthBuy = wsSymbolData.data.depth?.buy?.[0]
-          const depthSell = wsSymbolData.data.depth?.sell?.[0]
-          const tickSize = strike.ce.tick_size
-          newStrike.ce = {
-            ...strike.ce,
-            ltp: roundToTickSize(wsSymbolData.data.ltp, tickSize) ?? strike.ce.ltp,
-            bid: roundToTickSize(depthBuy?.price ?? wsSymbolData.data.bid_price, tickSize) ?? strike.ce.bid,
-            ask: roundToTickSize(depthSell?.price ?? wsSymbolData.data.ask_price, tickSize) ?? strike.ce.ask,
-            bid_qty: depthBuy?.quantity ?? wsSymbolData.data.bid_size ?? strike.ce.bid_qty ?? 0,
-            ask_qty: depthSell?.quantity ?? wsSymbolData.data.ask_size ?? strike.ce.ask_qty ?? 0,
-          }
-        }
-      }
-
-      // Update PE data from WebSocket
-      if (strike.pe?.symbol) {
-        const wsKey = `${optionExchange}:${strike.pe.symbol}`
-        const wsSymbolData = wsData.get(wsKey)
-        if (wsSymbolData?.data) {
-          // Try depth data first (dp packets), fallback to quote data (sf packets)
-          const depthBuy = wsSymbolData.data.depth?.buy?.[0]
-          const depthSell = wsSymbolData.data.depth?.sell?.[0]
-          const tickSize = strike.pe.tick_size
-          newStrike.pe = {
-            ...strike.pe,
-            ltp: roundToTickSize(wsSymbolData.data.ltp, tickSize) ?? strike.pe.ltp,
-            bid: roundToTickSize(depthBuy?.price ?? wsSymbolData.data.bid_price, tickSize) ?? strike.pe.bid,
-            ask: roundToTickSize(depthSell?.price ?? wsSymbolData.data.ask_price, tickSize) ?? strike.pe.ask,
-            bid_qty: depthBuy?.quantity ?? wsSymbolData.data.bid_size ?? strike.pe.bid_qty ?? 0,
-            ask_qty: depthSell?.quantity ?? wsSymbolData.data.ask_size ?? strike.pe.ask_qty ?? 0,
-          }
-        }
-      }
-
-      return newStrike
-    })
-
-    // Check if any LTP was updated (using ref to avoid loop)
-    let hasLtpUpdate = false
-    for (const [, symbolData] of wsData) {
-      if (symbolData.lastUpdate && symbolData.lastUpdate > lastLtpUpdateRef.current) {
-        hasLtpUpdate = true
-        lastLtpUpdateRef.current = symbolData.lastUpdate
-        break
-      }
+    // Schedule merge if not already scheduled
+    if (mergeTimerRef.current === null) {
+      mergeTimerRef.current = setTimeout(doMerge, MERGE_INTERVAL)
     }
 
-    if (hasLtpUpdate) {
-      setLastLtpUpdate(new Date())
+    return () => {
+      if (mergeTimerRef.current !== null) {
+        clearTimeout(mergeTimerRef.current)
+        mergeTimerRef.current = null
+      }
     }
-
-    // Get real-time underlying spot price from WebSocket
-    const indexExchange = optionExchange === 'BFO' ? 'BSE_INDEX' : 'NSE_INDEX'
-    const underlyingKey = `${indexExchange}:${underlying}`
-    const underlyingWsData = wsData.get(underlyingKey)
-    const underlyingLtp = underlyingWsData?.data?.ltp ?? polledData.underlying_ltp
-
-    setMergedData({
-      ...polledData,
-      underlying_ltp: underlyingLtp,
-      chain: mergedChain,
-    })
-  }, [polledData, wsData, optionExchange, underlying])
+  }, [polledData, wsData, doMerge])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0

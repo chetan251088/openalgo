@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -11,8 +11,12 @@ import { HotkeyHelp } from '@/components/scalping/HotkeyHelp'
 import { useScalpingHotkeys } from '@/hooks/useScalpingHotkeys'
 import { useOptionsContext } from '@/hooks/useOptionsContext'
 import { useAutoTradeEngine } from '@/hooks/useAutoTradeEngine'
+import { useMarketData } from '@/hooks/useMarketData'
+import { useVirtualTPSL } from '@/hooks/useVirtualTPSL'
 import { useTrailingMonitor } from '@/hooks/useTrailingMonitor'
+import { useScalpingPositions } from '@/hooks/useScalpingPositions'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
 
@@ -27,7 +31,31 @@ export default function ScalpingDashboard() {
   const product = useScalpingStore((s) => s.product)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
+  const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
+  const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
+  const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
+  const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
+  const clearTriggerOrders = useVirtualOrderStore((s) => s.clearTriggerOrders)
   const apiKey = useAuthStore((s) => s.apiKey)
+  const setApiKey = useAuthStore((s) => s.setApiKey)
+
+  // Eagerly fetch apiKey on mount so expiry/chain loading don't wait for AuthSync
+  useEffect(() => {
+    if (apiKey) return
+    fetch('/api/websocket/apikey', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.status === 'success' && data.api_key) {
+          setApiKey(data.api_key)
+        }
+      })
+      .catch(() => {})
+  }, [apiKey, setApiKey])
+
+  // Safety: trigger orders are session-only and should not auto-fire after reload.
+  useEffect(() => {
+    clearTriggerOrders()
+  }, [clearTriggerOrders])
 
   // Close active side position
   const handleClose = useCallback(
@@ -84,6 +112,9 @@ export default function ScalpingDashboard() {
           quantity: quantity * lotSize,
           pricetype: 'MARKET',
           product,
+          price: 0,
+          trigger_price: 0,
+          disclosed_quantity: 0,
         })
         console.log(`[Scalping] Reversed ${side} ${symbol}`)
       } catch (err) {
@@ -104,40 +135,74 @@ export default function ScalpingDashboard() {
   // Options context polling (PCR, MaxPain, GEX, IV, Straddle)
   useOptionsContext()
 
+  // Build symbol list for shared tick stream (positions, triggers, selected strikes)
+  const tickSymbols = useMemo(() => {
+    const symbols: Array<{ symbol: string; exchange: string }> = []
+
+    if (selectedCESymbol) symbols.push({ symbol: selectedCESymbol, exchange: optionExchange })
+    if (selectedPESymbol) symbols.push({ symbol: selectedPESymbol, exchange: optionExchange })
+
+    for (const order of Object.values(virtualTPSL)) {
+      symbols.push({ symbol: order.symbol, exchange: order.exchange })
+    }
+
+    for (const order of Object.values(triggerOrders)) {
+      symbols.push({ symbol: order.symbol, exchange: order.exchange })
+    }
+
+    const unique = new Map<string, { symbol: string; exchange: string }>()
+    for (const item of symbols) {
+      unique.set(`${item.exchange}:${item.symbol}`, item)
+    }
+
+    return Array.from(unique.values())
+  }, [selectedCESymbol, selectedPESymbol, optionExchange, virtualTPSL, triggerOrders])
+
+  const { data: tickData } = useMarketData({ symbols: tickSymbols, mode: 'LTP', enabled: tickSymbols.length > 0 })
+
+  const {
+    positions: livePositions,
+    totalPnl: liveOpenPnl,
+    isLive: isLivePnl,
+  } = useScalpingPositions()
+
   // Auto-trade engine (execute or ghost mode)
-  useAutoTradeEngine(null)
+  useAutoTradeEngine(tickData)
 
   // Trailing stop monitor for active positions
   useTrailingMonitor()
 
+  // Virtual TP/SL + trigger monitoring
+  useVirtualTPSL(tickData)
+
   return (
     <div className="flex flex-col h-full">
-      <TopBar />
+      <TopBar liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
 
-      <div className="flex-1 min-h-0">
-        <ResizablePanelGroup orientation="horizontal">
+      <div className="flex-1 min-h-0 min-w-0">
+        <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
           {/* Left: Option Chain */}
-          <ResizablePanel defaultSize="18%" minSize="10%" maxSize="35%">
+          <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
             <OptionChainPanel />
           </ResizablePanel>
 
-          <ResizableHandle withHandle />
+          <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Center: Charts */}
-          <ResizablePanel defaultSize="52%" minSize="25%">
+          <ResizablePanel defaultSize="50%" minSize="30%">
             <ChartPanel />
           </ResizablePanel>
 
-          <ResizableHandle withHandle />
+          <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Right: Control Panel */}
-          <ResizablePanel defaultSize="30%" minSize="18%" maxSize="45%">
-            <ControlPanel />
+          <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
+            <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
-      <BottomBar />
+      <BottomBar positions={livePositions} totalPnl={liveOpenPnl} isLivePnl={isLivePnl} />
       <HotkeyHelp open={showHelp} onClose={closeHelp} />
     </div>
   )

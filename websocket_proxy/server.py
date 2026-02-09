@@ -948,10 +948,14 @@ class WebSocketProxy:
         depth_level = data.get("depth", 5)  # Default to 5 levels
 
         # Map string mode to numeric mode
-        mode_mapping = {"LTP": 1, "Quote": 2, "Depth": 3}
+        mode_mapping = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
 
         # Convert string mode to numeric if needed
-        mode = mode_mapping.get(mode_str, mode_str) if isinstance(mode_str, str) else mode_str
+        mode = (
+            mode_mapping.get(mode_str.upper(), mode_str)
+            if isinstance(mode_str, str)
+            else mode_str
+        )
 
         # Handle case where a single symbol is passed directly instead of as an array
         if not symbols and (data.get("symbol") and data.get("exchange")):
@@ -983,6 +987,9 @@ class WebSocketProxy:
             if not symbol or not exchange:
                 continue  # Skip invalid symbols
 
+            symbol = str(symbol).upper()
+            exchange = str(exchange).upper()
+
             # Subscribe to market data
             response = adapter.subscribe(symbol, exchange, mode, depth_level)
 
@@ -1011,7 +1018,7 @@ class WebSocketProxy:
                         "symbol": symbol,
                         "exchange": exchange,
                         "status": "success",
-                        "mode": mode_str,
+                        "mode": mode_str if isinstance(mode_str, str) else str(mode_str),
                         "depth": response.get("actual_depth", depth_level),
                         "broker": broker_name,
                     }
@@ -1415,6 +1422,103 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
+    def _normalize_mode(self, raw_mode: Any) -> Optional[int]:
+        """
+        Normalize mode from topic/payload to proxy integer mode.
+
+        Supports string aliases and numeric values for robust broker compatibility.
+        """
+        if isinstance(raw_mode, int):
+            return raw_mode if raw_mode in (1, 2, 3) else None
+
+        if isinstance(raw_mode, float):
+            int_mode = int(raw_mode)
+            return int_mode if int_mode in (1, 2, 3) else None
+
+        if isinstance(raw_mode, str):
+            mode_str = raw_mode.strip().upper()
+            if mode_str.isdigit():
+                int_mode = int(mode_str)
+                return int_mode if int_mode in (1, 2, 3) else None
+
+            alias_map = {
+                "LTP": "LTP",
+                "QUOTE": "QUOTE",
+                "QUOTES": "QUOTE",
+                "FULL": "DEPTH",
+                "DEPTH": "DEPTH",
+            }
+            mapped = alias_map.get(mode_str, mode_str)
+            return self.MODE_MAP.get(mapped)
+
+        return None
+
+    def _parse_topic_metadata(self, topic_str: str) -> tuple[str, str, Optional[int], str]:
+        """
+        Parse ZMQ topic as EXCHANGE_SYMBOL_MODE or BROKER_EXCHANGE_SYMBOL_MODE.
+
+        Topic parsing is done from the right side so symbols containing underscores
+        are handled correctly.
+        """
+        parts = topic_str.split("_")
+        if len(parts) < 3:
+            return "", "", None, "unknown"
+
+        mode = self._normalize_mode(parts[-1])
+        core_parts = parts[:-1]
+
+        if not core_parts:
+            return "", "", mode, "unknown"
+
+        broker_name = "unknown"
+        known_exchange_heads = {"NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD"}
+        starts_with_exchange = (
+            core_parts[0].upper() in known_exchange_heads
+            or (
+                len(core_parts) >= 2
+                and f"{core_parts[0].upper()}_{core_parts[1].upper()}" in {"NSE_INDEX", "BSE_INDEX"}
+            )
+        )
+
+        # If topic doesn't start with a known exchange, treat the first token as broker prefix.
+        if len(core_parts) >= 3 and not starts_with_exchange:
+            broker_name = core_parts[0].lower()
+            core_parts = core_parts[1:]
+
+        # Exchange can contain underscore for index exchanges.
+        if len(core_parts) >= 3 and core_parts[0].upper() in {"NSE", "BSE"} and core_parts[
+            1
+        ].upper() == "INDEX":
+            exchange = f"{core_parts[0].upper()}_{core_parts[1].upper()}"
+            symbol = "_".join(core_parts[2:])
+        else:
+            exchange = core_parts[0].upper()
+            symbol = "_".join(core_parts[1:])
+
+        return symbol.upper(), exchange.upper(), mode, broker_name
+
+    def _resolve_market_data_metadata(
+        self, topic_str: str, market_data: Dict[str, Any]
+    ) -> tuple[str, str, Optional[int], str]:
+        """
+        Resolve symbol/exchange/mode/broker for routing.
+
+        Uses payload fields first (most reliable across brokers), then falls back
+        to topic parsing for compatibility with adapters that only send topic metadata.
+        """
+        topic_symbol, topic_exchange, topic_mode, topic_broker = self._parse_topic_metadata(topic_str)
+
+        payload_symbol = str(market_data.get("symbol", "")).strip().upper()
+        payload_exchange = str(market_data.get("exchange", "")).strip().upper()
+        payload_mode = self._normalize_mode(market_data.get("mode"))
+
+        symbol = payload_symbol or topic_symbol
+        exchange = payload_exchange or topic_exchange
+        mode = payload_mode if payload_mode is not None else topic_mode
+        broker_name = topic_broker
+
+        return symbol, exchange, mode, broker_name
+
     async def zmq_listener(self):
         """
         OPTIMIZED: Listen for messages from broker adapters via ZeroMQ and forward to clients
@@ -1464,50 +1568,21 @@ class WebSocketProxy:
 
                 market_data = json.loads(data_str)
 
-                # Extract topic components
-                # Support both formats:
-                # New format: BROKER_EXCHANGE_SYMBOL_MODE (with broker name)
-                # Old format: EXCHANGE_SYMBOL_MODE (without broker name)
-                # Special case: NSE_INDEX_SYMBOL_MODE (exchange contains underscore)
-                parts = topic_str.split("_")
-
-                # Special case handling for NSE_INDEX and BSE_INDEX
-                if len(parts) >= 4 and parts[0] == "NSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "NSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 4 and parts[0] == "BSE" and parts[1] == "INDEX":
-                    broker_name = "unknown"
-                    exchange = "BSE_INDEX"
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 5 and parts[1] == "INDEX":  # BROKER_NSE_INDEX_SYMBOL_MODE format
-                    broker_name = parts[0]
-                    exchange = f"{parts[1]}_{parts[2]}"
-                    symbol = parts[3]
-                    mode_str = parts[4]
-                elif len(parts) >= 4:
-                    # Standard format with broker name
-                    broker_name = parts[0]
-                    exchange = parts[1]
-                    symbol = parts[2]
-                    mode_str = parts[3]
-                elif len(parts) >= 3:
-                    # Old format without broker name
-                    broker_name = "unknown"
-                    exchange = parts[0]
-                    symbol = parts[1]
-                    mode_str = parts[2]
-                else:
-                    logger.warning(f"Invalid topic format: {topic_str}")
+                symbol, exchange, mode, broker_name = self._resolve_market_data_metadata(
+                    topic_str, market_data
+                )
+                if not symbol or not exchange:
+                    logger.warning(
+                        f"Invalid topic/payload metadata: topic={topic_str}, "
+                        f"payload_symbol={market_data.get('symbol')}, "
+                        f"payload_exchange={market_data.get('exchange')}"
+                    )
                     continue
 
-                # OPTIMIZATION: Use pre-computed mode map
-                mode = self.MODE_MAP.get(mode_str)
-
-                if not mode:
-                    logger.warning(f"Invalid mode in topic: {mode_str}")
+                if mode is None:
+                    logger.warning(
+                        f"Invalid mode in topic/payload: topic={topic_str}, payload_mode={market_data.get('mode')}"
+                    )
                     continue
 
                 # OPTIMIZATION: Message throttling for high-frequency updates

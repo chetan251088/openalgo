@@ -71,8 +71,8 @@ export function useAutoTradeEngine(
     // Get current prices
     const ceSymbol = selectedCESymbol
     const peSymbol = selectedPESymbol
-    const ceLtp = ceSymbol ? tickData.get(ceSymbol)?.data?.ltp : undefined
-    const peLtp = peSymbol ? tickData.get(peSymbol)?.data?.ltp : undefined
+    const ceLtp = ceSymbol ? tickData.get(`${optionExchange}:${ceSymbol}`)?.data?.ltp : undefined
+    const peLtp = peSymbol ? tickData.get(`${optionExchange}:${peSymbol}`)?.data?.ltp : undefined
 
     // Update tick history
     if (ceLtp) {
@@ -111,12 +111,13 @@ export function useAutoTradeEngine(
       const indexBias = calculateIndexBias(indicators, config)
 
       // Spread estimate (bid-ask from tick data if available)
-      const bidPrice = tickData.get(symbol)?.data?.bid_price
-      const askPrice = tickData.get(symbol)?.data?.ask_price
+      const symbolKey = `${optionExchange}:${symbol}`
+      const bidPrice = tickData.get(symbolKey)?.data?.bid_price
+      const askPrice = tickData.get(symbolKey)?.data?.ask_price
       const spread = bidPrice && askPrice ? askPrice - bidPrice : 2
 
       // Depth info for imbalance filter (sum bid/ask qty from depth levels)
-      const depthData = tickData.get(symbol)?.data?.depth
+      const depthData = tickData.get(symbolKey)?.data?.depth
       let depthInfo: { totalBid: number; totalAsk: number } | undefined
       if (depthData?.buy?.length && depthData?.sell?.length) {
         const totalBid = depthData.buy.reduce((sum, l) => sum + (l.quantity || 0), 0)
@@ -158,6 +159,9 @@ export function useAutoTradeEngine(
             quantity: quantity * lotSize,
             pricetype: 'MARKET',
             product,
+            price: 0,
+            trigger_price: 0,
+            disclosed_quantity: 0,
           }
 
           // Fire and forget for speed

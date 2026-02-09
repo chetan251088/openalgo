@@ -5,6 +5,17 @@ import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useAuthStore } from '@/stores/authStore'
 
+function toFiniteNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim())
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
 /**
  * Base interface for items that can have live price data
  */
@@ -193,8 +204,8 @@ export function useLivePrice<T extends PriceableItem>(
       const wsData = marketData.get(key)
       const mqData = multiQuotes.get(key)
 
-      const qty = item.quantity || 0
-      const avgPrice = item.average_price || 0
+      const qty = toFiniteNumber(item.quantity)
+      const avgPrice = toFiniteNumber(item.average_price)
 
       // Check if market is open for this exchange
       const exchangeMarketOpen = isMarketOpen(item.exchange)
@@ -237,12 +248,12 @@ export function useLivePrice<T extends PriceableItem>(
 
       // For open positions: recalculate P&L and P&L% using live LTP
       // This ensures real-time updates as LTP changes
-      let calculatedPnl = item.pnl || 0
-      let calculatedPnlPercent = item.pnlpercent || 0
+      let calculatedPnl = toFiniteNumber(item.pnl)
+      let calculatedPnlPercent = toFiniteNumber(item.pnlpercent)
 
       // Get today's realized P&L if available (from sandbox mode)
       // This ensures cumulative P&L (realized + unrealized) is shown correctly
-      const todayRealizedPnl = item.today_realized_pnl || 0
+      const todayRealizedPnl = toFiniteNumber(item.today_realized_pnl)
 
       if (currentLtp && avgPrice > 0) {
         // Calculate unrealized P&L based on position direction

@@ -13,6 +13,19 @@ interface ScalpingChainRowProps {
   onSelectStrike: (strike: number, ceSymbol: string | null, peSymbol: string | null) => void
 }
 
+function formatInLakhs(value: number | undefined): string {
+  if (value == null || value === 0) return '-'
+
+  const abs = Math.abs(value)
+  if (abs >= 100000) {
+    if (abs >= 1000000) return `${(value / 100000).toFixed(1)}L`
+    return `${(value / 100000).toFixed(2)}L`
+  }
+
+  if (abs >= 1000) return `${(value / 1000).toFixed(1)}K`
+  return value.toLocaleString('en-IN')
+}
+
 function FlashCell({
   value,
   prevRef,
@@ -56,25 +69,51 @@ function HeatBar({
   value,
   max,
   side,
+  kind,
 }: {
   value: number
   max: number
   side: 'CE' | 'PE'
+  kind: 'oi' | 'volume'
 }) {
   if (!value || !max) return null
   const pct = Math.min((value / max) * 100, 100)
+  const intensity = Math.min(0.2 + pct / 180, 0.75)
 
   return (
     <div
       className={cn(
-        'absolute inset-y-0 pointer-events-none',
+        'absolute inset-y-0 pointer-events-none transition-[width,opacity] duration-200',
         side === 'CE'
-          ? 'right-0 bg-gradient-to-l from-green-500/20 to-transparent'
-          : 'left-0 bg-gradient-to-r from-red-500/20 to-transparent'
+          ? kind === 'oi'
+            ? 'right-0 bg-gradient-to-l from-emerald-500 to-transparent'
+            : 'right-0 bg-gradient-to-l from-teal-500 to-transparent'
+          : kind === 'oi'
+            ? 'left-0 bg-gradient-to-r from-rose-500 to-transparent'
+            : 'left-0 bg-gradient-to-r from-orange-500 to-transparent',
+        pct > 72 && 'animate-pulse'
       )}
-      style={{ width: `${pct}%` }}
+      style={{ width: `${pct}%`, opacity: intensity }}
     />
   )
+}
+
+// Custom comparator: only re-render when displayed values actually change
+function areEqual(prev: ScalpingChainRowProps, next: ScalpingChainRowProps): boolean {
+  if (prev.strike !== next.strike) return false
+  if (prev.isATM !== next.isATM) return false
+  if (prev.isSelected !== next.isSelected) return false
+  if (prev.maxOI !== next.maxOI) return false
+  if (prev.maxVol !== next.maxVol) return false
+  if (prev.onSelectStrike !== next.onSelectStrike) return false
+  // Compare actual displayed values, not object references
+  if (prev.ce?.ltp !== next.ce?.ltp) return false
+  if (prev.ce?.oi !== next.ce?.oi) return false
+  if (prev.ce?.volume !== next.ce?.volume) return false
+  if (prev.pe?.ltp !== next.pe?.ltp) return false
+  if (prev.pe?.oi !== next.pe?.oi) return false
+  if (prev.pe?.volume !== next.pe?.volume) return false
+  return true
 }
 
 export const ScalpingChainRow = memo(function ScalpingChainRow({
@@ -89,6 +128,8 @@ export const ScalpingChainRow = memo(function ScalpingChainRow({
 }: ScalpingChainRowProps) {
   const ceLtpRef = useRef(ce?.ltp ?? 0)
   const peLtpRef = useRef(pe?.ltp ?? 0)
+  const cePressure = Math.min((((ce?.oi ?? 0) / maxOI + (ce?.volume ?? 0) / maxVol) / 2) * 100, 100)
+  const pePressure = Math.min((((pe?.oi ?? 0) / maxOI + (pe?.volume ?? 0) / maxVol) / 2) * 100, 100)
 
   return (
     <div
@@ -101,23 +142,27 @@ export const ScalpingChainRow = memo(function ScalpingChainRow({
     >
       {/* CE OI */}
       <div className="relative flex items-center justify-end h-full px-1.5 overflow-hidden">
-        <HeatBar value={ce?.oi ?? 0} max={maxOI} side="CE" />
+        <HeatBar value={ce?.oi ?? 0} max={maxOI} side="CE" kind="oi" />
         <span className="relative z-10 tabular-nums text-muted-foreground">
-          {ce?.oi ? ce.oi.toLocaleString('en-IN') : '-'}
+          {formatInLakhs(ce?.oi)}
         </span>
       </div>
 
       {/* CE Volume */}
       <div className="relative flex items-center justify-end h-full px-1.5 overflow-hidden">
-        <HeatBar value={ce?.volume ?? 0} max={maxVol} side="CE" />
+        <HeatBar value={ce?.volume ?? 0} max={maxVol} side="CE" kind="volume" />
         <span className="relative z-10 tabular-nums text-muted-foreground">
-          {ce?.volume ? ce.volume.toLocaleString('en-IN') : '-'}
+          {formatInLakhs(ce?.volume)}
         </span>
       </div>
 
       {/* CE LTP */}
-      <div className="flex items-center justify-end h-full px-1.5">
-        <FlashCell value={ce?.ltp} prevRef={ceLtpRef} className="font-medium" />
+      <div className="relative flex items-center justify-end h-full px-1.5 overflow-hidden">
+        <div
+          className="absolute inset-y-0 right-0 bg-gradient-to-l from-emerald-500/35 to-transparent transition-[width] duration-200"
+          style={{ width: `${cePressure}%` }}
+        />
+        <FlashCell value={ce?.ltp} prevRef={ceLtpRef} className="relative z-10 font-medium" />
       </div>
 
       {/* Strike */}
@@ -131,25 +176,29 @@ export const ScalpingChainRow = memo(function ScalpingChainRow({
       </div>
 
       {/* PE LTP */}
-      <div className="flex items-center justify-start h-full px-1.5">
-        <FlashCell value={pe?.ltp} prevRef={peLtpRef} className="font-medium" />
+      <div className="relative flex items-center justify-start h-full px-1.5 overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 bg-gradient-to-r from-rose-500/35 to-transparent transition-[width] duration-200"
+          style={{ width: `${pePressure}%` }}
+        />
+        <FlashCell value={pe?.ltp} prevRef={peLtpRef} className="relative z-10 font-medium" />
       </div>
 
       {/* PE Volume */}
       <div className="relative flex items-center justify-start h-full px-1.5 overflow-hidden">
-        <HeatBar value={pe?.volume ?? 0} max={maxVol} side="PE" />
+        <HeatBar value={pe?.volume ?? 0} max={maxVol} side="PE" kind="volume" />
         <span className="relative z-10 tabular-nums text-muted-foreground">
-          {pe?.volume ? pe.volume.toLocaleString('en-IN') : '-'}
+          {formatInLakhs(pe?.volume)}
         </span>
       </div>
 
       {/* PE OI */}
       <div className="relative flex items-center justify-start h-full px-1.5 overflow-hidden">
-        <HeatBar value={pe?.oi ?? 0} max={maxOI} side="PE" />
+        <HeatBar value={pe?.oi ?? 0} max={maxOI} side="PE" kind="oi" />
         <span className="relative z-10 tabular-nums text-muted-foreground">
-          {pe?.oi ? pe.oi.toLocaleString('en-IN') : '-'}
+          {formatInLakhs(pe?.oi)}
         </span>
       </div>
     </div>
   )
-})
+}, areEqual)

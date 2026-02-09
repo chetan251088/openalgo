@@ -3,6 +3,7 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
+import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
 
 interface UseScalpingHotkeysOptions {
@@ -31,11 +32,17 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const product = useScalpingStore((s) => s.product)
   const orderType = useScalpingStore((s) => s.orderType)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
+  const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
+  const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
   const paperMode = useScalpingStore((s) => s.paperMode)
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
+  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
+  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
+  const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
+  const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
   const toggleActiveSide = useScalpingStore((s) => s.toggleActiveSide)
   const toggleFloatingWidget = useScalpingStore((s) => s.toggleFloatingWidget)
@@ -73,28 +80,51 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         return
       }
 
-      if (paperMode) {
-        console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
+      // TRIGGER mode: arm side/action and place trigger only from chart click.
+      if (orderType === 'TRIGGER') {
+        const existingTrigger = Object.values(triggerOrders).find(
+          (t) => t.symbol === symbol && t.exchange === optionExchange && t.side === activeSide
+        )
+        if (existingTrigger) {
+          removeTriggerOrder(existingTrigger.id)
+        }
+        setLimitPrice(null)
+        setPendingEntryAction(action)
+        console.log(`[Scalping] TRIGGER armed (${action}) — click chart to place trigger line`)
         return
       }
 
-      // TRIGGER mode = virtual client-side trigger
-      if (orderType === 'TRIGGER' && limitPrice) {
-        setVirtualTPSL({
-          id: `trigger-${Date.now()}`,
-          symbol,
-          exchange: optionExchange,
-          side: activeSide,
-          action,
-          entryPrice: limitPrice,
-          quantity: quantity * lotSize,
-          tpPrice: tpPoints > 0 ? limitPrice + (action === 'BUY' ? tpPoints : -tpPoints) : null,
-          slPrice: slPoints > 0 ? limitPrice + (action === 'BUY' ? -slPoints : slPoints) : null,
-          tpPoints,
-          slPoints,
-          createdAt: Date.now(),
-        })
-        console.log(`[Scalping] Virtual trigger set: ${action} ${symbol} @ ${limitPrice}`)
+      // LIMIT mode: require chart click to set a limit line first.
+      if (orderType === 'LIMIT' && !limitPrice) {
+        setPendingEntryAction(action)
+        console.log(`[Scalping] LIMIT armed (${action}) — click chart to set limit line`)
+        return
+      }
+
+      if (paperMode) {
+        console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
+        if (orderType === 'MARKET') {
+          const entryPrice = await resolveEntryPrice({
+            symbol,
+            exchange: optionExchange,
+          })
+          if (entryPrice > 0) {
+            const existingVirtual = getTPSLForSymbol(symbol)
+            if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
+            setVirtualTPSL(
+              buildVirtualPosition({
+                symbol,
+                exchange: optionExchange,
+                side: activeSide,
+                action,
+                entryPrice,
+                quantity: quantity * lotSize,
+                tpPoints,
+                slPoints,
+              })
+            )
+          }
+        }
         return
       }
 
@@ -123,25 +153,31 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
           console.log(`[Scalping] Order placed: ${action} ${symbol} id=${res.data?.orderid}`)
+          setPendingEntryAction(null)
 
-          // Create virtual TP/SL for the filled order
-          const entryPrice = (orderType === 'LIMIT' && limitPrice) ? limitPrice : 0
-          if (entryPrice > 0 && (tpPoints > 0 || slPoints > 0)) {
-            const isBuy = action === 'BUY'
-            setVirtualTPSL({
-              id: `tpsl-${Date.now()}`,
+          // Market entries should immediately render virtual position/TP/SL lines.
+          if (pricetype === 'MARKET') {
+            const entryPrice = await resolveEntryPrice({
               symbol,
               exchange: optionExchange,
-              side: activeSide,
-              action,
-              entryPrice,
-              quantity: quantity * lotSize,
-              tpPrice: tpPoints > 0 ? entryPrice + (isBuy ? tpPoints : -tpPoints) : null,
-              slPrice: slPoints > 0 ? entryPrice + (isBuy ? -slPoints : slPoints) : null,
-              tpPoints,
-              slPoints,
-              createdAt: Date.now(),
+              apiKey: key,
             })
+            if (entryPrice > 0) {
+              const existingVirtual = getTPSLForSymbol(symbol)
+              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
+              setVirtualTPSL(
+                buildVirtualPosition({
+                  symbol,
+                  exchange: optionExchange,
+                  side: activeSide,
+                  action,
+                  entryPrice,
+                  quantity: quantity * lotSize,
+                  tpPoints,
+                  slPoints,
+                })
+              )
+            }
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
@@ -150,7 +186,27 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         console.error('[Scalping] Order failed:', err)
       }
     },
-    [getActiveSymbol, activeSide, quantity, lotSize, optionExchange, product, orderType, limitPrice, tpPoints, slPoints, paperMode, ensureApiKey, setVirtualTPSL]
+    [
+      getActiveSymbol,
+      activeSide,
+      quantity,
+      lotSize,
+      optionExchange,
+      product,
+      orderType,
+      limitPrice,
+      tpPoints,
+      slPoints,
+      paperMode,
+      getTPSLForSymbol,
+      removeVirtualTPSL,
+      triggerOrders,
+      ensureApiKey,
+      setVirtualTPSL,
+      removeTriggerOrder,
+      setLimitPrice,
+      setPendingEntryAction,
+    ]
   )
 
   useEffect(() => {

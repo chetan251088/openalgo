@@ -1,12 +1,16 @@
 import { useScalpingStore } from '@/stores/scalpingStore'
-import { useScalpingPositions } from '@/hooks/useScalpingPositions'
+import type { ScalpingPosition } from '@/types/scalping'
 
-export function BottomBar() {
+interface BottomBarProps {
+  positions: ScalpingPosition[]
+  totalPnl: number
+  isLivePnl: boolean
+}
+
+export function BottomBar({ positions, totalPnl, isLivePnl }: BottomBarProps) {
   const activeSide = useScalpingStore((s) => s.activeSide)
   const hotkeysEnabled = useScalpingStore((s) => s.hotkeysEnabled)
   const paperMode = useScalpingStore((s) => s.paperMode)
-
-  const { positions, totalPnl } = useScalpingPositions(null)
 
   return (
     <div className="flex items-center justify-between px-3 py-1 border-t bg-card text-xs shrink-0">
@@ -46,6 +50,9 @@ export function BottomBar() {
                   }`}
                 >
                   {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(0)}
+                </span>
+                <span className={`text-[10px] ${isLivePnl ? 'text-green-500' : 'text-muted-foreground'}`}>
+                  {isLivePnl ? 'LIVE' : 'REST'}
                 </span>
               </>
             )}

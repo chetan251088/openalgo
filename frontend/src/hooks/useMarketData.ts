@@ -4,7 +4,8 @@
  * This hook delegates to the MarketDataManager singleton via MarketDataContext,
  * ensuring a single WebSocket connection is shared across all components.
  *
- * API is backward-compatible with the original implementation.
+ * Performance: Batches WebSocket callbacks via requestAnimationFrame to avoid
+ * creating a new Map on every individual symbol tick.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -59,6 +60,10 @@ export function useMarketData({
   // Track if we're in the process of connecting
   const [isConnecting, setIsConnecting] = useState(false)
 
+  // Batching: accumulate updates in a ref, flush via rAF
+  const pendingUpdatesRef = useRef<Map<string, SymbolData>>(new Map())
+  const rafIdRef = useRef<number | null>(null)
+
   // Stable symbol key for dependency tracking
   const symbolsKey = useMemo(
     () => symbols.map((s) => `${s.exchange}:${s.symbol}`).sort().join(','),
@@ -88,11 +93,16 @@ export function useMarketData({
     return unsubscribe
   }, [])
 
-  // Subscribe to symbols when enabled
+  // Subscribe to symbols when enabled — with rAF batching
   useEffect(() => {
     if (!enabled || symbols.length === 0) {
       // Clear data when disabled
       setMarketData(new Map())
+      pendingUpdatesRef.current.clear()
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
       return
     }
 
@@ -103,17 +113,34 @@ export function useMarketData({
       manager.connect()
     }
 
-    // Subscribe to each symbol
+    // Flush pending updates to state via rAF
+    const flushUpdates = () => {
+      rafIdRef.current = null
+      const pending = pendingUpdatesRef.current
+      if (pending.size === 0) return
+
+      setMarketData((prev) => {
+        const updated = new Map(prev)
+        for (const [key, data] of pending) {
+          updated.set(key, data)
+        }
+        return updated
+      })
+      pending.clear()
+    }
+
+    // Subscribe to each symbol — callbacks go to pending batch
     const unsubscribes: Array<() => void> = []
 
     for (const { symbol, exchange } of symbols) {
       const unsubscribe = manager.subscribe(symbol, exchange, mode, (data: SymbolData) => {
-        setMarketData((prev) => {
-          const key = `${data.exchange}:${data.symbol}`
-          const updated = new Map(prev)
-          updated.set(key, data)
-          return updated
-        })
+        const key = `${data.exchange}:${data.symbol}`
+        pendingUpdatesRef.current.set(key, data)
+
+        // Schedule flush if not already scheduled
+        if (rafIdRef.current === null) {
+          rafIdRef.current = requestAnimationFrame(flushUpdates)
+        }
       })
       unsubscribes.push(unsubscribe)
 
@@ -121,17 +148,24 @@ export function useMarketData({
       const cached = manager.getCachedData(symbol, exchange)
       if (cached) {
         const key = `${exchange}:${symbol}`
-        setMarketData((prev) => {
-          const updated = new Map(prev)
-          updated.set(key, cached)
-          return updated
-        })
+        pendingUpdatesRef.current.set(key, cached)
       }
+    }
+
+    // Flush any cached data immediately
+    if (pendingUpdatesRef.current.size > 0 && rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(flushUpdates)
     }
 
     return () => {
       // Unsubscribe from all symbols
       unsubscribes.forEach((unsub) => unsub())
+      // Cancel pending rAF
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
+      pendingUpdatesRef.current.clear()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, symbolsKey, mode])

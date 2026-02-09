@@ -1,4 +1,5 @@
 import type { UTCTimestamp } from 'lightweight-charts'
+import { alignToIndiaMarketInterval } from '@/lib/indiaMarketTime'
 
 export interface Candle {
   time: UTCTimestamp
@@ -15,6 +16,10 @@ export interface Tick {
   timestamp: number // ms epoch
 }
 
+interface MergeTickOptions {
+  alignToIndiaSession?: boolean
+}
+
 /**
  * Merge a new tick into the current candle (or create a new one).
  * Candle interval in seconds. Returns [updatedCandle, isNewCandle].
@@ -22,9 +27,14 @@ export interface Tick {
 export function mergeTickIntoCandle(
   tick: Tick,
   currentCandle: Candle | null,
-  intervalSec: number
+  intervalSec: number,
+  options: MergeTickOptions = {}
 ): [Candle, boolean] {
-  const candleTime = Math.floor(tick.timestamp / 1000 / intervalSec) * intervalSec as UTCTimestamp
+  const tickEpochSeconds = Math.floor(tick.timestamp / 1000)
+  const candleEpochSeconds = options.alignToIndiaSession
+    ? alignToIndiaMarketInterval(tickEpochSeconds, intervalSec)
+    : Math.floor(tickEpochSeconds / intervalSec) * intervalSec
+  const candleTime = candleEpochSeconds as UTCTimestamp
   const vol = tick.volume ?? 0
 
   if (!currentCandle || currentCandle.time !== candleTime) {

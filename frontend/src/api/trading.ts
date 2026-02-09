@@ -54,6 +54,19 @@ export interface MultiQuotesResult {
   data: QuotesData
 }
 
+export interface HistoryCandleData {
+  timestamp?: number | string
+  time?: number | string
+  datetime?: string
+  date?: string
+  open?: number | string
+  high?: number | string
+  low?: number | string
+  close?: number | string
+  volume?: number | string
+  oi?: number | string
+}
+
 // MultiQuotes API has a different response structure (results at root, not in data)
 export interface MultiQuotesApiResponse {
   status: 'success' | 'error'
@@ -88,6 +101,30 @@ export const tradingApi = {
     const response = await apiClient.post<MultiQuotesApiResponse>('/multiquotes', {
       apikey: apiKey,
       symbols,
+    })
+    return response.data
+  },
+
+  /**
+   * Get historical OHLC data for a symbol
+   */
+  getHistory: async (
+    apiKey: string,
+    symbol: string,
+    exchange: string,
+    interval: string,
+    startDate: string,
+    endDate: string,
+    source: 'api' | 'db' = 'api'
+  ): Promise<ApiResponse<HistoryCandleData[]>> => {
+    const response = await apiClient.post<ApiResponse<HistoryCandleData[]>>('/history', {
+      apikey: apiKey,
+      symbol,
+      exchange,
+      interval,
+      start_date: startDate,
+      end_date: endDate,
+      source,
     })
     return response.data
   },

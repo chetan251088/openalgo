@@ -5,8 +5,6 @@ import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { ScalpingChainRow } from './ScalpingChainRow'
 import { Badge } from '@/components/ui/badge'
 
-const STRIKE_COUNT = 15
-
 export function OptionChainPanel() {
   const apiKey = useAuthStore((s) => s.apiKey)
 
@@ -15,6 +13,7 @@ export function OptionChainPanel() {
   const optionExchange = useScalpingStore((s) => s.optionExchange)
   const expiry = useScalpingStore((s) => s.expiry)
   const selectedStrike = useScalpingStore((s) => s.selectedStrike)
+  const chainStrikeCount = useScalpingStore((s) => s.chainStrikeCount)
 
   const setSelectedStrike = useScalpingStore((s) => s.setSelectedStrike)
   const setSelectedSymbols = useScalpingStore((s) => s.setSelectedSymbols)
@@ -30,9 +29,19 @@ export function OptionChainPanel() {
     isStreaming,
     error,
     streamingSymbols,
-  } = useOptionChainLive(apiKey, underlying, indexExchange, optionExchange, expiry, STRIKE_COUNT, {
-    enabled: !!apiKey && !!expiry,
-  })
+  } = useOptionChainLive(
+    apiKey,
+    underlying,
+    indexExchange,
+    optionExchange,
+    expiry,
+    chainStrikeCount,
+    {
+      enabled: !!apiKey && !!expiry,
+      oiRefreshInterval: 0,
+      wsMode: 'Quote',
+    }
+  )
 
   // Extract lot size from chain data (once per expiry change)
   useEffect(() => {
@@ -95,6 +104,9 @@ export function OptionChainPanel() {
       <div className="flex items-center justify-between px-2 py-1 border-b shrink-0">
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-bold">{underlying}</span>
+          <Badge variant="outline" className="text-[10px] h-4 px-1">
+            {chainStrikeCount} strikes
+          </Badge>
           {spotPrice != null && (
             <span className="text-sm tabular-nums font-mono text-muted-foreground">
               {spotPrice.toFixed(2)}
@@ -118,13 +130,13 @@ export function OptionChainPanel() {
 
       {/* Column headers */}
       <div className="grid grid-cols-[1fr_1fr_1fr_50px_1fr_1fr_1fr] items-center gap-0 px-0 py-0.5 text-[10px] text-muted-foreground font-medium border-b bg-muted/30 shrink-0">
-        <div className="text-right px-1.5">OI</div>
-        <div className="text-right px-1.5">Vol</div>
+        <div className="text-right px-1.5">OI (L)</div>
+        <div className="text-right px-1.5">Vol (L)</div>
         <div className="text-right px-1.5">CE LTP</div>
         <div className="text-center">Strike</div>
         <div className="text-left px-1.5">PE LTP</div>
-        <div className="text-left px-1.5">Vol</div>
-        <div className="text-left px-1.5">OI</div>
+        <div className="text-left px-1.5">Vol (L)</div>
+        <div className="text-left px-1.5">OI (L)</div>
       </div>
 
       {/* Chain rows */}
