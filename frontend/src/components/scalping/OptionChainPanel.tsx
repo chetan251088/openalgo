@@ -18,6 +18,7 @@ export function OptionChainPanel() {
   const setSelectedStrike = useScalpingStore((s) => s.setSelectedStrike)
   const setSelectedSymbols = useScalpingStore((s) => s.setSelectedSymbols)
   const setLotSize = useScalpingStore((s) => s.setLotSize)
+  const setOptionChainSnapshot = useScalpingStore((s) => s.setOptionChainSnapshot)
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const atmRowRef = useRef<HTMLDivElement>(null)
@@ -29,6 +30,7 @@ export function OptionChainPanel() {
     isStreaming,
     error,
     streamingSymbols,
+    lastUpdate,
   } = useOptionChainLive(
     apiKey,
     underlying,
@@ -42,6 +44,12 @@ export function OptionChainPanel() {
       wsMode: 'Quote',
     }
   )
+
+  // Share latest chain snapshot with scalping store for WS-first context/auto-trade.
+  useEffect(() => {
+    if (!chainData) return
+    setOptionChainSnapshot(chainData, lastUpdate?.getTime() ?? Date.now(), isStreaming)
+  }, [chainData, lastUpdate, isStreaming, setOptionChainSnapshot])
 
   // Extract lot size from chain data (once per expiry change)
   useEffect(() => {

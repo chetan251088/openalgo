@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { OptionChainResponse } from '@/types/option-chain'
 import type {
   ActiveSide,
   ControlTab,
@@ -28,6 +29,11 @@ interface ScalpingState {
   activeSide: ActiveSide
   selectedCESymbol: string | null
   selectedPESymbol: string | null
+
+  // Live option chain snapshot (non-persisted, shared across scalping modules)
+  optionChainData: OptionChainResponse | null
+  optionChainLastUpdate: number
+  optionChainIsStreaming: boolean
 
   // Trading config
   quantity: number // in lots
@@ -68,6 +74,12 @@ interface ScalpingActions {
   setActiveSide: (side: ActiveSide) => void
   toggleActiveSide: () => void
   setSelectedSymbols: (ce: string | null, pe: string | null) => void
+  setOptionChainSnapshot: (
+    data: OptionChainResponse | null,
+    lastUpdate?: number,
+    isStreaming?: boolean
+  ) => void
+  clearOptionChainSnapshot: () => void
   setQuantity: (q: number) => void
   incrementQuantity: () => void
   decrementQuantity: () => void
@@ -118,6 +130,9 @@ export const useScalpingStore = create<ScalpingStore>()(
       activeSide: 'CE',
       selectedCESymbol: null,
       selectedPESymbol: null,
+      optionChainData: null,
+      optionChainLastUpdate: 0,
+      optionChainIsStreaming: false,
       quantity: 1,
       orderType: 'MARKET',
       product: 'MIS',
@@ -150,10 +165,25 @@ export const useScalpingStore = create<ScalpingStore>()(
           selectedPESymbol: null,
           expiry: '',
           expiries: [],
+          optionChainData: null,
+          optionChainLastUpdate: 0,
+          optionChainIsStreaming: false,
         })
       },
       setExpiry: (e) =>
-        set((s) => (s.expiry === e ? s : { expiry: e })),
+        set((s) =>
+          s.expiry === e
+            ? s
+            : {
+                expiry: e,
+                selectedStrike: null,
+                selectedCESymbol: null,
+                selectedPESymbol: null,
+                optionChainData: null,
+                optionChainLastUpdate: 0,
+                optionChainIsStreaming: false,
+              }
+        ),
       setExpiryWeek: (w) =>
         set((s) => (s.expiryWeek === w ? s : { expiryWeek: w })),
       setExpiries: (list) =>
@@ -178,6 +208,29 @@ export const useScalpingStore = create<ScalpingStore>()(
           s.selectedCESymbol === ce && s.selectedPESymbol === pe
             ? s
             : { selectedCESymbol: ce, selectedPESymbol: pe }
+        ),
+      setOptionChainSnapshot: (data, lastUpdate, isStreaming) =>
+        set((s) => {
+          const nextLastUpdate = Number.isFinite(lastUpdate) ? (lastUpdate as number) : Date.now()
+          const nextStreaming = typeof isStreaming === 'boolean' ? isStreaming : s.optionChainIsStreaming
+          if (
+            s.optionChainData === data &&
+            s.optionChainLastUpdate === nextLastUpdate &&
+            s.optionChainIsStreaming === nextStreaming
+          ) {
+            return s
+          }
+          return {
+            optionChainData: data,
+            optionChainLastUpdate: nextLastUpdate,
+            optionChainIsStreaming: nextStreaming,
+          }
+        }),
+      clearOptionChainSnapshot: () =>
+        set((s) =>
+          s.optionChainData === null && s.optionChainLastUpdate === 0 && !s.optionChainIsStreaming
+            ? s
+            : { optionChainData: null, optionChainLastUpdate: 0, optionChainIsStreaming: false }
         ),
       setQuantity: (q) => set({ quantity: Math.max(1, q) }),
       incrementQuantity: () => set((s) => ({ quantity: s.quantity + 1 })),

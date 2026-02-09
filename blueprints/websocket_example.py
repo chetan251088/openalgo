@@ -196,10 +196,24 @@ def api_get_websocket_config():
 
     from flask import request
 
-    websocket_url = os.getenv("WEBSOCKET_URL", "ws://localhost:8765")
+    websocket_url = os.getenv("WEBSOCKET_URL", "").strip()
+    host = request.host.split(":")[0] if request.host else "localhost"
+    request_port = request.host.split(":")[-1] if request.host and ":" in request.host else ""
 
-    # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
-    if request.is_secure and websocket_url.startswith("ws://"):
+    # Multi-instance default mapping (UI/API port -> WebSocket proxy port).
+    # Allows 5000/5001/5002 instances to auto-route to 8765/8766/8767.
+    inferred_ws_port_map = {
+        "5000": "8765",
+        "5001": "8766",
+        "5002": "8767",
+    }
+    inferred_ws_port = inferred_ws_port_map.get(request_port, os.getenv("WEBSOCKET_PORT", "8765"))
+
+    if not websocket_url:
+        scheme = "wss" if request.is_secure else "ws"
+        websocket_url = f"{scheme}://{host}:{inferred_ws_port}"
+    elif request.is_secure and websocket_url.startswith("ws://"):
+        # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
         websocket_url = websocket_url.replace("ws://", "wss://")
         logger.info(f"Upgraded WebSocket URL to secure: {websocket_url}")
 

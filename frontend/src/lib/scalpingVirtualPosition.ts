@@ -71,6 +71,9 @@ interface BuildVirtualPositionParams {
   tpPoints: number
   slPoints: number
   createdAt?: number
+  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost'
+  autoEntryScore?: number
+  autoEntryReason?: string
 }
 
 export function buildVirtualPosition({
@@ -84,6 +87,9 @@ export function buildVirtualPosition({
   tpPoints,
   slPoints,
   createdAt = Date.now(),
+  managedBy = 'manual',
+  autoEntryScore,
+  autoEntryReason,
 }: BuildVirtualPositionParams): VirtualTPSL {
   const entry = roundToTick(entryPrice)
   const normalizedTpPoints = Number(Math.max(0, tpPoints || 0).toFixed(2))
@@ -109,6 +115,8 @@ export function buildVirtualPosition({
     tpPoints: normalizedTpPoints,
     slPoints: normalizedSlPoints,
     createdAt,
+    managedBy,
+    autoEntryScore,
+    autoEntryReason,
   }
 }
-

@@ -7,6 +7,73 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _parse_float(value):
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.replace(",", "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_int(value, default=0):
+    parsed = _parse_float(value)
+    if parsed is None:
+        return default
+    return int(parsed)
+
+
+def _first_numeric(position: dict, keys: list[str]):
+    for key in keys:
+        if key not in position:
+            continue
+        parsed = _parse_float(position.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _normalize_exchange(value: str | None) -> str:
+    if not value:
+        return ""
+    mapped = map_exchange(value)
+    if mapped:
+        return mapped
+    value_upper = str(value).strip().upper().replace("-", "_")
+    direct_valid = {"NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NSE_INDEX", "BSE_INDEX"}
+    return value_upper if value_upper in direct_valid else str(value)
+
+
+def _resolve_symbol(position: dict, exchange: str) -> str:
+    token = str(position.get("tok", "") or position.get("token", "")).strip()
+    symbol = str(position.get("trdSym", "") or position.get("symbol", "")).strip()
+
+    # Prefer token-to-symbol mapping when token is present.
+    if token:
+        if exchange:
+            resolved = get_symbol(token, exchange)
+            if resolved:
+                return resolved
+
+        for ex in ("NFO", "NSE", "BFO", "BSE", "CDS", "MCX"):
+            resolved = get_symbol(token, ex)
+            if resolved:
+                return resolved
+
+    # Fallback: map broker symbol to OpenAlgo symbol.
+    if symbol and exchange:
+        oa_symbol = get_oa_symbol(symbol, exchange)
+        if oa_symbol:
+            return oa_symbol
+
+    return symbol
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -20,12 +87,16 @@ def map_order_data(order_data):
     # Check if 'data' is None
     # if order_data has key 'data' and its value is None
 
-    if order_data["stat"] == "Not_Ok":
+    if not isinstance(order_data, dict):
+        return order_data
+
+    status_value = str(order_data.get("stat", order_data.get("status", ""))).lower()
+    if status_value in {"not_ok", "notok", "error"}:
         logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
         return order_data
 
-    if order_data["data"] is None:
+    if order_data.get("data") is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -38,11 +109,11 @@ def map_order_data(order_data):
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
             symboltoken = order["tok"]
-            exchange = map_exchange(order["exSeg"])
+            exchange = _normalize_exchange(order.get("exSeg"))
             order["exSeg"] = exchange
 
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
+            symbol_from_db = get_symbol(symboltoken, exchange) if exchange else None
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
@@ -158,12 +229,16 @@ def map_trade_data(trade_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-    if trade_data["stat"] == "Not_Ok":
+    if not isinstance(trade_data, dict):
+        return trade_data
+
+    status_value = str(trade_data.get("stat", trade_data.get("status", ""))).lower()
+    if status_value in {"not_ok", "notok", "error"}:
         logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
         return trade_data
         # Check if 'data' is None
-    if trade_data["data"] is None:
+    if trade_data.get("data") is None:
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
@@ -176,12 +251,12 @@ def map_trade_data(trade_data):
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
             symbol = order["tok"]
-            exchange = map_exchange(order["exSeg"])
+            exchange = _normalize_exchange(order.get("exSeg"))
             order["exSeg"] = exchange
             logger.info(f"{symbol}")
             logger.info(f"{exchange}")
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symbol, exchange)
+            symbol_from_db = get_symbol(symbol, exchange) if exchange else None
             logger.info(f"{symbol_from_db}")
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
@@ -226,27 +301,108 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
-        transformed_position = {
-            "symbol": position.get("trdSym", ""),
-            "exchange": position.get("exSeg", ""),
-            "product": position.get("prod", ""),
-            "quantity": (int(position.get("flBuyQty", 0)) - int(position.get("flSellQty", 0)))
-            + (int(position.get("cfBuyQty", 0)) - int(position.get("cfSellQty", 0))),
-            "average_price": position.get("avgnetprice", 0.0),
-        }
-        buy_qty = float(position.get("flBuyQty", 0))
-        sell_qty = float(position.get("flSellQty", 0))
+        fl_buy_qty = _parse_int(position.get("flBuyQty", position.get("dayBuyQty", 0)))
+        fl_sell_qty = _parse_int(position.get("flSellQty", position.get("daySellQty", 0)))
+        cf_buy_qty = _parse_int(position.get("cfBuyQty", position.get("carryBuyQty", 0)))
+        cf_sell_qty = _parse_int(position.get("cfSellQty", position.get("carrySellQty", 0)))
 
-        if transformed_position["quantity"] > 0 and buy_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("buyAmt", 0)) / buy_qty, 2
-            )
-        elif transformed_position["quantity"] < 0 and sell_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("sellAmt", 0)) / sell_qty, 2
-            )
-        elif transformed_position["quantity"] != 0:
-            transformed_position["average_price"] = 0.0
+        net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
+        total_buy_qty = fl_buy_qty + cf_buy_qty
+        total_sell_qty = fl_sell_qty + cf_sell_qty
+        buy_amt = _first_numeric(
+            position,
+            ["buyAmt", "flBuyAmt", "cfBuyAmt", "buyValue", "totalBuyValue"],
+        ) or 0.0
+        sell_amt = _first_numeric(
+            position,
+            ["sellAmt", "flSellAmt", "cfSellAmt", "sellValue", "totalSellValue"],
+        ) or 0.0
+
+        average_price = _first_numeric(
+            position,
+            [
+                "avgnetprice",
+                "avgNetPrice",
+                "avgPrice",
+                "netAvgPrice",
+                "buyAvg",
+                "sellAvg",
+            ],
+        ) or 0.0
+        if net_qty > 0 and total_buy_qty > 0:
+            average_price = round(buy_amt / total_buy_qty, 2)
+        elif net_qty < 0 and total_sell_qty > 0:
+            average_price = round(sell_amt / total_sell_qty, 2)
+        elif net_qty != 0:
+            average_price = 0.0
+
+        ltp = _first_numeric(
+            position,
+            [
+                "ltp",
+                "last_price",
+                "lastPrice",
+                "lp",
+                "ltPrc",
+                "netLtp",
+                "close",
+                "last_rate",
+                "lastRate",
+                "lastTradedPrice",
+                "ltpPrice",
+            ],
+        )
+        if ltp is None:
+            ltp = 0.0
+
+        pnl = _first_numeric(
+            position,
+            [
+                "pnl",
+                "mtm",
+                "mtmPnl",
+                "mtom",
+                "m2m",
+                "m2mPnl",
+                "urMtm",
+                "urmtm",
+                "urMTM",
+                "urMtom",
+                "urmtom",
+                "rpnl",
+                "rPnl",
+                "bookedPnl",
+                "booked_pl",
+                "unrealizedPnl",
+                "unrealized_pnl",
+                "realizedPnl",
+                "realized_pnl",
+            ],
+        )
+
+        # Open position fallback when broker doesn't provide direct P&L.
+        if pnl is None and net_qty != 0 and average_price > 0 and ltp > 0:
+            if net_qty > 0:
+                pnl = (ltp - average_price) * net_qty
+            else:
+                pnl = (average_price - ltp) * abs(net_qty)
+
+        # Closed/legacy fallback if explicit P&L and LTP are unavailable.
+        if pnl is None:
+            pnl = sell_amt - buy_amt
+
+        exchange = _normalize_exchange(position.get("exSeg"))
+        symbol = _resolve_symbol(position, exchange)
+
+        transformed_position = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "product": position.get("prod", ""),
+            "quantity": net_qty,
+            "average_price": round(average_price, 2),
+            "ltp": round(ltp, 2),
+            "pnl": round(pnl, 2),
+        }
 
         transformed_data.append(transformed_position)
 

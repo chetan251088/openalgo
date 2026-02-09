@@ -113,3 +113,10 @@ nul
 .env.kotak
 .env.shoonya
 .env.zerodha
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

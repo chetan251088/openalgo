@@ -51,10 +51,40 @@ function parseNaiveIstDateTime(value: string): number | null {
   return Math.floor(utcMillis / 1000)
 }
 
+function parseBusinessDayObject(value: unknown): number | null {
+  if (!value || typeof value !== 'object') return null
+
+  const raw = value as { year?: unknown; month?: unknown; day?: unknown }
+  const year = Number(raw.year)
+  const month = Number(raw.month)
+  const day = Number(raw.day)
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    year < 1970 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null
+  }
+
+  const utcMillis =
+    Date.UTC(Math.floor(year), Math.floor(month) - 1, Math.floor(day), 0, 0, 0) -
+    IST_OFFSET_SECONDS * 1000
+  return Math.floor(utcMillis / 1000)
+}
+
 export function parseHistoryTimestampToEpochSeconds(value: unknown): number | null {
   if (typeof value === 'number') {
     return normalizeEpochSeconds(value)
   }
+
+  const businessDaySeconds = parseBusinessDayObject(value)
+  if (businessDaySeconds != null) return businessDaySeconds
 
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -108,4 +138,3 @@ export function formatIstHmFromEpoch(epochSeconds: number): string {
   const mm = d.getUTCMinutes().toString().padStart(2, '0')
   return `${hh}:${mm}`
 }
-

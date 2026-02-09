@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { telegramApi } from '@/api/telegram'
 import {
   fetchModelTuningStatus,
   fetchModelTuningRecommendations,
@@ -19,6 +20,7 @@ export function LLMAdvisorPanel() {
   const [error, setError] = useState<string | null>(null)
 
   const updateConfig = useAutoTradeStore((s) => s.updateConfig)
+  const config = useAutoTradeStore((s) => s.config)
   const underlying = useScalpingStore((s) => s.underlying)
 
   // Fetch advisor status
@@ -65,12 +67,44 @@ export function LLMAdvisorPanel() {
       const changes = lastRun.recommendations
       if (changes && typeof changes === 'object') {
         const configUpdate: Partial<AutoTradeConfigFields> = {}
-        for (const [key, value] of Object.entries(changes)) {
-          if (typeof value === 'number') {
-            ;(configUpdate as Record<string, number>)[key] = value
+        for (const [rawKey, rawValue] of Object.entries(changes)) {
+          if (!(rawKey in config)) continue
+          const key = rawKey as keyof AutoTradeConfigFields
+          const currentValue = config[key]
+
+          if (typeof currentValue === 'number') {
+            const next = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+            if (Number.isFinite(next)) {
+              ;(configUpdate as Record<string, number>)[key] = next
+            }
+            continue
+          }
+
+          if (typeof currentValue === 'boolean') {
+            let next: boolean | null = null
+            if (typeof rawValue === 'boolean') {
+              next = rawValue
+            } else if (typeof rawValue === 'number') {
+              next = rawValue !== 0
+            } else if (typeof rawValue === 'string') {
+              const normalized = rawValue.trim().toLowerCase()
+              if (['true', '1', 'yes', 'on', 'enabled'].includes(normalized)) next = true
+              if (['false', '0', 'no', 'off', 'disabled'].includes(normalized)) next = false
+            }
+            if (next != null) {
+              ;(configUpdate as Record<string, boolean>)[key] = next
+            }
           }
         }
-        updateConfig(configUpdate)
+        if (Object.keys(configUpdate).length > 0) {
+          updateConfig(configUpdate)
+          if (config.telegramAlertsTune) {
+            const changedKeys = Object.keys(configUpdate).join(', ')
+            void telegramApi.sendBroadcast({
+              message: `[AUTO TUNE] Applied recommendations for ${underlying}: ${changedKeys}`,
+            }).catch(() => {})
+          }
+        }
       }
       setLastRun((prev) => (prev ? { ...prev, applied: true } : prev))
       setError(null)
@@ -79,7 +113,7 @@ export function LLMAdvisorPanel() {
     } finally {
       setLoading(false)
     }
-  }, [lastRun, updateConfig])
+  }, [lastRun, updateConfig, config, underlying])
 
   return (
     <div className="space-y-1.5">

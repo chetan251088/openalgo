@@ -61,6 +61,9 @@ export interface VirtualTPSL {
   tpPoints: number
   slPoints: number
   createdAt: number
+  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost'
+  autoEntryScore?: number
+  autoEntryReason?: string
 }
 
 // Trigger order (fire when price crosses level)

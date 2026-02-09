@@ -36,7 +36,7 @@ export function ChartPanel() {
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         <ResizablePanelGroup orientation="vertical">
           {/* Index chart */}
-          <ResizablePanel defaultSize={40} minSize={18}>
+          <ResizablePanel defaultSize="40%" minSize="18%">
             <IndexChartView
               showEma9={showEma9}
               showEma21={showEma21}
@@ -48,10 +48,10 @@ export function ChartPanel() {
           <ResizableHandle withHandle />
 
           {/* CE + PE charts with single floating widget */}
-          <ResizablePanel defaultSize={60} minSize={24}>
+          <ResizablePanel defaultSize="60%" minSize="24%">
             <div className="relative h-full w-full">
               <ResizablePanelGroup orientation="horizontal">
-                <ResizablePanel defaultSize={50} minSize={20}>
+                <ResizablePanel defaultSize="50%" minSize="20%">
                   <OptionChartView
                     side="CE"
                     showEma9={showEma9}
@@ -61,7 +61,7 @@ export function ChartPanel() {
                   />
                 </ResizablePanel>
                 <ResizableHandle withHandle />
-                <ResizablePanel defaultSize={50} minSize={20}>
+                <ResizablePanel defaultSize="50%" minSize="20%">
                   <OptionChartView
                     side="PE"
                     showEma9={showEma9}

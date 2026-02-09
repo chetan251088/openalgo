@@ -16,6 +16,7 @@ import { useVirtualTPSL } from '@/hooks/useVirtualTPSL'
 import { useTrailingMonitor } from '@/hooks/useTrailingMonitor'
 import { useScalpingPositions } from '@/hooks/useScalpingPositions'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
@@ -27,6 +28,8 @@ export default function ScalpingDashboard() {
   const closeHelp = useCallback(() => setShowHelp(false), [])
 
   const paperMode = useScalpingStore((s) => s.paperMode)
+  const underlying = useScalpingStore((s) => s.underlying)
+  const indexExchange = useScalpingStore((s) => s.indexExchange)
   const optionExchange = useScalpingStore((s) => s.optionExchange)
   const product = useScalpingStore((s) => s.product)
   const quantity = useScalpingStore((s) => s.quantity)
@@ -36,6 +39,8 @@ export default function ScalpingDashboard() {
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const clearTriggerOrders = useVirtualOrderStore((s) => s.clearTriggerOrders)
+  const imbalanceFilterEnabled = useAutoTradeStore((s) => s.config.imbalanceFilterEnabled)
+  const updateRiskState = useAutoTradeStore((s) => s.updateRiskState)
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
 
@@ -139,6 +144,10 @@ export default function ScalpingDashboard() {
   const tickSymbols = useMemo(() => {
     const symbols: Array<{ symbol: string; exchange: string }> = []
 
+    if (underlying && indexExchange) {
+      symbols.push({ symbol: underlying, exchange: indexExchange })
+    }
+
     if (selectedCESymbol) symbols.push({ symbol: selectedCESymbol, exchange: optionExchange })
     if (selectedPESymbol) symbols.push({ symbol: selectedPESymbol, exchange: optionExchange })
 
@@ -156,15 +165,31 @@ export default function ScalpingDashboard() {
     }
 
     return Array.from(unique.values())
-  }, [selectedCESymbol, selectedPESymbol, optionExchange, virtualTPSL, triggerOrders])
+  }, [
+    underlying,
+    indexExchange,
+    selectedCESymbol,
+    selectedPESymbol,
+    optionExchange,
+    virtualTPSL,
+    triggerOrders,
+  ])
 
-  const { data: tickData } = useMarketData({ symbols: tickSymbols, mode: 'LTP', enabled: tickSymbols.length > 0 })
+  const { data: tickData } = useMarketData({
+    symbols: tickSymbols,
+    mode: imbalanceFilterEnabled ? 'Quote' : 'LTP',
+    enabled: tickSymbols.length > 0,
+  })
 
   const {
     positions: livePositions,
     totalPnl: liveOpenPnl,
     isLive: isLivePnl,
   } = useScalpingPositions()
+
+  useEffect(() => {
+    updateRiskState(liveOpenPnl)
+  }, [liveOpenPnl, updateRiskState])
 
   // Auto-trade engine (execute or ghost mode)
   useAutoTradeEngine(tickData)
@@ -182,21 +207,21 @@ export default function ScalpingDashboard() {
       <div className="flex-1 min-h-0 min-w-0">
         <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
           {/* Left: Option Chain */}
-          <ResizablePanel defaultSize={20} minSize={12} maxSize={36}>
+          <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
             <OptionChainPanel />
           </ResizablePanel>
 
           <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Center: Charts */}
-          <ResizablePanel defaultSize={50} minSize={30}>
+          <ResizablePanel defaultSize="50%" minSize="30%">
             <ChartPanel />
           </ResizablePanel>
 
           <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Right: Control Panel */}
-          <ResizablePanel defaultSize={30} minSize={18} maxSize={42}>
+          <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
             <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
           </ResizablePanel>
         </ResizablePanelGroup>

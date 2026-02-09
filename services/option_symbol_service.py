@@ -315,8 +315,7 @@ def get_available_strikes(
         expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
         symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
 
-        # Query database for all strikes matching the criteria
-        # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
+        # Primary lookup: canonical OpenAlgo symbol pattern.
         results = (
             db_session.query(SymToken.strike)
             .filter(
@@ -332,6 +331,24 @@ def get_available_strikes(
 
         # Extract strike values and filter out None
         strikes = [result.strike for result in results if result.strike is not None]
+
+        # Fallback for broker-specific/master-contract symbol variants that don't match
+        # the constructed symbol pattern exactly.
+        if not strikes:
+            fallback_results = (
+                db_session.query(SymToken.strike)
+                .filter(
+                    SymToken.expiry == expiry_formatted.upper(),
+                    SymToken.instrumenttype == option_type.upper(),
+                    SymToken.exchange == exchange.upper(),
+                    (SymToken.name.ilike(base_symbol.upper()))
+                    | (SymToken.symbol.like(f"{base_symbol.upper()}%")),
+                )
+                .distinct()
+                .order_by(SymToken.strike)
+                .all()
+            )
+            strikes = [result.strike for result in fallback_results if result.strike is not None]
 
         # Store in cache for future requests
         _STRIKES_CACHE[cache_key] = strikes

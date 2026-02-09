@@ -20,10 +20,23 @@ interface MomentumResult {
   velocity: number
 }
 
-interface EntryDecision {
+export interface DecisionCheck {
+  id: string
+  label: string
+  pass: boolean
+  value?: string
+}
+
+export interface EntryDecision {
   enter: boolean
   reason: string
   score: number
+  minScore: number
+  checks: DecisionCheck[]
+  blockedBy?: string
+  spread: number
+  depthRatio: number | null
+  expectedSlippage: number
 }
 
 interface ExitDecision {
@@ -256,6 +269,12 @@ export function shouldEnterTrade(
     lastTradeTime: number
     tradesThisMinute: number
     lastLossTime: number
+    requestedLots?: number
+    sideOpen?: boolean
+    lastExitAtForSide?: number
+    reEntryCountForSide?: number
+    lastTradePnl?: number | null
+    killSwitch?: boolean
   },
   momentum: MomentumResult,
   indicators: IndicatorSnapshot,
@@ -263,66 +282,177 @@ export function shouldEnterTrade(
   optionsContext: OptionsContext | null,
   sensitivity: number,
   spread: number,
-  depthInfo?: { totalBid: number; totalAsk: number }
+  depthInfo?: { totalBid: number; totalAsk: number },
+  recentPrices: number[] = []
 ): EntryDecision {
   let score = 0
   const reasons: string[] = []
   const now = Date.now()
+  const checks: DecisionCheck[] = []
+  const depthRatio =
+    depthInfo && depthInfo.totalBid > 0 && depthInfo.totalAsk > 0
+      ? side === 'CE'
+        ? depthInfo.totalBid / depthInfo.totalAsk
+        : depthInfo.totalAsk / depthInfo.totalBid
+      : null
+
+  const effectiveSensitivity = config.respectHotZones ? sensitivity : 1
+  const sensitivityFactor = Math.max(0.1, effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier))
+  const adjustedMinScore = config.entryMinScore / sensitivityFactor
+
+  const addCheck = (id: string, label: string, pass: boolean, value?: string) => {
+    checks.push({ id, label, pass, value })
+  }
+
+  const block = (reason: string, blockedBy: string): EntryDecision => ({
+    enter: false,
+    reason,
+    score,
+    minScore: Number(adjustedMinScore.toFixed(2)),
+    checks,
+    blockedBy,
+    spread,
+    depthRatio,
+    expectedSlippage: Math.max(0, spread / 2),
+  })
 
   // Risk checks
-  if (runtime.tradesCount >= config.maxTradesPerDay) {
-    return { enter: false, reason: 'Max daily trades reached', score: 0 }
-  }
-  if (runtime.realizedPnl < 0 && Math.abs(runtime.realizedPnl) >= config.maxDailyLoss) {
-    return { enter: false, reason: 'Daily loss limit reached', score: 0 }
-  }
-  if (runtime.consecutiveLosses >= config.coolingOffAfterLosses) {
-    return { enter: false, reason: `Cooling off (${runtime.consecutiveLosses} losses)`, score: 0 }
+  const withinDailyTrades = runtime.tradesCount < config.maxTradesPerDay
+  addCheck('daily-trades', 'Daily trade cap', withinDailyTrades, `${runtime.tradesCount}/${config.maxTradesPerDay}`)
+  if (!withinDailyTrades) {
+    return block('Max daily trades reached', 'daily-trades')
   }
 
-  // Per-trade max loss check (skip entry if last trade hit per-trade max loss)
-  // This acts as a circuit breaker - consecutive large losses = step back
-  if (config.perTradeMaxLoss > 0 && runtime.consecutiveLosses > 0) {
-    // Already handled by coolingOffAfterLosses, but perTradeMaxLoss informs exit side
+  const withinDailyLoss = !(runtime.realizedPnl < 0 && Math.abs(runtime.realizedPnl) >= config.maxDailyLoss)
+  addCheck('daily-loss', 'Daily loss limit', withinDailyLoss, `${runtime.realizedPnl.toFixed(0)}/${-config.maxDailyLoss}`)
+  if (!withinDailyLoss) {
+    return block('Daily loss limit reached', 'daily-loss')
+  }
+
+  const withinConsecutiveLosses = runtime.consecutiveLosses < config.coolingOffAfterLosses
+  addCheck('cooling-off', 'Consecutive-loss cooling off', withinConsecutiveLosses, `${runtime.consecutiveLosses}/${config.coolingOffAfterLosses}`)
+  if (!withinConsecutiveLosses) {
+    return block(`Cooling off (${runtime.consecutiveLosses} losses)`, 'cooling-off')
+  }
+
+  const killSwitchOff = !runtime.killSwitch
+  addCheck('kill-switch', 'Kill switch', killSwitchOff)
+  if (!killSwitchOff) {
+    return block('Kill switch active', 'kill-switch')
+  }
+
+  const noOpenPositionOnSide = !runtime.sideOpen
+  addCheck('side-open', 'No open position on side', noOpenPositionOnSide)
+  if (!noOpenPositionOnSide) {
+    return block(`Position already open on ${side}`, 'side-open')
+  }
+
+  const reEntryCountForSide = runtime.reEntryCountForSide ?? 0
+  const lastExitAtForSide = runtime.lastExitAtForSide ?? 0
+  if (!config.reEntryEnabled && reEntryCountForSide > 0) {
+    addCheck('reentry-enabled', 'Re-entry enabled', false, 'OFF')
+    return block(`Re-entry disabled for ${side}`, 'reentry-enabled')
+  }
+
+  addCheck('reentry-count', 'Re-entry cap', config.reEntryMaxPerSide <= 0 || reEntryCountForSide < config.reEntryMaxPerSide, `${reEntryCountForSide}/${config.reEntryMaxPerSide}`)
+  if (config.reEntryEnabled && config.reEntryMaxPerSide > 0 && reEntryCountForSide >= config.reEntryMaxPerSide) {
+    return block(`Re-entry cap reached for ${side}`, 'reentry-count')
+  }
+
+  if (config.reEntryEnabled && config.reEntryDelaySec > 0 && lastExitAtForSide > 0) {
+    const elapsed = now - lastExitAtForSide
+    const delayMs = config.reEntryDelaySec * 1000
+    const pass = elapsed >= delayMs
+    addCheck('reentry-delay', 'Re-entry delay', pass, pass ? `${config.reEntryDelaySec}s` : `${Math.ceil((delayMs - elapsed) / 1000)}s left`)
+    if (!pass) {
+      return block(`Re-entry delay active: ${Math.ceil((delayMs - elapsed) / 1000)}s`, 'reentry-delay')
+    }
+  }
+
+  if (config.maxPositionSize > 0 && (runtime.requestedLots ?? 0) > config.maxPositionSize) {
+    addCheck('max-position-size', 'Max position size', false, `${runtime.requestedLots}/${config.maxPositionSize}`)
+    return block(`Requested lots ${runtime.requestedLots} exceeds max ${config.maxPositionSize}`, 'max-position-size')
+  }
+  addCheck('max-position-size', 'Max position size', true, `${runtime.requestedLots ?? 0}/${config.maxPositionSize}`)
+
+  if (config.perTradeMaxLoss > 0 && runtime.lastTradePnl != null) {
+    const pass = runtime.lastTradePnl > -config.perTradeMaxLoss
+    addCheck('per-trade-loss', 'Per-trade max loss', pass, `${runtime.lastTradePnl.toFixed(0)}/${-config.perTradeMaxLoss}`)
+    if (!pass) {
+      return block('Last trade breached per-trade max loss', 'per-trade-loss')
+    }
+  } else {
+    addCheck('per-trade-loss', 'Per-trade max loss', true)
   }
 
   // Min gap between trades
   if (config.minGapMs > 0 && runtime.lastTradeTime > 0) {
     const elapsed = now - runtime.lastTradeTime
+    const pass = elapsed >= config.minGapMs
+    addCheck('min-gap', 'Minimum gap between entries', pass, pass ? `${elapsed}ms` : `${config.minGapMs - elapsed}ms left`)
     if (elapsed < config.minGapMs) {
-      return { enter: false, reason: `Min gap: ${Math.ceil((config.minGapMs - elapsed) / 1000)}s remaining`, score: 0 }
+      return block(`Min gap: ${Math.ceil((config.minGapMs - elapsed) / 1000)}s remaining`, 'min-gap')
     }
+  } else {
+    addCheck('min-gap', 'Minimum gap between entries', true)
   }
 
   // Max trades per minute
+  addCheck('per-minute-rate', 'Per-minute trade rate', config.maxTradesPerMinute <= 0 || runtime.tradesThisMinute < config.maxTradesPerMinute, `${runtime.tradesThisMinute}/${config.maxTradesPerMinute}`)
   if (config.maxTradesPerMinute > 0 && runtime.tradesThisMinute >= config.maxTradesPerMinute) {
-    return { enter: false, reason: `Rate limit: ${runtime.tradesThisMinute}/${config.maxTradesPerMinute} trades/min`, score: 0 }
+    return block(`Rate limit: ${runtime.tradesThisMinute}/${config.maxTradesPerMinute} trades/min`, 'per-minute-rate')
   }
 
   // Cooldown after loss
   if (config.cooldownAfterLossSec > 0 && runtime.lastLossTime > 0) {
     const elapsed = now - runtime.lastLossTime
     const cooldownMs = config.cooldownAfterLossSec * 1000
+    const pass = elapsed >= cooldownMs
+    addCheck('loss-cooldown', 'Cooldown after loss', pass, pass ? `${config.cooldownAfterLossSec}s` : `${Math.ceil((cooldownMs - elapsed) / 1000)}s left`)
     if (elapsed < cooldownMs) {
-      return { enter: false, reason: `Cooldown: ${Math.ceil((cooldownMs - elapsed) / 1000)}s after loss`, score: 0 }
+      return block(`Cooldown: ${Math.ceil((cooldownMs - elapsed) / 1000)}s after loss`, 'loss-cooldown')
     }
+  } else {
+    addCheck('loss-cooldown', 'Cooldown after loss', true)
   }
 
   // Imbalance filter (depth-based)
   if (depthInfo) {
     const imbalance = checkImbalanceFilter(depthInfo.totalBid, depthInfo.totalAsk, side, config)
+    addCheck('depth-imbalance', 'Depth imbalance', imbalance.allowed, imbalance.reason)
     if (!imbalance.allowed) {
-      return { enter: false, reason: imbalance.reason, score: 0 }
+      return block(imbalance.reason, 'depth-imbalance')
     }
+  } else {
+    addCheck('depth-imbalance', 'Depth imbalance', true, 'No depth data')
   }
 
   // Spread filter
+  addCheck('spread', 'Spread gate', spread <= config.entryMaxSpread, `${spread.toFixed(2)}/${config.entryMaxSpread}`)
   if (spread > config.entryMaxSpread) {
-    return { enter: false, reason: `Spread too wide: ${spread.toFixed(1)}`, score: 0 }
+    return block(`Spread too wide: ${spread.toFixed(1)}`, 'spread')
+  }
+
+  const inNoTradeZone =
+    config.noTradeZoneEnabled &&
+    isNoTradeZone(recentPrices, config.noTradeZoneRangePts, config.noTradeZonePeriod)
+  addCheck(
+    'no-trade-zone',
+    'No-trade zone filter',
+    !inNoTradeZone,
+    config.noTradeZoneEnabled
+      ? `${config.noTradeZonePeriod} bars/${config.noTradeZoneRangePts}pts`
+      : 'OFF'
+  )
+  if (
+    inNoTradeZone
+  ) {
+    return block(`No-trade zone (${config.noTradeZonePeriod} candles in ${config.noTradeZoneRangePts} pts range)`, 'no-trade-zone')
   }
 
   // Momentum score
   const expectedDir = side === 'CE' ? 'up' : 'down'
+  addCheck('momentum-direction', 'Momentum alignment', momentum.direction === expectedDir, `${momentum.direction} x${momentum.count}`)
   if (momentum.direction === expectedDir && momentum.count >= config.entryMomentumCount) {
     score += 3
     reasons.push(`Momentum ${momentum.direction} x${momentum.count}`)
@@ -332,14 +462,16 @@ export function shouldEnterTrade(
   }
 
   // Velocity
+  addCheck('velocity', 'Velocity threshold', momentum.velocity >= config.entryMomentumVelocity, `${momentum.velocity.toFixed(2)}/${config.entryMomentumVelocity}`)
   if (momentum.velocity >= config.entryMomentumVelocity) {
     score += 2
     reasons.push(`Velocity ${momentum.velocity.toFixed(1)}`)
   }
 
   // Indicator alignment
+  let emaAligned = false
   if (indicators.ema9 !== null && indicators.ema21 !== null) {
-    const emaAligned =
+    emaAligned =
       (side === 'CE' && indicators.ema9 > indicators.ema21) ||
       (side === 'PE' && indicators.ema9 < indicators.ema21)
     if (emaAligned) {
@@ -347,9 +479,11 @@ export function shouldEnterTrade(
       reasons.push('EMA aligned')
     }
   }
+  addCheck('ema', 'EMA alignment', emaAligned, indicators.ema9 != null && indicators.ema21 != null ? `${indicators.ema9.toFixed(2)}/${indicators.ema21.toFixed(2)}` : 'NA')
 
+  let rsiAligned = false
   if (indicators.rsi !== null) {
-    const rsiAligned =
+    rsiAligned =
       (side === 'CE' && indicators.rsi > 50 && indicators.rsi < 80) ||
       (side === 'PE' && indicators.rsi < 50 && indicators.rsi > 20)
     if (rsiAligned) {
@@ -357,10 +491,12 @@ export function shouldEnterTrade(
       reasons.push(`RSI ${indicators.rsi.toFixed(0)}`)
     }
   }
+  addCheck('rsi', 'RSI alignment', rsiAligned, indicators.rsi != null ? indicators.rsi.toFixed(1) : 'NA')
 
   // Index bias
+  let biasAligned = false
   if (config.indexBiasEnabled) {
-    const biasAligned =
+    biasAligned =
       (side === 'CE' && indexBias.direction === 'bullish') ||
       (side === 'PE' && indexBias.direction === 'bearish')
     if (biasAligned) {
@@ -368,20 +504,26 @@ export function shouldEnterTrade(
       reasons.push(`Index ${indexBias.direction}`)
     }
   }
+  addCheck('index-bias', 'Index bias alignment', config.indexBiasEnabled ? biasAligned : true, config.indexBiasEnabled ? `${indexBias.direction}` : 'OFF')
 
   // Options context filter
   const ctxFilter = optionsContextFilter(side, optionsContext, config)
+  addCheck('options-context', 'Options context filter', ctxFilter.allowed, ctxFilter.reason)
   if (!ctxFilter.allowed) {
-    return { enter: false, reason: ctxFilter.reason, score }
+    return block(ctxFilter.reason, 'options-context')
   }
 
-  // Apply sensitivity multiplier from market clock
-  const adjustedMinScore = config.entryMinScore / (sensitivity * config.sensitivityMultiplier)
+  addCheck('score-gate', 'Final score gate', score >= adjustedMinScore, `${score.toFixed(1)}/${adjustedMinScore.toFixed(1)}`)
 
   return {
     enter: score >= adjustedMinScore,
     reason: reasons.join(', ') || 'No strong signals',
     score,
+    minScore: Number(adjustedMinScore.toFixed(2)),
+    checks,
+    spread,
+    depthRatio,
+    expectedSlippage: Math.max(0, spread / 2),
   }
 }
 
@@ -402,7 +544,9 @@ export function calculateTrailingStop(
 
   // Stage progression
   if (currentStage === 'INITIAL') {
-    if (profitPts >= config.trailBreakevenTrigger) {
+    const breakevenTrigger =
+      config.breakevenTriggerPts > 0 ? config.breakevenTriggerPts : config.trailBreakevenTrigger
+    if (profitPts >= breakevenTrigger) {
       const sl = entry + (isBuy ? config.breakevenBuffer : -config.breakevenBuffer)
       return { newSL: sl, newStage: 'BREAKEVEN' }
     }

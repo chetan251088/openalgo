@@ -84,7 +84,14 @@ def map_exchange(brexchange):
     """
     Maps the Broker Exchange to the OpenAlgo Exchange.
     """
+    if brexchange is None:
+        return None
 
+    value = str(brexchange).strip()
+    if not value:
+        return None
+
+    normalized = value.lower().replace("-", "_")
     exchange_mapping = {
         "nse_cm": "NSE",
         "bse_cm": "BSE",
@@ -93,15 +100,33 @@ def map_exchange(brexchange):
         "bse_fo": "BFO",
         "bcs_fo": "BCD",
         "mcx_fo": "MCX",
+        "nse": "NSE",
+        "bse": "BSE",
+        "nfo": "NFO",
+        "bfo": "BFO",
+        "cds": "CDS",
+        "bcd": "BCD",
+        "mcx": "MCX",
+        "nse_index": "NSE_INDEX",
+        "bse_index": "BSE_INDEX",
     }
-    return exchange_mapping.get(brexchange)
+    if normalized in exchange_mapping:
+        return exchange_mapping[normalized]
+
+    value_upper = value.upper().replace("-", "_")
+    if value_upper in {"NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NSE_INDEX", "BSE_INDEX"}:
+        return value_upper
+    return None
 
 
 def reverse_map_exchange(exchange):
     """
     Maps the Broker Exchange to the OpenAlgo Exchange.
     """
+    if exchange is None:
+        return None
 
+    value_upper = str(exchange).strip().upper().replace("-", "_")
     exchange_mapping = {
         "NSE": "nse_cm",
         "BSE": "bse_cm",
@@ -110,8 +135,17 @@ def reverse_map_exchange(exchange):
         "BFO": "bse_fo",
         "BCD": "bcs_fo",
         "MCX": "mcx_fo",
+        "NSE_INDEX": "nse_cm",
+        "BSE_INDEX": "bse_cm",
     }
-    return exchange_mapping.get(exchange)
+    if value_upper in exchange_mapping:
+        return exchange_mapping[value_upper]
+
+    # Already in broker segment format.
+    value_lower = str(exchange).strip().lower().replace("-", "_")
+    if value_lower in {"nse_cm", "bse_cm", "cde_fo", "nse_fo", "bse_fo", "bcs_fo", "mcx_fo"}:
+        return value_lower
+    return None
 
 
 def reverse_map_product_type(product):

@@ -99,6 +99,11 @@ function parseNumeric(value: unknown): number | null {
   return null
 }
 
+function normalizeCandleTime(value: unknown): UTCTimestamp | null {
+  const timestamp = parseHistoryTimestampToEpochSeconds(value)
+  return timestamp == null ? null : (timestamp as UTCTimestamp)
+}
+
 function normalizeHistoryCandles(rows: HistoryCandleData[] | undefined): Candle[] {
   if (!rows?.length) return []
 
@@ -124,7 +129,6 @@ function normalizeHistoryCandles(rows: HistoryCandleData[] | undefined): Candle[
     ) {
       continue
     }
-    if (!isWithinIndiaMarketHours(timestamp, { includeClose: true })) continue
 
     parsed.push({
       time: timestamp as UTCTimestamp,
@@ -136,11 +140,18 @@ function normalizeHistoryCandles(rows: HistoryCandleData[] | undefined): Candle[
     })
   }
 
+  if (parsed.length === 0) return []
   parsed.sort((a, b) => Number(a.time) - Number(b.time))
 
   const dedup = new Map<number, Candle>()
   for (const candle of parsed) dedup.set(Number(candle.time), candle)
-  return Array.from(dedup.values()).slice(-MAX_CANDLE_CACHE)
+  const deduped = Array.from(dedup.values()).slice(-MAX_CANDLE_CACHE)
+  const marketHoursOnly = deduped.filter((candle) =>
+    isWithinIndiaMarketHours(Number(candle.time), { includeClose: true })
+  )
+
+  // Some broker payloads use alternate timestamp semantics; avoid blank charts if strict market-hour filtering drops all rows.
+  return (marketHoursOnly.length > 0 ? marketHoursOnly : deduped).slice(-MAX_CANDLE_CACHE)
 }
 
 function cloneCandles(candles: Candle[]): Candle[] {
@@ -157,13 +168,57 @@ function mergeCandles(base: Candle[], overlay: Candle[]): Candle[] {
 }
 
 function toChartCandles(candles: Candle[]) {
-  return candles.map((c) => ({
-    time: c.time,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-  }))
+  const normalized: Array<{ time: UTCTimestamp; open: number; high: number; low: number; close: number }> = []
+  for (const candle of candles) {
+    const time = normalizeCandleTime(candle.time)
+    if (time == null) continue
+    normalized.push({
+      time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    })
+  }
+  normalized.sort((a, b) => Number(a.time) - Number(b.time))
+  return normalized
+}
+
+function normalizeRuntimeCandles(candles: Candle[]): Candle[] {
+  if (!candles.length) return []
+
+  const dedup = new Map<number, Candle>()
+  for (const candle of candles) {
+    const time = normalizeCandleTime(candle.time)
+    const open = parseNumeric(candle.open)
+    const high = parseNumeric(candle.high)
+    const low = parseNumeric(candle.low)
+    const close = parseNumeric(candle.close)
+    const volume = parseNumeric(candle.volume) ?? 0
+
+    if (
+      time == null ||
+      open == null ||
+      high == null ||
+      low == null ||
+      close == null
+    ) {
+      continue
+    }
+
+    dedup.set(Number(time), {
+      time,
+      open,
+      high,
+      low,
+      close,
+      volume,
+    })
+  }
+
+  return Array.from(dedup.values())
+    .sort((a, b) => Number(a.time) - Number(b.time))
+    .slice(-MAX_CANDLE_CACHE)
 }
 
 export function IndexChartView({
@@ -242,7 +297,7 @@ export function IndexChartView({
 
   const applyCandles = useCallback(
     (candles: Candle[]) => {
-      const next = candles.slice(-MAX_CANDLE_CACHE)
+      const next = normalizeRuntimeCandles(candles)
       candlesRef.current = cloneCandles(next)
       candleSeriesRef.current?.setData(toChartCandles(next))
       scheduleIndicatorRefresh()
@@ -270,7 +325,33 @@ export function IndexChartView({
     (candle: Candle, isNew: boolean) => {
       if (!candleSeriesRef.current) return
 
-      const nextTime = Number(candle.time)
+      const time = normalizeCandleTime(candle.time)
+      const open = parseNumeric(candle.open)
+      const high = parseNumeric(candle.high)
+      const low = parseNumeric(candle.low)
+      const close = parseNumeric(candle.close)
+      const volume = parseNumeric(candle.volume) ?? 0
+
+      if (
+        time == null ||
+        open == null ||
+        high == null ||
+        low == null ||
+        close == null
+      ) {
+        return
+      }
+
+      const normalizedCandle: Candle = {
+        time,
+        open,
+        high,
+        low,
+        close,
+        volume,
+      }
+
+      const nextTime = Number(normalizedCandle.time)
       const lastTime = candlesRef.current.length
         ? Number(candlesRef.current[candlesRef.current.length - 1].time)
         : null
@@ -283,26 +364,29 @@ export function IndexChartView({
       // Update candle on chart directly (no React re-render)
       try {
         candleSeriesRef.current.update({
-          time: candle.time,
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
+          time: normalizedCandle.time,
+          open: normalizedCandle.open,
+          high: normalizedCandle.high,
+          low: normalizedCandle.low,
+          close: normalizedCandle.close,
         })
       } catch {
-        // Never allow lightweight-charts update ordering errors to crash the view.
+        const rebuilt = normalizeRuntimeCandles([...candlesRef.current, normalizedCandle])
+        candlesRef.current = rebuilt
+        candleSeriesRef.current.setData(toChartCandles(rebuilt))
+        scheduleIndicatorRefresh()
         return
       }
 
       if (isNew) {
-        candlesRef.current.push(candle)
+        candlesRef.current.push(normalizedCandle)
         if (candlesRef.current.length > MAX_CANDLE_CACHE) {
           candlesRef.current = candlesRef.current.slice(-MAX_CANDLE_CACHE)
         }
       } else if (candlesRef.current.length > 0) {
-        candlesRef.current[candlesRef.current.length - 1] = candle
+        candlesRef.current[candlesRef.current.length - 1] = normalizedCandle
       } else {
-        candlesRef.current.push(candle)
+        candlesRef.current.push(normalizedCandle)
       }
 
       const cacheKey = currentCacheKeyRef.current
@@ -367,20 +451,51 @@ export function IndexChartView({
       }
 
       try {
-        const response = await tradingApi.getHistory(
-          resolvedApiKey,
-          underlying,
-          indexExchange,
-          interval,
-          formatYmd(startDate),
-          formatYmd(endDate)
-        )
+        const buildSnapshotCandle = async (): Promise<Candle | null> => {
+          try {
+            const quoteResp = await tradingApi.getQuotes(resolvedApiKey, underlying, indexExchange)
+            if (quoteResp.status !== 'success' || !quoteResp.data) return null
+            const ltp = parseNumeric(quoteResp.data.ltp)
+            if (ltp == null || ltp <= 0) return null
+            const nowSec = Math.floor(Date.now() / 1000)
+            const aligned = Math.floor(nowSec / chartInterval) * chartInterval
+            return {
+              time: aligned as UTCTimestamp,
+              open: ltp,
+              high: ltp,
+              low: ltp,
+              close: ltp,
+              volume: parseNumeric(quoteResp.data.volume) ?? 0,
+            }
+          } catch {
+            return null
+          }
+        }
+
+        const fetchHistoryCandles = async (source: 'api' | 'db'): Promise<Candle[]> => {
+          try {
+            const response = await tradingApi.getHistory(
+              resolvedApiKey,
+              underlying,
+              indexExchange,
+              interval,
+              formatYmd(startDate),
+              formatYmd(endDate),
+              source
+            )
+            return response.status === 'success' ? normalizeHistoryCandles(response.data) : []
+          } catch {
+            return []
+          }
+        }
+
+        const apiHistoryCandles = await fetchHistoryCandles('api')
+        const historyCandles =
+          apiHistoryCandles.length > 0
+            ? apiHistoryCandles
+            : await fetchHistoryCandles('db')
 
         if (requestSeq !== historyLoadSeqRef.current) return
-        const historyCandles =
-          response.status === 'success'
-            ? normalizeHistoryCandles(response.data)
-            : []
 
         const liveCandles =
           currentCacheKeyRef.current === nextKey ? cloneCandles(candlesRef.current) : []
@@ -390,6 +505,15 @@ export function IndexChartView({
           cacheRef.current.set(nextKey, cloneCandles(mergedCandles))
           seedCandles(mergedCandles)
           applyCandles(mergedCandles)
+          return
+        }
+
+        const snapshotCandle = await buildSnapshotCandle()
+        if (snapshotCandle && requestSeq === historyLoadSeqRef.current) {
+          const seeded = [snapshotCandle]
+          cacheRef.current.set(nextKey, cloneCandles(seeded))
+          seedCandles(seeded)
+          applyCandles(seeded)
           return
         }
       } catch {

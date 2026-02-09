@@ -1,9 +1,12 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
+import { telegramApi } from '@/api/telegram'
 import { buildVirtualPosition } from '@/lib/scalpingVirtualPosition'
+import { optionsEarlyExitCheck } from '@/lib/autoTradeEngine'
 import type { PlaceOrderRequest } from '@/types/trading'
 import type { MarketData } from '@/lib/MarketDataManager'
 
@@ -24,6 +27,12 @@ export function useVirtualTPSL(
   const lotSize = useScalpingStore((s) => s.lotSize)
   const addSessionPnl = useScalpingStore((s) => s.addSessionPnl)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
+
+  const autoConfig = useAutoTradeStore((s) => s.config)
+  const optionsContext = useAutoTradeStore((s) => s.optionsContext)
+  const recordAutoExit = useAutoTradeStore((s) => s.recordAutoExit)
+  const recordTradeOutcome = useAutoTradeStore((s) => s.recordTradeOutcome)
+  const pushExecutionSample = useAutoTradeStore((s) => s.pushExecutionSample)
 
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
@@ -148,6 +157,44 @@ export function useVirtualTPSL(
   useEffect(() => {
     if (!tickData) return
 
+    const closeVirtualOrder = (order: (typeof virtualTPSL)[string], ltp: number, reason: string) => {
+      executingRef.current.add(order.id)
+      const isBuy = order.action === 'BUY'
+      const pnl = isBuy
+        ? (ltp - order.entryPrice) * order.quantity
+        : (order.entryPrice - ltp) * order.quantity
+
+      fireCloseOrder(order.symbol, order.quantity, order.action, `${reason} at ${ltp}`).then(
+        (ok) => {
+          if (ok) {
+            removeVirtualTPSL(order.id)
+            addSessionPnl(pnl)
+            incrementTradeCount()
+
+            if (order.managedBy === 'auto') {
+              recordAutoExit(order.side, pnl)
+              recordTradeOutcome(pnl)
+              pushExecutionSample({
+                timestamp: Date.now(),
+                side: order.side,
+                symbol: order.symbol,
+                spread: 0,
+                expectedSlippage: 0,
+                status: 'exited',
+                reason,
+              })
+              if (autoConfig.telegramAlertsExit) {
+                void telegramApi.sendBroadcast({
+                  message: `[AUTO EXIT] ${order.side} ${order.symbol} pnl=${pnl.toFixed(0)} reason=${reason}`,
+                }).catch(() => {})
+              }
+            }
+          }
+          executingRef.current.delete(order.id)
+        }
+      )
+    }
+
     // Check virtual TP/SL
     for (const order of Object.values(virtualTPSL)) {
       const symbolKey = `${order.exchange}:${order.symbol}`
@@ -156,26 +203,29 @@ export function useVirtualTPSL(
       if (!ltp || executingRef.current.has(order.id)) continue
 
       const isBuy = order.action === 'BUY'
+      const pnl = isBuy
+        ? (ltp - order.entryPrice) * order.quantity
+        : (order.entryPrice - ltp) * order.quantity
+
+      // Auto-managed protection checks (safe: does not touch manual-only positions)
+      if (order.managedBy === 'auto') {
+        if (autoConfig.perTradeMaxLoss > 0 && pnl <= -autoConfig.perTradeMaxLoss) {
+          closeVirtualOrder(order, ltp, `Per-trade max loss ${autoConfig.perTradeMaxLoss}`)
+          continue
+        }
+
+        const earlyExit = optionsEarlyExitCheck(order.side, optionsContext, autoConfig)
+        if (earlyExit.exit) {
+          closeVirtualOrder(order, ltp, `Options early-exit: ${earlyExit.reason}`)
+          continue
+        }
+      }
 
       // TP check
       if (order.tpPrice !== null) {
         const tpHit = isBuy ? ltp >= order.tpPrice : ltp <= order.tpPrice
         if (tpHit) {
-          executingRef.current.add(order.id)
-          const pnl = isBuy
-            ? (ltp - order.entryPrice) * order.quantity
-            : (order.entryPrice - ltp) * order.quantity
-
-          fireCloseOrder(order.symbol, order.quantity, order.action, `TP hit at ${ltp}`).then(
-            (ok) => {
-              if (ok) {
-                removeVirtualTPSL(order.id)
-                addSessionPnl(pnl)
-                incrementTradeCount()
-              }
-              executingRef.current.delete(order.id)
-            }
-          )
+          closeVirtualOrder(order, ltp, 'TP hit')
           continue
         }
       }
@@ -184,21 +234,7 @@ export function useVirtualTPSL(
       if (order.slPrice !== null) {
         const slHit = isBuy ? ltp <= order.slPrice : ltp >= order.slPrice
         if (slHit) {
-          executingRef.current.add(order.id)
-          const pnl = isBuy
-            ? (ltp - order.entryPrice) * order.quantity
-            : (order.entryPrice - ltp) * order.quantity
-
-          fireCloseOrder(order.symbol, order.quantity, order.action, `SL hit at ${ltp}`).then(
-            (ok) => {
-              if (ok) {
-                removeVirtualTPSL(order.id)
-                addSessionPnl(pnl)
-                incrementTradeCount()
-              }
-              executingRef.current.delete(order.id)
-            }
-          )
+          closeVirtualOrder(order, ltp, 'SL hit')
         }
       }
     }
@@ -237,6 +273,7 @@ export function useVirtualTPSL(
                   quantity: trigger.quantity,
                   tpPoints: trigger.tpPoints,
                   slPoints: trigger.slPoints,
+                  managedBy: 'trigger',
                 })
               )
             }
@@ -257,5 +294,10 @@ export function useVirtualTPSL(
     setVirtualTPSL,
     addSessionPnl,
     incrementTradeCount,
+    autoConfig,
+    optionsContext,
+    recordAutoExit,
+    recordTradeOutcome,
+    pushExecutionSample,
   ])
 }

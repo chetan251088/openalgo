@@ -92,7 +92,8 @@ export function useCandleBuilder({
   const reset = useCallback(() => {
     candlesRef.current = []
     currentCandleRef.current = null
-    // Keep lastProcessedTickKeyRef intact so we don't replay the same cached tick after reset.
+    // Allow one fresh rebuild after symbol/interval reset, even if the last tick timestamp is unchanged.
+    lastProcessedTickKeyRef.current = null
   }, [])
 
   const seed = useCallback(

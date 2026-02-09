@@ -1,6 +1,35 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || ''
+function resolveApiBaseUrl(): string {
+  const rawBaseUrl = (import.meta.env.VITE_API_URL || '').trim()
+  if (!rawBaseUrl) return ''
+
+  const normalizedBaseUrl = rawBaseUrl.replace(/\/+$/, '')
+
+  // In local multi-instance setups (e.g. UI on 5001), ignore stale cross-port
+  // VITE_API_URL values and use same-origin requests instead.
+  if (typeof window !== 'undefined') {
+    try {
+      const configuredUrl = new URL(normalizedBaseUrl)
+      const currentUrl = new URL(window.location.origin)
+      const localHosts = new Set(['localhost', '127.0.0.1'])
+      const isLocalPortMismatch =
+        localHosts.has(configuredUrl.hostname) &&
+        localHosts.has(currentUrl.hostname) &&
+        configuredUrl.port !== currentUrl.port
+
+      if (isLocalPortMismatch) {
+        return ''
+      }
+    } catch {
+      // Non-absolute value (e.g. relative path) - keep as provided.
+    }
+  }
+
+  return normalizedBaseUrl
+}
+
+const API_BASE_URL = resolveApiBaseUrl()
 
 // Helper to fetch CSRF token
 export async function fetchCSRFToken(): Promise<string> {

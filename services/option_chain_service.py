@@ -47,6 +47,8 @@ Strike Labels (different for CE and PE):
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import or_
+
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from services.option_symbol_service import (
@@ -138,6 +140,38 @@ def get_option_symbols_for_chain(
     # Convert expiry format for database lookup (DDMMMYY -> DD-MMM-YY)
     expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
+    def lookup_option_record(
+        strike: float, option_type: str, constructed_symbol: str
+    ) -> SymToken | None:
+        # Primary path: exact OpenAlgo symbol match.
+        record = (
+            db_session.query(SymToken)
+            .filter(SymToken.symbol == constructed_symbol, SymToken.exchange == exchange)
+            .first()
+        )
+        if record is not None:
+            return record
+
+        # Fallback path: broker/master-contract specific symbol formats may differ.
+        # Resolve by structural fields instead of a hard-coded symbol format.
+        strike_value = float(strike)
+        return (
+            db_session.query(SymToken)
+            .filter(
+                SymToken.exchange == exchange,
+                SymToken.expiry == expiry_formatted,
+                SymToken.instrumenttype == option_type,
+                SymToken.strike >= strike_value - 0.001,
+                SymToken.strike <= strike_value + 0.001,
+                or_(
+                    SymToken.name.ilike(base_symbol),
+                    SymToken.symbol.like(f"{base_symbol}%"),
+                ),
+            )
+            .order_by(SymToken.symbol.asc())
+            .first()
+        )
+
     for strike_info in strikes_with_labels:
         strike = strike_info["strike"]
         ce_label = strike_info["ce_label"]
@@ -147,31 +181,22 @@ def get_option_symbols_for_chain(
         ce_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "CE")
         pe_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "PE")
 
-        # Query database for both CE and PE
-        ce_record = (
-            db_session.query(SymToken)
-            .filter(SymToken.symbol == ce_symbol, SymToken.exchange == exchange)
-            .first()
-        )
-
-        pe_record = (
-            db_session.query(SymToken)
-            .filter(SymToken.symbol == pe_symbol, SymToken.exchange == exchange)
-            .first()
-        )
+        # Query database for both CE and PE with a broker-agnostic fallback.
+        ce_record = lookup_option_record(strike, "CE", ce_symbol)
+        pe_record = lookup_option_record(strike, "PE", pe_symbol)
 
         chain_symbols.append(
             {
                 "strike": strike,
                 "ce": {
-                    "symbol": ce_symbol,
+                    "symbol": ce_record.symbol if ce_record else ce_symbol,
                     "label": ce_label,
                     "exists": ce_record is not None,
                     "lotsize": ce_record.lotsize if ce_record else None,
                     "tick_size": ce_record.tick_size if ce_record else None,
                 },
                 "pe": {
-                    "symbol": pe_symbol,
+                    "symbol": pe_record.symbol if pe_record else pe_symbol,
                     "label": pe_label,
                     "exists": pe_record is not None,
                     "lotsize": pe_record.lotsize if pe_record else None,

@@ -1,23 +1,16 @@
-import { useEffect, useRef } from 'react'
-import { useScalpingStore } from '@/stores/scalpingStore'
+import { useEffect, useMemo, useRef } from 'react'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { calculateTrailingStop } from '@/lib/autoTradeEngine'
 import { MarketDataManager } from '@/lib/MarketDataManager'
+import type { TrailingStage, VirtualTPSL } from '@/types/scalping'
 
 /**
- * Monitors live tick data for active virtual TP/SL positions and applies
- * the 5-stage trailing stop logic from calculateTrailingStop().
- *
- * When trailing SL moves, updates the virtualOrderStore SL price,
- * which ChartOrderOverlay picks up and re-renders the SL line.
+ * Multi-position trailing monitor.
+ * Each active virtual TP/SL position gets an independent trailing state.
  */
 export function useTrailingMonitor() {
-  const optionExchange = useScalpingStore((s) => s.optionExchange)
-
   const config = useAutoTradeStore((s) => s.config)
-  const trailStage = useAutoTradeStore((s) => s.trailStage)
-  const highSinceEntry = useAutoTradeStore((s) => s.highSinceEntry)
   const optionsContext = useAutoTradeStore((s) => s.optionsContext)
   const setTrailStage = useAutoTradeStore((s) => s.setTrailStage)
   const setHighSinceEntry = useAutoTradeStore((s) => s.setHighSinceEntry)
@@ -25,105 +18,117 @@ export function useTrailingMonitor() {
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const updateVirtualTPSL = useVirtualOrderStore((s) => s.updateVirtualTPSL)
 
-  // Keep runtime/config values in refs so subscription callback doesn't force resubscribe loops.
   const configRef = useRef(config)
-  const trailStageRef = useRef(trailStage)
-  const highSinceEntryRef = useRef(highSinceEntry)
   const optionsContextRef = useRef(optionsContext)
-  const prevSLRef = useRef<number | null>(null)
+  const stageByOrderRef = useRef<Record<string, TrailingStage>>({})
+  const highByOrderRef = useRef<Record<string, number>>({})
+  const prevSLByOrderRef = useRef<Record<string, number>>({})
+  const unsubscribeByOrderRef = useRef<Record<string, () => void>>({})
 
   useEffect(() => {
     configRef.current = config
   }, [config])
 
   useEffect(() => {
-    trailStageRef.current = trailStage
-  }, [trailStage])
-
-  useEffect(() => {
-    highSinceEntryRef.current = highSinceEntry
-  }, [highSinceEntry])
-
-  useEffect(() => {
     optionsContextRef.current = optionsContext
   }, [optionsContext])
 
-  const active = Object.values(virtualTPSL)[0]
-  const activeKey = active
-    ? `${active.id}:${active.symbol}:${active.entryPrice}:${active.action}`
-    : ''
+  const trailingOrders = useMemo(
+    () => Object.values(virtualTPSL).filter((order) => order.slPrice != null),
+    [virtualTPSL]
+  )
 
   useEffect(() => {
-    if (!active || active.slPrice == null) return
+    const mdm = MarketDataManager.getInstance()
+    const nextIds = new Set(trailingOrders.map((order) => order.id))
 
-    // Initialize refs for this active position lifecycle.
-    prevSLRef.current = active.slPrice
-    if (!highSinceEntryRef.current || highSinceEntryRef.current <= 0) {
-      highSinceEntryRef.current = active.entryPrice
+    // Unsubscribe removed orders.
+    for (const [id, unsubscribe] of Object.entries(unsubscribeByOrderRef.current)) {
+      if (!nextIds.has(id)) {
+        unsubscribe()
+        delete unsubscribeByOrderRef.current[id]
+        delete stageByOrderRef.current[id]
+        delete highByOrderRef.current[id]
+        delete prevSLByOrderRef.current[id]
+      }
     }
 
-    const isBuy = active.action === 'BUY'
-    const mdm = MarketDataManager.getInstance()
+    for (const order of trailingOrders) {
+      if (unsubscribeByOrderRef.current[order.id]) continue
 
-    const unsubscribe = mdm.subscribe(
-      active.symbol,
-      optionExchange,
-      'LTP',
-      (data) => {
-        const ltp = data.data.ltp
-        if (!ltp || ltp <= 0) return
+      stageByOrderRef.current[order.id] = 'INITIAL'
+      highByOrderRef.current[order.id] = order.entryPrice
+      prevSLByOrderRef.current[order.id] = order.slPrice ?? order.entryPrice
 
-        // Update high water mark
-        const currentHigh = isBuy
-          ? Math.max(highSinceEntryRef.current || active.entryPrice, ltp)
-          : Math.min(highSinceEntryRef.current || active.entryPrice, ltp)
+      unsubscribeByOrderRef.current[order.id] = mdm.subscribe(
+        order.symbol,
+        order.exchange,
+        'LTP',
+        (payload) => {
+          const ltp = payload.data.ltp
+          if (!ltp || ltp <= 0) return
 
-        if (currentHigh !== highSinceEntryRef.current) {
-          highSinceEntryRef.current = currentHigh
-          setHighSinceEntry(currentHigh)
+          const liveOrder = useVirtualOrderStore.getState().virtualTPSL[order.id] as VirtualTPSL | undefined
+          if (!liveOrder || liveOrder.slPrice == null) return
+
+          const isBuy = liveOrder.action === 'BUY'
+          const currentHighRef = highByOrderRef.current[order.id] ?? liveOrder.entryPrice
+          const currentHigh = isBuy
+            ? Math.max(currentHighRef, ltp)
+            : Math.min(currentHighRef, ltp)
+
+          if (currentHigh !== currentHighRef) {
+            highByOrderRef.current[order.id] = currentHigh
+            setHighSinceEntry(currentHigh)
+          }
+
+          const currentStage = stageByOrderRef.current[order.id] ?? 'INITIAL'
+          const result = calculateTrailingStop(
+            currentStage,
+            liveOrder.entryPrice,
+            ltp,
+            currentHigh,
+            isBuy,
+            configRef.current,
+            optionsContextRef.current
+          )
+
+          if (result.newStage !== currentStage) {
+            stageByOrderRef.current[order.id] = result.newStage
+            setTrailStage(result.newStage)
+          }
+
+          // Round to option tick and update only on meaningful changes.
+          const roundedSL = Math.round(result.newSL / 0.05) * 0.05
+          const storeSL = liveOrder.slPrice
+          const prevSL = prevSLByOrderRef.current[order.id]
+          const slChangedFromStore = storeSL == null || Math.abs(roundedSL - storeSL) >= 0.05
+          const slChangedFromPrev = prevSL == null || Math.abs(roundedSL - prevSL) >= 0.05
+
+          if (slChangedFromStore && slChangedFromPrev) {
+            prevSLByOrderRef.current[order.id] = roundedSL
+            updateVirtualTPSL(order.id, { slPrice: roundedSL })
+          }
         }
-
-        // Calculate trailing stop
-        const currentStage = trailStageRef.current
-        const result = calculateTrailingStop(
-          currentStage,
-          active.entryPrice,
-          ltp,
-          currentHigh,
-          isBuy,
-          configRef.current,
-          optionsContextRef.current
-        )
-
-        // Update stage if changed
-        if (result.newStage !== currentStage) {
-          trailStageRef.current = result.newStage
-          setTrailStage(result.newStage)
-        }
-
-        // Update SL only on meaningful changes to avoid update loops.
-        const roundedSL = Math.round(result.newSL / 0.05) * 0.05
-        const currentSL = useVirtualOrderStore.getState().virtualTPSL[active.id]?.slPrice ?? null
-        const slChangedFromStore = currentSL == null || Math.abs(roundedSL - currentSL) >= 0.05
-        const slChangedFromPrev = prevSLRef.current == null || Math.abs(roundedSL - prevSLRef.current) >= 0.05
-
-        if (slChangedFromStore && slChangedFromPrev) {
-          prevSLRef.current = roundedSL
-          updateVirtualTPSL(active.id, { slPrice: roundedSL })
-        }
-      }
-    )
+      )
+    }
 
     return () => {
-      unsubscribe()
-      prevSLRef.current = null
+      // Only clean all subscriptions on unmount.
+      // Diff cleanup above handles incremental order changes.
     }
-  }, [
-    active,
-    activeKey,
-    optionExchange,
-    setTrailStage,
-    setHighSinceEntry,
-    updateVirtualTPSL,
-  ])
+  }, [trailingOrders, setHighSinceEntry, setTrailStage, updateVirtualTPSL])
+
+  useEffect(
+    () => () => {
+      for (const unsubscribe of Object.values(unsubscribeByOrderRef.current)) {
+        unsubscribe()
+      }
+      unsubscribeByOrderRef.current = {}
+      stageByOrderRef.current = {}
+      highByOrderRef.current = {}
+      prevSLByOrderRef.current = {}
+    },
+    []
+  )
 }

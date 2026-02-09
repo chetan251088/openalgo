@@ -78,8 +78,8 @@ export interface ModelTuningRun {
   underlying?: string | null
   objective: string | null
   score: number | null
-  recommendations: Record<string, number>
-  applied_changes: Record<string, number>
+  recommendations: Record<string, number | boolean | string | null>
+  applied_changes: Record<string, number | boolean | string | null>
   notes: string
   applied: boolean
   applied_iso?: string | null
