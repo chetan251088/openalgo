@@ -182,21 +182,21 @@ export default function ScalpingDashboard() {
       <div className="flex-1 min-h-0 min-w-0">
         <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
           {/* Left: Option Chain */}
-          <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
+          <ResizablePanel defaultSize={20} minSize={12} maxSize={36}>
             <OptionChainPanel />
           </ResizablePanel>
 
           <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Center: Charts */}
-          <ResizablePanel defaultSize="50%" minSize="30%">
+          <ResizablePanel defaultSize={50} minSize={30}>
             <ChartPanel />
           </ResizablePanel>
 
           <ResizableHandle withHandle className="bg-border/70" />
 
           {/* Right: Control Panel */}
-          <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
+          <ResizablePanel defaultSize={30} minSize={18} maxSize={42}>
             <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
           </ResizablePanel>
         </ResizablePanelGroup>

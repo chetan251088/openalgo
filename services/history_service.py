@@ -84,6 +84,7 @@ def get_history_with_auth(
     interval: str,
     start_date: str,
     end_date: str,
+    strict_symbol_validation: bool = False,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get historical data for a symbol using provided auth tokens.
@@ -97,6 +98,8 @@ def get_history_with_auth(
         interval: Time interval (e.g., 1m, 5m, 15m, 1h, 1d)
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
+        strict_symbol_validation: If True, reject when symbol is not found in local token DB.
+            If False (default), continue and let broker validate symbol.
 
     Returns:
         Tuple containing:
@@ -104,10 +107,17 @@ def get_history_with_auth(
         - Response data (dict)
         - HTTP status code (int)
     """
-    # Validate symbol and exchange before making broker API call
+    # Validate symbol/exchange before broker API call.
+    # Keep this non-blocking by default because token DB can lag behind live contracts,
+    # which would otherwise break legitimate history loads in charts.
     is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
     if not is_valid:
-        return False, {"status": "error", "message": error_msg}, 400
+        if strict_symbol_validation:
+            return False, {"status": "error", "message": error_msg}, 400
+        logger.warning(
+            "History validation warning (continuing with broker request): "
+            f"symbol={symbol}, exchange={exchange}, reason={error_msg}"
+        )
 
     broker_module = import_broker_module(broker)
     if broker_module is None:

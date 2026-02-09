@@ -425,6 +425,18 @@ def create_app():
         # Track 404 error for security monitoring
         Error404Tracker.track_404(client_ip, path)
 
+        # Don't serve SPA shell for missing API/static assets.
+        # Returning real 404 avoids module MIME errors from HTML fallbacks.
+        if request.path.startswith("/api/"):
+            return {"status": "error", "message": "Not found"}, 404
+
+        if request.path.startswith("/assets/") or request.path.startswith("/static/"):
+            return "Not found", 404
+
+        last_segment = request.path.rsplit("/", 1)[-1]
+        if "." in last_segment:
+            return "Not found", 404
+
         # Serve React app (React Router handles 404)
         return serve_react_app()
 

@@ -197,6 +197,7 @@ export function OptionChartView({
   })
 
   const apiKey = useAuthStore((s) => s.apiKey)
+  const setApiKey = useAuthStore((s) => s.setApiKey)
   const isDark = useThemeStore((s) => s.mode === 'dark')
   const activeSide = useScalpingStore((s) => s.activeSide)
   const setActiveSide = useScalpingStore((s) => s.setActiveSide)
@@ -259,6 +260,21 @@ export function OptionChartView({
     },
     [scheduleIndicatorRefresh]
   )
+
+  const ensureApiKey = useCallback(async (): Promise<string | null> => {
+    if (apiKey) return apiKey
+    try {
+      const response = await fetch('/api/websocket/apikey', { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success' && data.api_key) {
+        setApiKey(data.api_key)
+        return data.api_key
+      }
+    } catch {
+      // no-op
+    }
+    return null
+  }, [apiKey, setApiKey])
 
   // Handle chart click to set active side
   const handleClick = useCallback(() => {
@@ -359,14 +375,15 @@ export function OptionChartView({
     startDate.setDate(startDate.getDate() - HISTORY_LOOKBACK_DAYS)
 
     const loadHistory = async () => {
-      if (!apiKey) {
+      const resolvedApiKey = await ensureApiKey()
+      if (!resolvedApiKey) {
         if (requestSeq === historyLoadSeqRef.current) clearChartData()
         return
       }
 
       try {
         const response = await tradingApi.getHistory(
-          apiKey,
+          resolvedApiKey,
           symbol,
           optionExchange,
           interval,
@@ -404,7 +421,7 @@ export function OptionChartView({
     symbol,
     optionExchange,
     chartInterval,
-    apiKey,
+    ensureApiKey,
     resetCandles,
     seedCandles,
     clearChartData,

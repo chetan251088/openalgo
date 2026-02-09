@@ -192,6 +192,7 @@ export function IndexChartView({
   })
 
   const apiKey = useAuthStore((s) => s.apiKey)
+  const setApiKey = useAuthStore((s) => s.setApiKey)
   const isDark = useThemeStore((s) => s.mode === 'dark')
   const underlying = useScalpingStore((s) => s.underlying)
   const indexExchange = useScalpingStore((s) => s.indexExchange)
@@ -248,6 +249,21 @@ export function IndexChartView({
     },
     [scheduleIndicatorRefresh]
   )
+
+  const ensureApiKey = useCallback(async (): Promise<string | null> => {
+    if (apiKey) return apiKey
+    try {
+      const response = await fetch('/api/websocket/apikey', { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success' && data.api_key) {
+        setApiKey(data.api_key)
+        return data.api_key
+      }
+    } catch {
+      // no-op
+    }
+    return null
+  }, [apiKey, setApiKey])
 
   // Candle update callback - fires on every tick, updates chart via ref
   const handleCandleUpdate = useCallback(
@@ -344,14 +360,15 @@ export function IndexChartView({
     startDate.setDate(startDate.getDate() - HISTORY_LOOKBACK_DAYS)
 
     const loadHistory = async () => {
-      if (!apiKey) {
+      const resolvedApiKey = await ensureApiKey()
+      if (!resolvedApiKey) {
         if (requestSeq === historyLoadSeqRef.current) clearChartData()
         return
       }
 
       try {
         const response = await tradingApi.getHistory(
-          apiKey,
+          resolvedApiKey,
           underlying,
           indexExchange,
           interval,
@@ -389,7 +406,7 @@ export function IndexChartView({
     underlying,
     indexExchange,
     chartInterval,
-    apiKey,
+    ensureApiKey,
     resetCandles,
     seedCandles,
     clearChartData,

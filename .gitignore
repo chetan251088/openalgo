@@ -72,9 +72,20 @@ build/
 out/
 
 # Frontend specific
-# frontend/dist/ is built by CI/CD pipeline - never commit this!
-frontend/dist/
-frontend/dist/**/*
+# Keep frontend/dist tracked (pre-built distribution is shipped in this repo)
+!frontend/dist/
+!frontend/dist/index.html
+!frontend/dist/assets/
+!frontend/dist/assets/**
+!frontend/dist/favicon.ico
+!frontend/dist/logo.png
+!frontend/dist/apple-touch-icon.png
+!frontend/dist/images/
+!frontend/dist/images/**
+!frontend/dist/sounds/
+!frontend/dist/sounds/**
+!frontend/dist/docs/
+!frontend/dist/docs/**
 frontend/.cache/
 *.local
 
