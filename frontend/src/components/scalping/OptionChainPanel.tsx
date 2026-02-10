@@ -13,10 +13,13 @@ export function OptionChainPanel() {
   const optionExchange = useScalpingStore((s) => s.optionExchange)
   const expiry = useScalpingStore((s) => s.expiry)
   const selectedStrike = useScalpingStore((s) => s.selectedStrike)
+  const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
+  const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
   const chainStrikeCount = useScalpingStore((s) => s.chainStrikeCount)
 
   const setSelectedStrike = useScalpingStore((s) => s.setSelectedStrike)
   const setSelectedSymbols = useScalpingStore((s) => s.setSelectedSymbols)
+  const setActiveSide = useScalpingStore((s) => s.setActiveSide)
   const setLotSize = useScalpingStore((s) => s.setLotSize)
   const setOptionChainSnapshot = useScalpingStore((s) => s.setOptionChainSnapshot)
 
@@ -87,6 +90,26 @@ export function OptionChainPanel() {
       setSelectedSymbols(ceSymbol, peSymbol)
     },
     [setSelectedStrike, setSelectedSymbols]
+  )
+
+  const handleSelectCE = useCallback(
+    (strike: number, ceSymbol: string | null) => {
+      if (!ceSymbol) return
+      setSelectedStrike(strike)
+      setSelectedSymbols(ceSymbol, selectedPESymbol)
+      setActiveSide('CE')
+    },
+    [selectedPESymbol, setActiveSide, setSelectedStrike, setSelectedSymbols]
+  )
+
+  const handleSelectPE = useCallback(
+    (strike: number, peSymbol: string | null) => {
+      if (!peSymbol) return
+      setSelectedStrike(strike)
+      setSelectedSymbols(selectedCESymbol, peSymbol)
+      setActiveSide('PE')
+    },
+    [selectedCESymbol, setActiveSide, setSelectedStrike, setSelectedSymbols]
   )
 
   // Compute max OI and max Volume across all strikes for heatmap scaling
@@ -172,6 +195,8 @@ export function OptionChainPanel() {
                 maxOI={maxOI}
                 maxVol={maxVol}
                 onSelectStrike={handleSelectStrike}
+                onSelectCE={handleSelectCE}
+                onSelectPE={handleSelectPE}
               />
             </div>
           )

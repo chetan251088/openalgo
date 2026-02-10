@@ -49,6 +49,7 @@ interface ScalpingState {
   controlTab: ControlTab
   hotkeysEnabled: boolean
   showFloatingWidget: boolean
+  floatingWidgetMinimized: boolean
   chainCollapsed: boolean
   controlCollapsed: boolean
 
@@ -94,6 +95,8 @@ interface ScalpingActions {
   setHotkeysEnabled: (on: boolean) => void
   setShowFloatingWidget: (on: boolean) => void
   toggleFloatingWidget: () => void
+  setFloatingWidgetMinimized: (on: boolean) => void
+  toggleFloatingWidgetMinimized: () => void
   setChainCollapsed: (on: boolean) => void
   setControlCollapsed: (on: boolean) => void
   setCeWidgetPos: (pos: { x: number; y: number }) => void
@@ -144,6 +147,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       controlTab: 'manual',
       hotkeysEnabled: true,
       showFloatingWidget: true,
+      floatingWidgetMinimized: true,
       chainCollapsed: false,
       controlCollapsed: false,
       ceWidgetPos: { x: 8, y: 8 },
@@ -255,6 +259,10 @@ export const useScalpingStore = create<ScalpingStore>()(
       setShowFloatingWidget: (on) => set({ showFloatingWidget: on }),
       toggleFloatingWidget: () =>
         set((s) => ({ showFloatingWidget: !s.showFloatingWidget })),
+      setFloatingWidgetMinimized: (on) =>
+        set((s) => (s.floatingWidgetMinimized === on ? s : { floatingWidgetMinimized: on })),
+      toggleFloatingWidgetMinimized: () =>
+        set((s) => ({ floatingWidgetMinimized: !s.floatingWidgetMinimized })),
       setChainCollapsed: (on) => set({ chainCollapsed: on }),
       setControlCollapsed: (on) => set({ controlCollapsed: on }),
       setCeWidgetPos: (pos) => set({ ceWidgetPos: pos }),
@@ -281,6 +289,7 @@ export const useScalpingStore = create<ScalpingStore>()(
         paperMode: state.paperMode,
         hotkeysEnabled: state.hotkeysEnabled,
         showFloatingWidget: state.showFloatingWidget,
+        floatingWidgetMinimized: state.floatingWidgetMinimized,
         chartInterval: state.chartInterval,
         ceWidgetPos: state.ceWidgetPos,
         peWidgetPos: state.peWidgetPos,

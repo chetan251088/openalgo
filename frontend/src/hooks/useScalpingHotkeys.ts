@@ -103,10 +103,11 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
 
       if (paperMode) {
         console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
-        if (orderType === 'MARKET') {
+        if (orderType === 'MARKET' || orderType === 'LIMIT') {
           const entryPrice = await resolveEntryPrice({
             symbol,
             exchange: optionExchange,
+            preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
           })
           if (entryPrice > 0) {
             const existingVirtual = getTPSLForSymbol(symbol)
@@ -120,9 +121,12 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 entryPrice,
                 quantity: quantity * lotSize,
                 tpPoints,
-                slPoints,
-              })
-            )
+                  slPoints,
+                })
+              )
+              if (orderType === 'LIMIT') {
+                setLimitPrice(null)
+              }
           }
         }
         return
@@ -155,11 +159,12 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
           console.log(`[Scalping] Order placed: ${action} ${symbol} id=${res.data?.orderid}`)
           setPendingEntryAction(null)
 
-          // Market entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET') {
+          // Market and limit entries should immediately render virtual position/TP/SL lines.
+          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
             const entryPrice = await resolveEntryPrice({
               symbol,
               exchange: optionExchange,
+              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -177,6 +182,9 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                   slPoints,
                 })
               )
+              if (pricetype === 'LIMIT') {
+                setLimitPrice(null)
+              }
             }
           }
         } else {

@@ -908,14 +908,14 @@ export function ChartOrderOverlay({
             )}
             <button
               type="button"
-              className="text-xs font-bold w-4 h-4 flex items-center justify-center rounded-sm text-foreground/60 hover:text-foreground hover:bg-muted/50"
+              className="text-[11px] font-black w-5 h-5 flex items-center justify-center rounded-sm border border-border/70 bg-card/95 text-foreground/90 hover:text-destructive hover:bg-destructive/10 shadow-sm"
               onClick={(e) => {
                 e.stopPropagation()
                 handleRemoveEntry()
               }}
               title={entryIsPosition ? 'Remove virtual position tracking' : 'Cancel pending order'}
             >
-              x
+              ×
             </button>
           </div>
         </div>
@@ -934,14 +934,14 @@ export function ChartOrderOverlay({
             </span>
             <button
               type="button"
-              className="text-xs font-bold w-4 h-4 flex items-center justify-center rounded-sm text-green-400/60 hover:text-green-400 hover:bg-muted/50"
+              className="text-[11px] font-black w-5 h-5 flex items-center justify-center rounded-sm border border-green-500/40 bg-card/95 text-green-300 hover:text-green-200 hover:bg-green-500/15 shadow-sm"
               onClick={(e) => {
                 e.stopPropagation()
                 handleRemoveOverlay('tp')
               }}
               title="Remove TP line"
             >
-              x
+              ×
             </button>
           </div>
         </div>
@@ -960,14 +960,14 @@ export function ChartOrderOverlay({
             </span>
             <button
               type="button"
-              className="text-xs font-bold w-4 h-4 flex items-center justify-center rounded-sm text-red-400/60 hover:text-red-400 hover:bg-muted/50"
+              className="text-[11px] font-black w-5 h-5 flex items-center justify-center rounded-sm border border-red-500/40 bg-card/95 text-red-300 hover:text-red-200 hover:bg-red-500/15 shadow-sm"
               onClick={(e) => {
                 e.stopPropagation()
                 handleRemoveOverlay('sl')
               }}
               title="Remove SL line"
             >
-              x
+              ×
             </button>
           </div>
         </div>

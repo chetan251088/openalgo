@@ -97,10 +97,11 @@ export function ManualTradeTab() {
         console.log(
           `[Paper] ${action} ${activeSide} ${activeSymbol} qty=${quantity * lotSize} @ ${orderType}`
         )
-        if (orderType === 'MARKET') {
+        if (orderType === 'MARKET' || orderType === 'LIMIT') {
           const entryPrice = await resolveEntryPrice({
             symbol: activeSymbol,
             exchange: optionExchange,
+            preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
           })
           if (entryPrice > 0) {
             const existingVirtual = getTPSLForSymbol(activeSymbol)
@@ -115,8 +116,11 @@ export function ManualTradeTab() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
-              })
-            )
+                })
+              )
+              if (orderType === 'LIMIT') {
+                setLimitPrice(null)
+              }
           }
         }
         incrementTradeCount()
@@ -153,11 +157,12 @@ export function ManualTradeTab() {
           setPendingEntryAction(null)
           incrementTradeCount()
 
-          // Market entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET') {
+          // Market and limit entries should immediately render virtual position/TP/SL lines.
+          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
             const entryPrice = await resolveEntryPrice({
               symbol: activeSymbol,
               exchange: optionExchange,
+              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -175,6 +180,9 @@ export function ManualTradeTab() {
                   slPoints,
                 })
               )
+              if (pricetype === 'LIMIT') {
+                setLimitPrice(null)
+              }
             }
           }
         } else {

@@ -17,6 +17,8 @@ export function FloatingTradeWidget() {
   const setApiKey = useAuthStore((s) => s.setApiKey)
 
   const showFloatingWidget = useScalpingStore((s) => s.showFloatingWidget)
+  const floatingWidgetMinimized = useScalpingStore((s) => s.floatingWidgetMinimized)
+  const setFloatingWidgetMinimized = useScalpingStore((s) => s.setFloatingWidgetMinimized)
   const activeSide = useScalpingStore((s) => s.activeSide)
   const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
   const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
@@ -163,11 +165,11 @@ export function FloatingTradeWidget() {
 
       if (paperMode) {
         console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
-        if (orderType === 'MARKET') {
+        if (orderType === 'MARKET' || orderType === 'LIMIT') {
           const entryPrice = await resolveEntryPrice({
             symbol,
             exchange: optionExchange,
-            preferredPrice: ltp,
+            preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? ltp ?? undefined) : (ltp ?? undefined),
           })
           if (entryPrice > 0) {
             const existingVirtual = getTPSLForSymbol(symbol)
@@ -181,9 +183,12 @@ export function FloatingTradeWidget() {
                 entryPrice,
                 quantity: quantity * lotSize,
                 tpPoints,
-                slPoints,
-              })
-            )
+                  slPoints,
+                })
+              )
+              if (orderType === 'LIMIT') {
+                setLimitPrice(null)
+              }
           }
         }
         incrementTradeCount()
@@ -219,12 +224,12 @@ export function FloatingTradeWidget() {
           setPendingEntryAction(null)
           incrementTradeCount()
 
-          // Market entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET') {
+          // Market and limit entries should immediately render virtual position/TP/SL lines.
+          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
             const entryPrice = await resolveEntryPrice({
               symbol,
               exchange: optionExchange,
-              preferredPrice: ltp,
+              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : (ltp ?? undefined),
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -242,6 +247,9 @@ export function FloatingTradeWidget() {
                   slPoints,
                 })
               )
+              if (pricetype === 'LIMIT') {
+                setLimitPrice(null)
+              }
             }
           }
         } else {
@@ -371,6 +379,45 @@ export function FloatingTradeWidget() {
 
   const ltpDir = ltp && prevLtp ? (ltp > prevLtp ? 'up' : ltp < prevLtp ? 'down' : 'flat') : 'flat'
 
+  if (floatingWidgetMinimized) {
+    return (
+      <div
+        ref={widgetRef}
+        onMouseDown={onMouseDown}
+        className="absolute z-20 select-none cursor-move rounded-md border shadow-md backdrop-blur-sm bg-card/90 border-primary/40"
+        style={{
+          left: widgetPos.x,
+          top: widgetPos.y,
+        }}
+      >
+        <div className="flex items-center gap-2 px-2 py-1">
+          <span className={`text-[10px] font-bold ${activeSide === 'CE' ? 'text-green-500' : 'text-red-500'}`}>
+            {activeSide}
+          </span>
+          <span className="text-[10px] font-mono text-muted-foreground max-w-[72px] truncate">
+            {symbol.slice(-10)}
+          </span>
+          <span
+            className={`text-xs font-bold tabular-nums ${
+              ltpDir === 'up' ? 'text-green-500' : ltpDir === 'down' ? 'text-red-500' : 'text-foreground'
+            }`}
+          >
+            {ltp?.toFixed(2) ?? '--'}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-5 px-1.5 text-[10px]"
+            onClick={() => setFloatingWidgetMinimized(false)}
+            title="Open trade widget"
+          >
+            Open
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       ref={widgetRef}
@@ -397,6 +444,15 @@ export function FloatingTradeWidget() {
         >
           {ltp?.toFixed(2) ?? '--'}
         </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-5 px-1 text-[10px]"
+          onClick={() => setFloatingWidgetMinimized(true)}
+          title="Minimize widget"
+        >
+          _
+        </Button>
       </div>
 
       {/* Action buttons */}
