@@ -31,6 +31,8 @@ export function ManualTradeTab() {
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
   const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
   const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
+  const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
+  const clearVirtualOrders = useVirtualOrderStore((s) => s.clearAll)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
@@ -221,6 +223,9 @@ export function ManualTradeTab() {
 
     if (paperMode) {
       console.log(`[Paper] Close ${activeSide} ${activeSymbol}`)
+      clearVirtualForSymbol(activeSymbol)
+      setLimitPrice(null)
+      setPendingEntryAction(null)
       return
     }
 
@@ -245,26 +250,47 @@ export function ManualTradeTab() {
       const res = await tradingApi.placeOrder(order)
       if (res.status === 'success') {
         console.log(`[Scalping] Closed ${activeSide} ${activeSymbol} id=${res.data?.orderid}`)
+        clearVirtualForSymbol(activeSymbol)
+        setLimitPrice(null)
+        setPendingEntryAction(null)
       } else {
         console.error('[Scalping] Close rejected:', res)
       }
     } catch (err) {
       console.error('[Scalping] Close failed:', err)
     }
-  }, [activeSymbol, activeSide, quantity, lotSize, optionExchange, product, paperMode, ensureApiKey])
+  }, [
+    activeSymbol,
+    activeSide,
+    quantity,
+    lotSize,
+    optionExchange,
+    product,
+    paperMode,
+    ensureApiKey,
+    clearVirtualForSymbol,
+    setLimitPrice,
+    setPendingEntryAction,
+  ])
 
   const closeAll = useCallback(async () => {
     if (paperMode) {
       console.log('[Paper] Close all positions')
+      clearVirtualOrders()
+      setLimitPrice(null)
+      setPendingEntryAction(null)
       return
     }
     try {
       await tradingApi.closeAllPositions()
       console.log('[Scalping] Closed all positions')
+      clearVirtualOrders()
+      setLimitPrice(null)
+      setPendingEntryAction(null)
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
     }
-  }, [paperMode])
+  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction])
 
   return (
     <div className="p-3 space-y-4">

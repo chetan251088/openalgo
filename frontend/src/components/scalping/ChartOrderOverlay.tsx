@@ -8,12 +8,16 @@ import {
 } from 'lightweight-charts'
 import { tradingApi } from '@/api/trading'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { MarketDataManager } from '@/lib/MarketDataManager'
+import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
 import { cn } from '@/lib/utils'
 import type { ActiveSide, OrderAction, TriggerOrder } from '@/types/scalping'
+import type { PlaceOrderRequest } from '@/types/trading'
 
 const TICK_SIZE = 0.05
+const SHOW_NATIVE_LINE_TITLES = false
 
 function roundToTick(price: number): number {
   return Math.round(price / TICK_SIZE) * TICK_SIZE
@@ -58,6 +62,8 @@ export function ChartOrderOverlay({
   side,
   containerRef,
 }: ChartOrderOverlayProps) {
+  const apiKey = useAuthStore((s) => s.apiKey)
+  const setApiKey = useAuthStore((s) => s.setApiKey)
   const activeSide = useScalpingStore((s) => s.activeSide)
   const orderType = useScalpingStore((s) => s.orderType)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
@@ -69,6 +75,7 @@ export function ChartOrderOverlay({
   const optionExchange = useScalpingStore((s) => s.optionExchange)
   const product = useScalpingStore((s) => s.product)
   const paperMode = useScalpingStore((s) => s.paperMode)
+  const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setTpPoints = useScalpingStore((s) => s.setTpPoints)
   const setSlPoints = useScalpingStore((s) => s.setSlPoints)
@@ -83,6 +90,8 @@ export function ChartOrderOverlay({
   const addTriggerOrder = useVirtualOrderStore((s) => s.addTriggerOrder)
   const updateTriggerOrder = useVirtualOrderStore((s) => s.updateTriggerOrder)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
+  const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
+  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
   const updateVirtualTPSL = useVirtualOrderStore((s) => s.updateVirtualTPSL)
   const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
 
@@ -90,12 +99,17 @@ export function ChartOrderOverlay({
   const entryLineRef = useRef<IPriceLine | null>(null)
   const tpLineRef = useRef<IPriceLine | null>(null)
   const slLineRef = useRef<IPriceLine | null>(null)
+  const trackingLineSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const entryLineSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const tpLineSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const slLineSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
 
   const [entryOverlay, setEntryOverlay] = useState<OverlayPos | null>(null)
   const [tpOverlay, setTpOverlay] = useState<OverlayPos | null>(null)
   const [slOverlay, setSlOverlay] = useState<OverlayPos | null>(null)
   const [liveLtp, setLiveLtp] = useState<number | null>(null)
   const [isClosingPosition, setIsClosingPosition] = useState(false)
+  const placingLimitRef = useRef(false)
 
   const dragRef = useRef<{
     type: DragType
@@ -166,14 +180,19 @@ export function ChartOrderOverlay({
   }, [activeTPSL, livePnl])
 
   const removeLine = useCallback(
-    (lineRef: React.MutableRefObject<IPriceLine | null>) => {
-      if (lineRef.current && seriesRef.current) {
+    (
+      lineRef: React.MutableRefObject<IPriceLine | null>,
+      lineSeriesRef: React.MutableRefObject<ISeriesApi<'Candlestick'> | null>
+    ) => {
+      if (lineRef.current) {
+        const ownerSeries = lineSeriesRef.current ?? seriesRef.current
         try {
-          seriesRef.current.removePriceLine(lineRef.current)
+          ownerSeries?.removePriceLine(lineRef.current)
         } catch {
           // no-op
         }
         lineRef.current = null
+        lineSeriesRef.current = null
       }
     },
     [seriesRef]
@@ -182,31 +201,45 @@ export function ChartOrderOverlay({
   const upsertLine = useCallback(
     (
       lineRef: React.MutableRefObject<IPriceLine | null>,
+      lineSeriesRef: React.MutableRefObject<ISeriesApi<'Candlestick'> | null>,
       price: number,
       color: string,
       style: LineStyle,
       width: 1 | 2 | 3 | 4,
       title: string
     ) => {
-      if (!seriesRef.current) return
+      const targetSeries = seriesRef.current
+      if (!targetSeries) return
+      const normalizedTitle = SHOW_NATIVE_LINE_TITLES ? title : ''
+      // Series can be recreated by chart lifecycle; stale handles must be detached.
+      if (lineRef.current && lineSeriesRef.current && lineSeriesRef.current !== targetSeries) {
+        try {
+          lineSeriesRef.current.removePriceLine(lineRef.current)
+        } catch {
+          // no-op
+        }
+        lineRef.current = null
+        lineSeriesRef.current = null
+      }
       if (lineRef.current) {
         lineRef.current.applyOptions({
           price,
           color,
           lineStyle: style,
           lineWidth: width,
-          title,
+          title: normalizedTitle,
           axisLabelVisible: true,
         })
       } else {
-        lineRef.current = seriesRef.current.createPriceLine({
+        lineRef.current = targetSeries.createPriceLine({
           price,
           color,
           lineStyle: style,
           lineWidth: width,
-          title,
+          title: normalizedTitle,
           axisLabelVisible: true,
         })
+        lineSeriesRef.current = targetSeries
       }
     },
     [seriesRef]
@@ -255,6 +288,132 @@ export function ChartOrderOverlay({
     [symbol, optionExchange]
   )
 
+  const ensureApiKey = useCallback(async (): Promise<string | null> => {
+    if (apiKey) return apiKey
+    try {
+      const resp = await fetch('/api/websocket/apikey', { credentials: 'include' })
+      const data = await resp.json()
+      if (data.status === 'success' && data.api_key) {
+        setApiKey(data.api_key)
+        return data.api_key
+      }
+    } catch (err) {
+      console.error('[Scalping] Failed to fetch API key:', err)
+    }
+    console.warn('[Scalping] No API key available — generate one at /apikey')
+    return null
+  }, [apiKey, setApiKey])
+
+  const placeLimitFromChart = useCallback(
+    async (entryPrice: number, action: OrderAction): Promise<boolean> => {
+      if (!symbol) return false
+      if (placingLimitRef.current) return false
+      placingLimitRef.current = true
+
+      try {
+        if (paperMode) {
+          const resolvedEntry = await resolveEntryPrice({
+            symbol,
+            exchange: optionExchange,
+            preferredPrice: entryPrice,
+          })
+          if (resolvedEntry <= 0) return false
+          const existingVirtual = getTPSLForSymbol(symbol)
+          if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
+          setVirtualTPSL(
+            buildVirtualPosition({
+              symbol,
+              exchange: optionExchange,
+              side,
+              action,
+              entryPrice: resolvedEntry,
+              quantity: quantity * lotSize,
+              tpPoints,
+              slPoints,
+            })
+          )
+          incrementTradeCount()
+          setPendingEntryAction(null)
+          setLimitPrice(null)
+          return true
+        }
+
+        const key = await ensureApiKey()
+        if (!key) return false
+
+        const order: PlaceOrderRequest = {
+          apikey: key,
+          strategy: 'Scalping',
+          exchange: optionExchange,
+          symbol,
+          action,
+          quantity: quantity * lotSize,
+          pricetype: 'LIMIT',
+          product,
+          price: entryPrice,
+          trigger_price: 0,
+          disclosed_quantity: 0,
+        }
+
+        const res = await tradingApi.placeOrder(order)
+        if (res.status !== 'success') {
+          console.error('[Scalping] LIMIT order rejected:', res)
+          return false
+        }
+
+        const resolvedEntry = await resolveEntryPrice({
+          symbol,
+          exchange: optionExchange,
+          preferredPrice: entryPrice,
+          apiKey: key,
+        })
+        if (resolvedEntry > 0) {
+          const existingVirtual = getTPSLForSymbol(symbol)
+          if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
+          setVirtualTPSL(
+            buildVirtualPosition({
+              symbol,
+              exchange: optionExchange,
+              side,
+              action,
+              entryPrice: resolvedEntry,
+              quantity: quantity * lotSize,
+              tpPoints,
+              slPoints,
+            })
+          )
+        }
+        incrementTradeCount()
+        setPendingEntryAction(null)
+        setLimitPrice(null)
+        return true
+      } catch (err) {
+        console.error('[Scalping] LIMIT order failed:', err)
+        return false
+      } finally {
+        placingLimitRef.current = false
+      }
+    },
+    [
+      symbol,
+      paperMode,
+      optionExchange,
+      side,
+      quantity,
+      lotSize,
+      tpPoints,
+      slPoints,
+      product,
+      ensureApiKey,
+      getTPSLForSymbol,
+      removeVirtualTPSL,
+      setVirtualTPSL,
+      incrementTradeCount,
+      setPendingEntryAction,
+      setLimitPrice,
+    ]
+  )
+
   // Crosshair tracking line for fresh chart placement.
   useEffect(() => {
     const chart = chartRef.current
@@ -269,28 +428,36 @@ export function ChartOrderOverlay({
       limitPrice == null
 
     if (!showTracking) {
-      removeLine(trackingLineRef)
+      removeLine(trackingLineRef, trackingLineSeriesRef)
       return
     }
 
     const handler = (param: MouseEventParams) => {
       if (!param.point) {
-        removeLine(trackingLineRef)
+        removeLine(trackingLineRef, trackingLineSeriesRef)
         return
       }
       const price = series.coordinateToPrice(param.point.y)
       if (price == null) {
-        removeLine(trackingLineRef)
+        removeLine(trackingLineRef, trackingLineSeriesRef)
         return
       }
       const rounded = roundToTick(price as number)
-      upsertLine(trackingLineRef, rounded, '#a1a1aa', LineStyle.Dashed, 1, rounded.toFixed(2))
+      upsertLine(
+        trackingLineRef,
+        trackingLineSeriesRef,
+        rounded,
+        '#a1a1aa',
+        LineStyle.Dashed,
+        1,
+        rounded.toFixed(2)
+      )
     }
 
     chart.subscribeCrosshairMove(handler)
     return () => {
       chart.unsubscribeCrosshairMove(handler)
-      removeLine(trackingLineRef)
+      removeLine(trackingLineRef, trackingLineSeriesRef)
     }
   }, [
     chartRef,
@@ -354,15 +521,16 @@ export function ChartOrderOverlay({
         setPendingEntryAction(null)
       } else {
         // LIMIT
-        if (!pendingEntryAction && limitPrice == null) {
+        if (!pendingEntryAction) {
           console.warn('[Scalping] Select BUY/SELL first, then click chart to place LIMIT line')
           return
         }
+        if (activeTPSL) return
         setLimitPrice(rounded)
-        if (!pendingEntryAction) setPendingEntryAction('BUY')
+        void placeLimitFromChart(rounded, pendingEntryAction)
       }
 
-      removeLine(trackingLineRef)
+      removeLine(trackingLineRef, trackingLineSeriesRef)
       updateOverlayPositions()
     }
 
@@ -379,6 +547,7 @@ export function ChartOrderOverlay({
     orderType,
     pendingEntryAction,
     limitPrice,
+    activeTPSL,
     activeTrigger,
     quantity,
     lotSize,
@@ -391,6 +560,7 @@ export function ChartOrderOverlay({
     setLimitPrice,
     setPendingEntryAction,
     getDirectionForPrice,
+    placeLimitFromChart,
     removeLine,
     updateOverlayPositions,
   ])
@@ -400,9 +570,9 @@ export function ChartOrderOverlay({
     if (!seriesRef.current) return
 
     const clearEntrySet = () => {
-      removeLine(entryLineRef)
-      removeLine(tpLineRef)
-      removeLine(slLineRef)
+      removeLine(entryLineRef, entryLineSeriesRef)
+      removeLine(tpLineRef, tpLineSeriesRef)
+      removeLine(slLineRef, slLineSeriesRef)
       setEntryOverlay(null)
       setTpOverlay(null)
       setSlOverlay(null)
@@ -412,6 +582,7 @@ export function ChartOrderOverlay({
       const entryColor = activeTPSL.action === 'BUY' ? '#00ff88' : '#ff4560'
       upsertLine(
         entryLineRef,
+        entryLineSeriesRef,
         roundToTick(activeTPSL.entryPrice),
         entryColor,
         LineStyle.Dotted,
@@ -420,15 +591,31 @@ export function ChartOrderOverlay({
       )
 
       if (activeTPSL.tpPrice != null) {
-        upsertLine(tpLineRef, roundToTick(activeTPSL.tpPrice), '#00ff88', LineStyle.Dashed, 1, `TP @ ${activeTPSL.tpPrice.toFixed(2)}`)
+        upsertLine(
+          tpLineRef,
+          tpLineSeriesRef,
+          roundToTick(activeTPSL.tpPrice),
+          '#00ff88',
+          LineStyle.Dashed,
+          1,
+          `TP @ ${activeTPSL.tpPrice.toFixed(2)}`
+        )
       } else {
-        removeLine(tpLineRef)
+        removeLine(tpLineRef, tpLineSeriesRef)
       }
 
       if (activeTPSL.slPrice != null) {
-        upsertLine(slLineRef, roundToTick(activeTPSL.slPrice), '#ff4560', LineStyle.Dashed, 1, `SL @ ${activeTPSL.slPrice.toFixed(2)}`)
+        upsertLine(
+          slLineRef,
+          slLineSeriesRef,
+          roundToTick(activeTPSL.slPrice),
+          '#ff4560',
+          LineStyle.Dashed,
+          1,
+          `SL @ ${activeTPSL.slPrice.toFixed(2)}`
+        )
       } else {
-        removeLine(slLineRef)
+        removeLine(slLineRef, slLineSeriesRef)
       }
 
       updateOverlayPositions()
@@ -440,6 +627,7 @@ export function ChartOrderOverlay({
       const entry = roundToTick(activeTrigger.triggerPrice)
       upsertLine(
         entryLineRef,
+        entryLineSeriesRef,
         entry,
         '#ffa500',
         LineStyle.Dashed,
@@ -448,15 +636,15 @@ export function ChartOrderOverlay({
       )
 
       if (tpPrice != null) {
-        upsertLine(tpLineRef, tpPrice, '#00ff88', LineStyle.Dashed, 1, `TP @ ${tpPrice.toFixed(2)}`)
+        upsertLine(tpLineRef, tpLineSeriesRef, tpPrice, '#00ff88', LineStyle.Dashed, 1, `TP @ ${tpPrice.toFixed(2)}`)
       } else {
-        removeLine(tpLineRef)
+        removeLine(tpLineRef, tpLineSeriesRef)
       }
 
       if (slPrice != null) {
-        upsertLine(slLineRef, slPrice, '#ff4560', LineStyle.Dashed, 1, `SL @ ${slPrice.toFixed(2)}`)
+        upsertLine(slLineRef, slLineSeriesRef, slPrice, '#ff4560', LineStyle.Dashed, 1, `SL @ ${slPrice.toFixed(2)}`)
       } else {
-        removeLine(slLineRef)
+        removeLine(slLineRef, slLineSeriesRef)
       }
 
       updateOverlayPositions()
@@ -469,6 +657,7 @@ export function ChartOrderOverlay({
       const lineColor = orderType === 'LIMIT' ? '#06b6d4' : '#ffa500'
       upsertLine(
         entryLineRef,
+        entryLineSeriesRef,
         entry,
         lineColor,
         LineStyle.Dashed,
@@ -478,16 +667,16 @@ export function ChartOrderOverlay({
 
       if (tpPoints > 0) {
         const tp = roundToTick(entry + (action === 'BUY' ? tpPoints : -tpPoints))
-        upsertLine(tpLineRef, tp, '#00ff88', LineStyle.Dashed, 1, `TP @ ${tp.toFixed(2)}`)
+        upsertLine(tpLineRef, tpLineSeriesRef, tp, '#00ff88', LineStyle.Dashed, 1, `TP @ ${tp.toFixed(2)}`)
       } else {
-        removeLine(tpLineRef)
+        removeLine(tpLineRef, tpLineSeriesRef)
       }
 
       if (slPoints > 0) {
         const sl = roundToTick(entry + (action === 'BUY' ? -slPoints : slPoints))
-        upsertLine(slLineRef, sl, '#ff4560', LineStyle.Dashed, 1, `SL @ ${sl.toFixed(2)}`)
+        upsertLine(slLineRef, slLineSeriesRef, sl, '#ff4560', LineStyle.Dashed, 1, `SL @ ${sl.toFixed(2)}`)
       } else {
-        removeLine(slLineRef)
+        removeLine(slLineRef, slLineSeriesRef)
       }
 
       updateOverlayPositions()
@@ -513,6 +702,7 @@ export function ChartOrderOverlay({
 
   // Keep entry line title synced with live PnL ticks without redrawing lines.
   useEffect(() => {
+    if (!SHOW_NATIVE_LINE_TITLES) return
     if (!activeTPSL || !entryLineRef.current) return
     entryLineRef.current.applyOptions({ title: activeEntryTitle })
   }, [activeTPSL, activeEntryTitle])
@@ -533,14 +723,52 @@ export function ChartOrderOverlay({
     }
   }, [chartRef, updateOverlayPositions])
 
+  // Keep overlay labels glued to their price lines during autoscale/data updates.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const sync = () => {
+      if (!entryLineRef.current && !tpLineRef.current && !slLineRef.current) return
+      updateOverlayPositions()
+    }
+
+    const intervalId = window.setInterval(sync, 100)
+    container.addEventListener('wheel', sync, { passive: true })
+    container.addEventListener('mousemove', sync)
+    window.addEventListener('resize', sync)
+
+    return () => {
+      window.clearInterval(intervalId)
+      container.removeEventListener('wheel', sync)
+      container.removeEventListener('mousemove', sync)
+      window.removeEventListener('resize', sync)
+    }
+  }, [containerRef, updateOverlayPositions])
+
+  // Guard against stale pending lines after an order/position is fully cleared.
+  useEffect(() => {
+    if (activeTPSL || activeTrigger) return
+    if (pendingEntryAction != null) return
+    if (limitPrice == null && !entryLineRef.current && !tpLineRef.current && !slLineRef.current) return
+
+    removeLine(entryLineRef, entryLineSeriesRef)
+    removeLine(tpLineRef, tpLineSeriesRef)
+    removeLine(slLineRef, slLineSeriesRef)
+    setEntryOverlay(null)
+    setTpOverlay(null)
+    setSlOverlay(null)
+    setLimitPrice(null)
+  }, [activeTPSL, activeTrigger, pendingEntryAction, limitPrice, removeLine, setLimitPrice])
+
   // Cleanup on symbol changes.
   useEffect(() => {
     void symbol
     return () => {
-      removeLine(trackingLineRef)
-      removeLine(entryLineRef)
-      removeLine(tpLineRef)
-      removeLine(slLineRef)
+      removeLine(trackingLineRef, trackingLineSeriesRef)
+      removeLine(entryLineRef, entryLineSeriesRef)
+      removeLine(tpLineRef, tpLineSeriesRef)
+      removeLine(slLineRef, slLineSeriesRef)
       setEntryOverlay(null)
       setTpOverlay(null)
       setSlOverlay(null)
@@ -552,10 +780,10 @@ export function ChartOrderOverlay({
     if (orderType !== 'MARKET') return
     if (activeTPSL || activeTrigger) return
 
-    removeLine(trackingLineRef)
-    removeLine(entryLineRef)
-    removeLine(tpLineRef)
-    removeLine(slLineRef)
+    removeLine(trackingLineRef, trackingLineSeriesRef)
+    removeLine(entryLineRef, entryLineSeriesRef)
+    removeLine(tpLineRef, tpLineSeriesRef)
+    removeLine(slLineRef, slLineSeriesRef)
     setEntryOverlay(null)
     setTpOverlay(null)
     setSlOverlay(null)
@@ -612,7 +840,10 @@ export function ChartOrderOverlay({
           title = `SL @ ${rounded.toFixed(2)}`
         }
 
-        movingRef.current.applyOptions({ price: rounded, title })
+        movingRef.current.applyOptions({
+          price: rounded,
+          title: SHOW_NATIVE_LINE_TITLES ? title : '',
+        })
 
         // Keep TP/SL lines and labels visually in sync while entry is being dragged.
         if (drag.type === 'entry') {
@@ -637,12 +868,18 @@ export function ChartOrderOverlay({
 
           if (sourceTpPoints > 0 && tpLineRef.current) {
             const tpPrice = roundToTick(rounded + (sourceAction === 'BUY' ? sourceTpPoints : -sourceTpPoints))
-            tpLineRef.current.applyOptions({ price: tpPrice, title: `TP @ ${tpPrice.toFixed(2)}` })
+            tpLineRef.current.applyOptions({
+              price: tpPrice,
+              title: SHOW_NATIVE_LINE_TITLES ? `TP @ ${tpPrice.toFixed(2)}` : '',
+            })
           }
 
           if (sourceSlPoints > 0 && slLineRef.current) {
             const slPrice = roundToTick(rounded + (sourceAction === 'BUY' ? -sourceSlPoints : sourceSlPoints))
-            slLineRef.current.applyOptions({ price: slPrice, title: `SL @ ${slPrice.toFixed(2)}` })
+            slLineRef.current.applyOptions({
+              price: slPrice,
+              title: SHOW_NATIVE_LINE_TITLES ? `SL @ ${slPrice.toFixed(2)}` : '',
+            })
           }
         }
 
@@ -744,9 +981,9 @@ export function ChartOrderOverlay({
   )
 
   const handleRemoveEntry = useCallback(() => {
-    removeLine(entryLineRef)
-    removeLine(tpLineRef)
-    removeLine(slLineRef)
+    removeLine(entryLineRef, entryLineSeriesRef)
+    removeLine(tpLineRef, tpLineSeriesRef)
+    removeLine(slLineRef, slLineSeriesRef)
     setEntryOverlay(null)
     setTpOverlay(null)
     setSlOverlay(null)
@@ -773,7 +1010,8 @@ export function ChartOrderOverlay({
   const handleRemoveOverlay = useCallback(
     (type: 'tp' | 'sl') => {
       const lineRef = type === 'tp' ? tpLineRef : slLineRef
-      removeLine(lineRef)
+      const lineSeriesRef = type === 'tp' ? tpLineSeriesRef : slLineSeriesRef
+      removeLine(lineRef, lineSeriesRef)
       if (type === 'tp') setTpOverlay(null)
       else setSlOverlay(null)
 
@@ -821,9 +1059,9 @@ export function ChartOrderOverlay({
       }
 
       removeVirtualTPSL(activeTPSL.id)
-      removeLine(entryLineRef)
-      removeLine(tpLineRef)
-      removeLine(slLineRef)
+      removeLine(entryLineRef, entryLineSeriesRef)
+      removeLine(tpLineRef, tpLineSeriesRef)
+      removeLine(slLineRef, slLineSeriesRef)
       setEntryOverlay(null)
       setTpOverlay(null)
       setSlOverlay(null)

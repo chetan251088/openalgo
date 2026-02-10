@@ -34,10 +34,14 @@ export default function ScalpingDashboard() {
   const product = useScalpingStore((s) => s.product)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
+  const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
+  const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
   const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
   const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
+  const clearVirtualOrders = useVirtualOrderStore((s) => s.clearAll)
+  const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const clearTriggerOrders = useVirtualOrderStore((s) => s.clearTriggerOrders)
   const imbalanceFilterEnabled = useAutoTradeStore((s) => s.config.imbalanceFilterEnabled)
   const updateRiskState = useAutoTradeStore((s) => s.updateRiskState)
@@ -67,31 +71,43 @@ export default function ScalpingDashboard() {
     async (side: 'CE' | 'PE', symbol: string) => {
       if (paperMode) {
         console.log(`[Paper] Close ${side} ${symbol}`)
+        clearVirtualForSymbol(symbol)
+        setLimitPrice(null)
+        setPendingEntryAction(null)
         return
       }
       try {
         await tradingApi.closePosition(symbol, optionExchange, product)
         console.log(`[Scalping] Closed ${side} ${symbol}`)
+        clearVirtualForSymbol(symbol)
+        setLimitPrice(null)
+        setPendingEntryAction(null)
       } catch (err) {
         console.error('[Scalping] Close failed:', err)
       }
     },
-    [paperMode, optionExchange, product]
+    [paperMode, optionExchange, product, clearVirtualForSymbol, setLimitPrice, setPendingEntryAction]
   )
 
   // Close all positions
   const handleCloseAll = useCallback(async () => {
     if (paperMode) {
       console.log('[Paper] Close all positions')
+      clearVirtualOrders()
+      setLimitPrice(null)
+      setPendingEntryAction(null)
       return
     }
     try {
       await tradingApi.closeAllPositions()
       console.log('[Scalping] Closed all positions')
+      clearVirtualOrders()
+      setLimitPrice(null)
+      setPendingEntryAction(null)
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
     }
-  }, [paperMode])
+  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction])
 
   // Reversal: close current position, enter opposite direction
   const handleReversal = useCallback(

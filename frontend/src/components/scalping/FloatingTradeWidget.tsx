@@ -37,6 +37,7 @@ export function FloatingTradeWidget() {
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
   const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
   const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
+  const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
@@ -343,6 +344,9 @@ export function FloatingTradeWidget() {
     if (!symbol) return
     if (paperMode) {
       console.log(`[Paper] Close ${activeSide} ${symbol}`)
+      clearVirtualForSymbol(symbol)
+      setLimitPrice(null)
+      setPendingEntryAction(null)
       return
     }
 
@@ -367,13 +371,28 @@ export function FloatingTradeWidget() {
       const res = await tradingApi.placeOrder(order)
       if (res.status === 'success') {
         console.log(`[Scalping] Closed ${activeSide} ${symbol} id=${res.data?.orderid}`)
+        clearVirtualForSymbol(symbol)
+        setLimitPrice(null)
+        setPendingEntryAction(null)
       } else {
         console.error('[Scalping] Close rejected:', res)
       }
     } catch (err) {
       console.error('[Scalping] Close failed:', err)
     }
-  }, [symbol, activeSide, quantity, lotSize, optionExchange, product, paperMode, ensureApiKey])
+  }, [
+    symbol,
+    activeSide,
+    quantity,
+    lotSize,
+    optionExchange,
+    product,
+    paperMode,
+    ensureApiKey,
+    clearVirtualForSymbol,
+    setLimitPrice,
+    setPendingEntryAction,
+  ])
 
   if (!showFloatingWidget || !symbol) return null
 
