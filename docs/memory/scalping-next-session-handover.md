@@ -1,7 +1,7 @@
 # Scalping Next-Session Handover
 
 Date: 2026-02-10
-Commit baseline: `5e401de6` on `main`
+Commit baseline: `63f5d091` on `main`
 
 ## Current State
 
@@ -12,6 +12,52 @@ Commit baseline: `5e401de6` on `main`
    - `ghost`: signal + popup only
    - `execute`: signal + popup + auto execution
 5. Frontend build passed after these changes.
+
+## Safe Upstream Merge Setup (Already Prepared)
+
+Use `scripts/safe-merge-upstream.ps1` for future upstream syncs. It was added to protect local work while merging `upstream/main`.
+
+What this script does:
+
+1. Requires clean git state before merge (prevents accidental overwrite).
+2. Ensures `upstream` remote is set to `https://github.com/marketcalls/openalgo.git`.
+3. Fetches both `origin` and `upstream`.
+4. Creates and pushes a timestamped backup branch:
+   - `backup/main-pre-upstream-YYYYMMDD-HHMMSS`
+5. Merges `upstream/main` into current `main` with conflict handling.
+6. Auto-resolves generated-file conflicts by preferring local side for:
+   - `frontend/dist/*`
+   - `static/css/main.css`
+7. Optionally rebuilds frontend dist and commits updated bundles.
+
+Recommended usage:
+
+1. `pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -BuildFrontendDist`
+2. If many non-critical conflicts and local should win:
+   - `pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -PreferOursOnRemainingConflicts -BuildFrontendDist`
+
+Recovery path if merge goes wrong:
+
+1. Checkout pushed backup branch and compare.
+2. Cherry-pick or re-merge needed commits from backup.
+
+## Frontend Merge Conflict Rules (Important)
+
+When upstream and local both changed frontend:
+
+1. Resolve conflicts in source files first (`frontend/src/**`, APIs, hooks, stores, components).
+2. Do not hand-edit hashed bundle conflicts in `frontend/dist/assets/*`.
+3. After source conflict resolution, regenerate dist with:
+   - `cd frontend`
+   - `npm run build`
+4. Stage refreshed `frontend/dist` outputs as a whole.
+5. Re-test core routes (`/scalping`, `/tools`, `/positions`) before push.
+
+Why this matters:
+
+1. `dist` filenames are hash-based and change across builds.
+2. Manual conflict edits in built files often break route chunk loading.
+3. Source-first + rebuild keeps upstream features while preserving local logic.
 
 ## Known Broker Difference (Important)
 
