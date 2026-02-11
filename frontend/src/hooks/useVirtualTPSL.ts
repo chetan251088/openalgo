@@ -5,7 +5,11 @@ import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
 import { telegramApi } from '@/api/telegram'
-import { buildVirtualPosition } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveFilledOrderPrice,
+} from '@/lib/scalpingVirtualPosition'
 import { optionsEarlyExitCheck } from '@/lib/autoTradeEngine'
 import type { PlaceOrderRequest } from '@/types/trading'
 import type { MarketData } from '@/lib/MarketDataManager'
@@ -22,9 +26,7 @@ export function useVirtualTPSL(
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
   const paperMode = useScalpingStore((s) => s.paperMode)
-  const optionExchange = useScalpingStore((s) => s.optionExchange)
   const product = useScalpingStore((s) => s.product)
-  const lotSize = useScalpingStore((s) => s.lotSize)
   const addSessionPnl = useScalpingStore((s) => s.addSessionPnl)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
@@ -36,23 +38,18 @@ export function useVirtualTPSL(
 
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
+  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
 
   // Use refs for hot-path data to avoid stale closures
   const apiKeyRef = useRef(apiKey)
   const paperModeRef = useRef(paperMode)
-  const exchangeRef = useRef(optionExchange)
   const productRef = useRef(product)
-  const lotSizeRef = useRef(lotSize)
 
   useEffect(() => { apiKeyRef.current = apiKey }, [apiKey])
   useEffect(() => { paperModeRef.current = paperMode }, [paperMode])
-  useEffect(() => { exchangeRef.current = optionExchange }, [optionExchange])
   useEffect(() => { productRef.current = product }, [product])
-  useEffect(() => { lotSizeRef.current = lotSize }, [lotSize])
 
   // Track which orders are currently being executed (prevent double-fire)
   const executingRef = useRef<Set<string>>(new Set())
@@ -75,7 +72,7 @@ export function useVirtualTPSL(
   }, [setApiKey])
 
   const fireCloseOrder = useCallback(
-    async (symbol: string, qty: number, action: 'BUY' | 'SELL', reason: string) => {
+    async (symbol: string, exchange: string, qty: number, action: 'BUY' | 'SELL', reason: string) => {
       // Close = opposite action
       const closeAction = action === 'BUY' ? 'SELL' : 'BUY'
 
@@ -90,7 +87,7 @@ export function useVirtualTPSL(
       const order: PlaceOrderRequest = {
         apikey: key,
         strategy: 'Scalping',
-        exchange: exchangeRef.current,
+        exchange,
         symbol,
         action: closeAction,
         quantity: qty,
@@ -104,11 +101,21 @@ export function useVirtualTPSL(
       try {
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
-          console.log(`[Scalping TP/SL] ${reason}: ${closeAction} ${symbol} id=${res.data?.orderid}`)
+          const brokerOrderId = extractOrderId(res)
+          console.log(`[Scalping TP/SL] ${reason}: ${closeAction} ${symbol} id=${brokerOrderId ?? 'n/a'}`)
           return true
         }
       } catch (err) {
         console.error(`[Scalping TP/SL] ${reason} order failed:`, err)
+      }
+      try {
+        const closeRes = await tradingApi.closePosition(symbol, exchange, productRef.current)
+        if (closeRes.status === 'success') {
+          console.log(`[Scalping TP/SL] ${reason}: closePosition fallback ${symbol}`)
+          return true
+        }
+      } catch (err) {
+        console.error(`[Scalping TP/SL] ${reason} closePosition fallback failed:`, err)
       }
       return false
     },
@@ -116,19 +123,24 @@ export function useVirtualTPSL(
   )
 
   const fireTriggerEntry = useCallback(
-    async (symbol: string, qty: number, action: 'BUY' | 'SELL') => {
+    async (
+      symbol: string,
+      exchange: string,
+      qty: number,
+      action: 'BUY' | 'SELL'
+    ): Promise<{ ok: boolean; orderId: string | null }> => {
       if (paperModeRef.current) {
         console.log(`[Paper Trigger] Entry: ${action} ${symbol} qty=${qty}`)
-        return true
+        return { ok: true, orderId: null }
       }
 
       const key = await ensureApiKey()
-      if (!key) return false
+      if (!key) return { ok: false, orderId: null }
 
       const order: PlaceOrderRequest = {
         apikey: key,
         strategy: 'Scalping',
-        exchange: exchangeRef.current,
+        exchange,
         symbol,
         action,
         quantity: qty,
@@ -142,13 +154,14 @@ export function useVirtualTPSL(
       try {
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
-          console.log(`[Scalping Trigger] Entry: ${action} ${symbol} id=${res.data?.orderid}`)
-          return true
+          const brokerOrderId = extractOrderId(res)
+          console.log(`[Scalping Trigger] Entry: ${action} ${symbol} id=${brokerOrderId ?? 'n/a'}`)
+          return { ok: true, orderId: brokerOrderId }
         }
       } catch (err) {
         console.error('[Scalping Trigger] Entry failed:', err)
       }
-      return false
+      return { ok: false, orderId: null }
     },
     [ensureApiKey]
   )
@@ -164,7 +177,7 @@ export function useVirtualTPSL(
         ? (ltp - order.entryPrice) * order.quantity
         : (order.entryPrice - ltp) * order.quantity
 
-      fireCloseOrder(order.symbol, order.quantity, order.action, `${reason} at ${ltp}`).then(
+      fireCloseOrder(order.symbol, order.exchange, order.quantity, order.action, `${reason} at ${ltp}`).then(
         (ok) => {
           if (ok) {
             removeVirtualTPSL(order.id)
@@ -254,32 +267,47 @@ export function useVirtualTPSL(
       if (triggered) {
         executingRef.current.add(trigger.id)
 
-        fireTriggerEntry(trigger.symbol, trigger.quantity, trigger.action).then((ok) => {
-          if (ok) {
-            removeTriggerOrder(trigger.id)
-            incrementTradeCount()
+        fireTriggerEntry(trigger.symbol, trigger.exchange, trigger.quantity, trigger.action).then(
+          async ({ ok, orderId }) => {
+            try {
+              if (ok) {
+                removeTriggerOrder(trigger.id)
+                incrementTradeCount()
 
-            // Triggered MARKET entry should always create/update a virtual position line.
-            if (ltp > 0) {
-              const existingVirtual = getTPSLForSymbol(trigger.symbol)
-              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
-              setVirtualTPSL(
-                buildVirtualPosition({
-                  symbol: trigger.symbol,
-                  exchange: trigger.exchange,
-                  side: trigger.side,
-                  action: trigger.action,
-                  entryPrice: ltp,
-                  quantity: trigger.quantity,
-                  tpPoints: trigger.tpPoints,
-                  slPoints: trigger.slPoints,
-                  managedBy: 'trigger',
-                })
-              )
+                // Triggered MARKET entry should always create/update a virtual position line.
+                if (ltp > 0) {
+                  const key = apiKeyRef.current
+                  const entryPrice = paperModeRef.current
+                    ? ltp
+                    : await resolveFilledOrderPrice({
+                        symbol: trigger.symbol,
+                        exchange: trigger.exchange,
+                        orderId,
+                        preferredPrice: ltp,
+                        apiKey: key,
+                      })
+                  if (entryPrice > 0) {
+                    setVirtualTPSL(
+                      buildVirtualPosition({
+                        symbol: trigger.symbol,
+                        exchange: trigger.exchange,
+                        side: trigger.side,
+                        action: trigger.action,
+                        entryPrice,
+                        quantity: trigger.quantity,
+                        tpPoints: trigger.tpPoints,
+                        slPoints: trigger.slPoints,
+                        managedBy: 'trigger',
+                      })
+                    )
+                  }
+                }
+              }
+            } finally {
+              executingRef.current.delete(trigger.id)
             }
           }
-          executingRef.current.delete(trigger.id)
-        })
+        )
       }
     }
   }, [
@@ -288,10 +316,9 @@ export function useVirtualTPSL(
     triggerOrders,
     fireCloseOrder,
     fireTriggerEntry,
-    getTPSLForSymbol,
-    removeVirtualTPSL,
     removeTriggerOrder,
     setVirtualTPSL,
+    removeVirtualTPSL,
     addSessionPnl,
     incrementTradeCount,
     autoConfig,

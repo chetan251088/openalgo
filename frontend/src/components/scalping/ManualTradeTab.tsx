@@ -6,7 +6,12 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
-import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveFilledOrderPrice,
+  resolveEntryPrice,
+} from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
 
 export function ManualTradeTab() {
@@ -24,13 +29,14 @@ export function ManualTradeTab() {
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
+  const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
+  const setPendingLimitPlacement = useScalpingStore((s) => s.setPendingLimitPlacement)
+  const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const paperMode = useScalpingStore((s) => s.paperMode)
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
   const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const clearVirtualOrders = useVirtualOrderStore((s) => s.clearAll)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
@@ -82,6 +88,7 @@ export function ManualTradeTab() {
         if (existingTrigger) {
           removeTriggerOrder(existingTrigger.id)
         }
+        clearPendingLimitPlacement()
         setLimitPrice(null)
         setPendingEntryAction(action)
         console.log(`[Scalping] TRIGGER armed (${action}) — click chart to place trigger line`)
@@ -92,6 +99,15 @@ export function ManualTradeTab() {
       if (orderType === 'LIMIT' && !limitPrice) {
         setPendingEntryAction(action)
         console.log(`[Scalping] LIMIT armed (${action}) — click chart to set limit line`)
+        return
+      }
+      if (
+        orderType === 'LIMIT' &&
+        pendingLimitPlacement &&
+        pendingLimitPlacement.symbol === activeSymbol &&
+        pendingLimitPlacement.side === activeSide
+      ) {
+        console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
         return
       }
 
@@ -106,8 +122,6 @@ export function ManualTradeTab() {
             preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
           })
           if (entryPrice > 0) {
-            const existingVirtual = getTPSLForSymbol(activeSymbol)
-            if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
             setVirtualTPSL(
               buildVirtualPosition({
                 symbol: activeSymbol,
@@ -118,13 +132,15 @@ export function ManualTradeTab() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
-                })
-              )
-              if (orderType === 'LIMIT') {
-                setLimitPrice(null)
-              }
+                managedBy: 'manual',
+              })
+            )
+            if (orderType === 'LIMIT') {
+              setLimitPrice(null)
+            }
           }
         }
+        clearPendingLimitPlacement()
         incrementTradeCount()
         return
       }
@@ -153,23 +169,42 @@ export function ManualTradeTab() {
         console.log(`[Scalping] Placing ${action} ${activeSymbol} qty=${quantity * lotSize} ${pricetype}`)
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
+          const brokerOrderId = extractOrderId(res)
           console.log(
-            `[Scalping] Order placed: ${action} ${activeSymbol} id=${res.data?.orderid}`
+            `[Scalping] Order placed: ${action} ${activeSymbol} id=${brokerOrderId ?? 'n/a'}`
           )
           setPendingEntryAction(null)
+
+          if (pricetype === 'LIMIT') {
+            if (limitPrice == null) {
+              console.warn('[Scalping] LIMIT order acknowledged without a tracked limitPrice; keeping existing line state.')
+            }
+            setPendingLimitPlacement({
+              symbol: activeSymbol,
+              side: activeSide,
+              action,
+              orderId: brokerOrderId,
+              quantity: quantity * lotSize,
+              entryPrice: limitPrice ?? 0,
+              tpPoints,
+              slPoints,
+            })
+            if (limitPrice != null) setLimitPrice(limitPrice)
+            return
+          }
+
+          clearPendingLimitPlacement()
           incrementTradeCount()
 
-          // Market and limit entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
-            const entryPrice = await resolveEntryPrice({
+          if (pricetype === 'MARKET') {
+            const entryPrice = await resolveFilledOrderPrice({
               symbol: activeSymbol,
               exchange: optionExchange,
-              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
+              orderId: brokerOrderId,
+              preferredPrice: undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
-              const existingVirtual = getTPSLForSymbol(activeSymbol)
-              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
               setVirtualTPSL(
                 buildVirtualPosition({
                   symbol: activeSymbol,
@@ -180,11 +215,9 @@ export function ManualTradeTab() {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  managedBy: 'manual',
                 })
               )
-              if (pricetype === 'LIMIT') {
-                setLimitPrice(null)
-              }
             }
           }
         } else {
@@ -203,13 +236,15 @@ export function ManualTradeTab() {
       product,
       orderType,
       limitPrice,
+      pendingLimitPlacement,
       tpPoints,
       slPoints,
       paperMode,
-      getTPSLForSymbol,
-      removeVirtualTPSL,
+      clearVirtualForSymbol,
       triggerOrders,
       ensureApiKey,
+      setPendingLimitPlacement,
+      clearPendingLimitPlacement,
       incrementTradeCount,
       setVirtualTPSL,
       removeTriggerOrder,
@@ -226,33 +261,18 @@ export function ManualTradeTab() {
       clearVirtualForSymbol(activeSymbol)
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
       return
     }
 
-    const key = await ensureApiKey()
-    if (!key) return
-
     try {
-      // Close by placing opposite MARKET order (matches old chart_window.html approach)
-      const order: PlaceOrderRequest = {
-        apikey: key,
-        strategy: 'Scalping',
-        exchange: optionExchange,
-        symbol: activeSymbol,
-        action: 'SELL',
-        quantity: quantity * lotSize,
-        pricetype: 'MARKET',
-        product,
-        price: 0,
-        trigger_price: 0,
-        disclosed_quantity: 0,
-      }
-      const res = await tradingApi.placeOrder(order)
+      const res = await tradingApi.closePosition(activeSymbol, optionExchange, product)
       if (res.status === 'success') {
-        console.log(`[Scalping] Closed ${activeSide} ${activeSymbol} id=${res.data?.orderid}`)
+        console.log(`[Scalping] Closed ${activeSide} ${activeSymbol}`)
         clearVirtualForSymbol(activeSymbol)
         setLimitPrice(null)
         setPendingEntryAction(null)
+        clearPendingLimitPlacement()
       } else {
         console.error('[Scalping] Close rejected:', res)
       }
@@ -262,15 +282,13 @@ export function ManualTradeTab() {
   }, [
     activeSymbol,
     activeSide,
-    quantity,
-    lotSize,
     optionExchange,
     product,
     paperMode,
-    ensureApiKey,
     clearVirtualForSymbol,
     setLimitPrice,
     setPendingEntryAction,
+    clearPendingLimitPlacement,
   ])
 
   const closeAll = useCallback(async () => {
@@ -279,6 +297,7 @@ export function ManualTradeTab() {
       clearVirtualOrders()
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
       return
     }
     try {
@@ -287,10 +306,11 @@ export function ManualTradeTab() {
       clearVirtualOrders()
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
     }
-  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction])
+  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 
   return (
     <div className="p-3 space-y-4">

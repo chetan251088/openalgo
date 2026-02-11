@@ -3,7 +3,12 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
-import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveFilledOrderPrice,
+  resolveEntryPrice,
+} from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
 
 interface UseScalpingHotkeysOptions {
@@ -32,15 +37,16 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const product = useScalpingStore((s) => s.product)
   const orderType = useScalpingStore((s) => s.orderType)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
+  const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
+  const setPendingLimitPlacement = useScalpingStore((s) => s.setPendingLimitPlacement)
+  const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
   const paperMode = useScalpingStore((s) => s.paperMode)
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
@@ -88,6 +94,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         if (existingTrigger) {
           removeTriggerOrder(existingTrigger.id)
         }
+        clearPendingLimitPlacement()
         setLimitPrice(null)
         setPendingEntryAction(action)
         console.log(`[Scalping] TRIGGER armed (${action}) — click chart to place trigger line`)
@@ -100,6 +107,15 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         console.log(`[Scalping] LIMIT armed (${action}) — click chart to set limit line`)
         return
       }
+      if (
+        orderType === 'LIMIT' &&
+        pendingLimitPlacement &&
+        pendingLimitPlacement.symbol === symbol &&
+        pendingLimitPlacement.side === activeSide
+      ) {
+        console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
+        return
+      }
 
       if (paperMode) {
         console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
@@ -110,8 +126,6 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
             preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
           })
           if (entryPrice > 0) {
-            const existingVirtual = getTPSLForSymbol(symbol)
-            if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
             setVirtualTPSL(
               buildVirtualPosition({
                 symbol,
@@ -121,14 +135,16 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 entryPrice,
                 quantity: quantity * lotSize,
                 tpPoints,
-                  slPoints,
-                })
+                slPoints,
+                managedBy: 'hotkey',
+              })
               )
-              if (orderType === 'LIMIT') {
-                setLimitPrice(null)
-              }
+            if (orderType === 'LIMIT') {
+              setLimitPrice(null)
+            }
           }
         }
+        clearPendingLimitPlacement()
         return
       }
 
@@ -156,20 +172,39 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         console.log(`[Scalping] Placing ${action} ${symbol} qty=${quantity * lotSize} ${pricetype}`)
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
-          console.log(`[Scalping] Order placed: ${action} ${symbol} id=${res.data?.orderid}`)
+          const brokerOrderId = extractOrderId(res)
+          console.log(`[Scalping] Order placed: ${action} ${symbol} id=${brokerOrderId ?? 'n/a'}`)
           setPendingEntryAction(null)
 
-          // Market and limit entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
-            const entryPrice = await resolveEntryPrice({
+          if (pricetype === 'LIMIT') {
+            if (limitPrice == null) {
+              console.warn('[Scalping] LIMIT order acknowledged without a tracked limitPrice; keeping existing line state.')
+            }
+            setPendingLimitPlacement({
+              symbol,
+              side: activeSide,
+              action,
+              orderId: brokerOrderId,
+              quantity: quantity * lotSize,
+              entryPrice: limitPrice ?? 0,
+              tpPoints,
+              slPoints,
+            })
+            if (limitPrice != null) setLimitPrice(limitPrice)
+            return
+          }
+
+          clearPendingLimitPlacement()
+
+          if (pricetype === 'MARKET') {
+            const entryPrice = await resolveFilledOrderPrice({
               symbol,
               exchange: optionExchange,
-              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
+              orderId: brokerOrderId,
+              preferredPrice: undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
-              const existingVirtual = getTPSLForSymbol(symbol)
-              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
               setVirtualTPSL(
                 buildVirtualPosition({
                   symbol,
@@ -180,11 +215,9 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  managedBy: 'hotkey',
                 })
               )
-              if (pricetype === 'LIMIT') {
-                setLimitPrice(null)
-              }
             }
           }
         } else {
@@ -203,13 +236,14 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       product,
       orderType,
       limitPrice,
+      pendingLimitPlacement,
       tpPoints,
       slPoints,
       paperMode,
-      getTPSLForSymbol,
-      removeVirtualTPSL,
       triggerOrders,
       ensureApiKey,
+      setPendingLimitPlacement,
+      clearPendingLimitPlacement,
       setVirtualTPSL,
       removeTriggerOrder,
       setLimitPrice,

@@ -11,13 +11,18 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { MarketDataManager } from '@/lib/MarketDataManager'
-import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveEntryPrice,
+} from '@/lib/scalpingVirtualPosition'
 import { cn } from '@/lib/utils'
 import type { ActiveSide, OrderAction, TriggerOrder } from '@/types/scalping'
 import type { PlaceOrderRequest } from '@/types/trading'
 
 const TICK_SIZE = 0.05
 const SHOW_NATIVE_LINE_TITLES = false
+const LIMIT_MODIFY_THROTTLE_MS = 150
 
 function roundToTick(price: number): number {
   return Math.round(price / TICK_SIZE) * TICK_SIZE
@@ -70,6 +75,7 @@ export function ChartOrderOverlay({
   const slPoints = useScalpingStore((s) => s.slPoints)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingEntryAction = useScalpingStore((s) => s.pendingEntryAction)
+  const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
   const optionExchange = useScalpingStore((s) => s.optionExchange)
@@ -80,6 +86,8 @@ export function ChartOrderOverlay({
   const setTpPoints = useScalpingStore((s) => s.setTpPoints)
   const setSlPoints = useScalpingStore((s) => s.setSlPoints)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
+  const setPendingLimitPlacement = useScalpingStore((s) => s.setPendingLimitPlacement)
+  const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
 
   const symbol = useScalpingStore((s) =>
     side === 'CE' ? s.selectedCESymbol : s.selectedPESymbol
@@ -91,9 +99,8 @@ export function ChartOrderOverlay({
   const updateTriggerOrder = useVirtualOrderStore((s) => s.updateTriggerOrder)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
+  const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const updateVirtualTPSL = useVirtualOrderStore((s) => s.updateVirtualTPSL)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
 
   const trackingLineRef = useRef<IPriceLine | null>(null)
   const entryLineRef = useRef<IPriceLine | null>(null)
@@ -110,6 +117,17 @@ export function ChartOrderOverlay({
   const [liveLtp, setLiveLtp] = useState<number | null>(null)
   const [isClosingPosition, setIsClosingPosition] = useState(false)
   const placingLimitRef = useRef(false)
+  const limitModifyInFlightRef = useRef(false)
+  const limitModifyLastSentAtRef = useRef(0)
+  const limitModifyTimerRef = useRef<number | null>(null)
+  const limitModifyQueuedRef = useRef<{
+    orderId: string
+    symbol: string
+    action: OrderAction
+    quantity: number
+    price: number
+    force: boolean
+  } | null>(null)
 
   const dragRef = useRef<{
     type: DragType
@@ -119,25 +137,40 @@ export function ChartOrderOverlay({
   const isActive = activeSide === side
   const isLimitOrTrigger = orderType === 'LIMIT' || orderType === 'TRIGGER'
 
-  const activeTPSL = useMemo(
-    () => (symbol ? Object.values(virtualTPSL).find((o) => o.symbol === symbol) : undefined),
+  const symbolVirtualOrders = useMemo(
+    () =>
+      symbol
+        ? Object.values(virtualTPSL)
+            .filter((o) => o.symbol === symbol)
+            .sort((a, b) => b.createdAt - a.createdAt)
+        : [],
     [symbol, virtualTPSL]
   )
+
+  const activeTPSL = symbolVirtualOrders[0]
 
   const activeTrigger = useMemo(
     () => (symbol ? Object.values(triggerOrders).find((o) => o.symbol === symbol) : undefined),
     [symbol, triggerOrders]
   )
 
+  const hasPlacedLimitForSymbol =
+    !!pendingLimitPlacement &&
+    pendingLimitPlacement.symbol === symbol &&
+    pendingLimitPlacement.side === side
+
+  const hasPendingLineForSymbol = hasPlacedLimitForSymbol || limitPrice != null
+
   const currentSource: DragSource | null = activeTPSL
     ? 'position'
     : activeTrigger
       ? 'trigger'
-      : isActive && isLimitOrTrigger && limitPrice != null
+      : isActive && isLimitOrTrigger && hasPendingLineForSymbol
         ? 'pending'
         : null
 
-  const pendingAction: OrderAction = pendingEntryAction ?? 'BUY'
+  const pendingAction: OrderAction =
+    pendingEntryAction ?? pendingLimitPlacement?.action ?? 'BUY'
 
   // Keep a live LTP stream for active virtual positions to display real-time PnL.
   useEffect(() => {
@@ -171,13 +204,26 @@ export function ChartOrderOverlay({
     }
   }, [activeTPSL, liveLtp])
 
+  const symbolWeightedAvg = useMemo(() => {
+    if (symbolVirtualOrders.length === 0) return null
+    const totalQty = symbolVirtualOrders.reduce((sum, order) => sum + Math.max(order.quantity, 0), 0)
+    if (totalQty <= 0) return null
+    const weighted = symbolVirtualOrders.reduce(
+      (sum, order) => sum + order.entryPrice * Math.max(order.quantity, 0),
+      0
+    ) / totalQty
+    return roundToTick(weighted)
+  }, [symbolVirtualOrders])
+
   const activeEntryTitle = useMemo(() => {
     if (!activeTPSL) return ''
-    const base = `${activeTPSL.action} @ ${activeTPSL.entryPrice.toFixed(2)}`
+    const base = `${activeTPSL.action} Fill @ ${activeTPSL.entryPrice.toFixed(2)}`
+    const avgLabel =
+      symbolWeightedAvg != null ? ` | Avg ${symbolWeightedAvg.toFixed(2)}` : ''
     if (!livePnl) return base
     const pnlSign = livePnl.pnl >= 0 ? '+' : ''
-    return `${base} | PnL ${pnlSign}${livePnl.pnl.toFixed(2)}`
-  }, [activeTPSL, livePnl])
+    return `${base}${avgLabel} | PnL ${pnlSign}${livePnl.pnl.toFixed(2)}`
+  }, [activeTPSL, livePnl, symbolWeightedAvg])
 
   const removeLine = useCallback(
     (
@@ -277,15 +323,40 @@ export function ChartOrderOverlay({
     sync(slLineRef, setSlOverlay)
   }, [priceToY])
 
-  const getDirectionForPrice = useCallback(
-    (nextPrice: number): 'above' | 'below' => {
-      if (!symbol) return 'above'
-      const cached = MarketDataManager.getInstance().getCachedData(symbol, optionExchange)
-      const ltp = cached?.data?.ltp
-      if (!ltp || ltp <= 0) return 'above'
-      return nextPrice >= ltp ? 'above' : 'below'
+  const getCurrentLtp = useCallback((): number | null => {
+    if (!symbol) return null
+    const cached = MarketDataManager.getInstance().getCachedData(symbol, optionExchange)
+    const ltp = cached?.data?.ltp
+    if (!ltp || ltp <= 0) return null
+    return ltp
+  }, [symbol, optionExchange])
+
+  const getTriggerDirection = useCallback((action: OrderAction): 'above' | 'below' => {
+    return action === 'BUY' ? 'above' : 'below'
+  }, [])
+
+  const validateTriggerPrice = useCallback(
+    (action: OrderAction, triggerPrice: number): { ok: boolean; message?: string } => {
+      const ltp = getCurrentLtp()
+      if (!ltp) return { ok: true }
+
+      if (action === 'BUY' && triggerPrice <= ltp) {
+        return {
+          ok: false,
+          message: `BUY trigger must be above current price (${ltp.toFixed(2)})`,
+        }
+      }
+
+      if (action === 'SELL' && triggerPrice >= ltp) {
+        return {
+          ok: false,
+          message: `SELL trigger must be below current price (${ltp.toFixed(2)})`,
+        }
+      }
+
+      return { ok: true }
     },
-    [symbol, optionExchange]
+    [getCurrentLtp]
   )
 
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
@@ -304,6 +375,93 @@ export function ChartOrderOverlay({
     return null
   }, [apiKey, setApiKey])
 
+  const flushPendingLimitModify = useCallback(async () => {
+    if (limitModifyInFlightRef.current) return
+    const queued = limitModifyQueuedRef.current
+    if (!queued) return
+
+    const elapsed = Date.now() - limitModifyLastSentAtRef.current
+    const waitMs = queued.force ? 0 : Math.max(0, LIMIT_MODIFY_THROTTLE_MS - elapsed)
+    if (waitMs > 0) {
+      if (limitModifyTimerRef.current != null) return
+      limitModifyTimerRef.current = window.setTimeout(() => {
+        limitModifyTimerRef.current = null
+        void flushPendingLimitModify()
+      }, waitMs)
+      return
+    }
+
+    limitModifyQueuedRef.current = null
+    limitModifyInFlightRef.current = true
+    limitModifyLastSentAtRef.current = Date.now()
+
+    try {
+      const key = await ensureApiKey()
+      if (!key) return
+      await tradingApi.modifyOrder(queued.orderId, {
+        symbol: queued.symbol,
+        exchange: optionExchange,
+        action: queued.action,
+        product,
+        pricetype: 'LIMIT',
+        price: queued.price,
+        quantity: queued.quantity,
+        trigger_price: 0,
+        disclosed_quantity: 0,
+      })
+    } catch (err) {
+      console.error('[Scalping] Failed to modify pending LIMIT order:', err)
+    } finally {
+      limitModifyInFlightRef.current = false
+      if (limitModifyQueuedRef.current) {
+        void flushPendingLimitModify()
+      }
+    }
+  }, [ensureApiKey, optionExchange, product])
+
+  const queuePendingLimitModify = useCallback(
+    (
+      placement: {
+        orderId: string | null
+        symbol: string
+        action: OrderAction
+        quantity: number
+      },
+      nextPrice: number,
+      force = false
+    ) => {
+      if (paperMode || !placement.orderId) return
+
+      const normalized = roundToTick(nextPrice)
+      const prev = limitModifyQueuedRef.current
+      limitModifyQueuedRef.current = {
+        orderId: placement.orderId,
+        symbol: placement.symbol,
+        action: placement.action,
+        quantity: placement.quantity,
+        price: normalized,
+        force: force || !!prev?.force,
+      }
+
+      if (force && limitModifyTimerRef.current != null) {
+        window.clearTimeout(limitModifyTimerRef.current)
+        limitModifyTimerRef.current = null
+      }
+      void flushPendingLimitModify()
+    },
+    [paperMode, flushPendingLimitModify]
+  )
+
+  useEffect(
+    () => () => {
+      if (limitModifyTimerRef.current != null) {
+        window.clearTimeout(limitModifyTimerRef.current)
+        limitModifyTimerRef.current = null
+      }
+    },
+    []
+  )
+
   const placeLimitFromChart = useCallback(
     async (entryPrice: number, action: OrderAction): Promise<boolean> => {
       if (!symbol) return false
@@ -318,8 +476,6 @@ export function ChartOrderOverlay({
             preferredPrice: entryPrice,
           })
           if (resolvedEntry <= 0) return false
-          const existingVirtual = getTPSLForSymbol(symbol)
-          if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
           setVirtualTPSL(
             buildVirtualPosition({
               symbol,
@@ -330,9 +486,11 @@ export function ChartOrderOverlay({
               quantity: quantity * lotSize,
               tpPoints,
               slPoints,
+              managedBy: 'manual',
             })
           )
           incrementTradeCount()
+          clearPendingLimitPlacement()
           setPendingEntryAction(null)
           setLimitPrice(null)
           return true
@@ -360,32 +518,22 @@ export function ChartOrderOverlay({
           console.error('[Scalping] LIMIT order rejected:', res)
           return false
         }
+        const brokerOrderId = extractOrderId(res)
 
-        const resolvedEntry = await resolveEntryPrice({
+        // Live LIMIT: keep it pending on chart and attach virtual TP/SL only after broker fill
+        // is observed in positionbook reconciliation.
+        setPendingLimitPlacement({
           symbol,
-          exchange: optionExchange,
-          preferredPrice: entryPrice,
-          apiKey: key,
+          side,
+          action,
+          orderId: brokerOrderId,
+          quantity: quantity * lotSize,
+          entryPrice,
+          tpPoints,
+          slPoints,
         })
-        if (resolvedEntry > 0) {
-          const existingVirtual = getTPSLForSymbol(symbol)
-          if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
-          setVirtualTPSL(
-            buildVirtualPosition({
-              symbol,
-              exchange: optionExchange,
-              side,
-              action,
-              entryPrice: resolvedEntry,
-              quantity: quantity * lotSize,
-              tpPoints,
-              slPoints,
-            })
-          )
-        }
-        incrementTradeCount()
         setPendingEntryAction(null)
-        setLimitPrice(null)
+        setLimitPrice(entryPrice)
         return true
       } catch (err) {
         console.error('[Scalping] LIMIT order failed:', err)
@@ -405,12 +553,12 @@ export function ChartOrderOverlay({
       slPoints,
       product,
       ensureApiKey,
-      getTPSLForSymbol,
-      removeVirtualTPSL,
       setVirtualTPSL,
       incrementTradeCount,
+      clearPendingLimitPlacement,
       setPendingEntryAction,
       setLimitPrice,
+      setPendingLimitPlacement,
     ]
   )
 
@@ -425,6 +573,7 @@ export function ChartOrderOverlay({
       isLimitOrTrigger &&
       !activeTPSL &&
       !activeTrigger &&
+      !hasPlacedLimitForSymbol &&
       limitPrice == null
 
     if (!showTracking) {
@@ -466,6 +615,7 @@ export function ChartOrderOverlay({
     isLimitOrTrigger,
     activeTPSL,
     activeTrigger,
+    hasPlacedLimitForSymbol,
     limitPrice,
     removeLine,
     upsertLine,
@@ -491,7 +641,13 @@ export function ChartOrderOverlay({
           return
         }
 
-        const direction = getDirectionForPrice(rounded)
+        const validation = validateTriggerPrice(action, rounded)
+        if (!validation.ok) {
+          console.warn(`[Scalping] ${validation.message}`)
+          return
+        }
+
+        const direction = getTriggerDirection(action)
         if (activeTrigger) {
           updateTriggerOrder(activeTrigger.id, {
             triggerPrice: rounded,
@@ -521,6 +677,10 @@ export function ChartOrderOverlay({
         setPendingEntryAction(null)
       } else {
         // LIMIT
+        if (hasPlacedLimitForSymbol) {
+          console.warn('[Scalping] LIMIT already placed for this symbol. Cancel/close it before placing another.')
+          return
+        }
         if (!pendingEntryAction) {
           console.warn('[Scalping] Select BUY/SELL first, then click chart to place LIMIT line')
           return
@@ -546,9 +706,9 @@ export function ChartOrderOverlay({
     isLimitOrTrigger,
     orderType,
     pendingEntryAction,
-    limitPrice,
     activeTPSL,
     activeTrigger,
+    hasPlacedLimitForSymbol,
     quantity,
     lotSize,
     tpPoints,
@@ -558,11 +718,12 @@ export function ChartOrderOverlay({
     addTriggerOrder,
     updateTriggerOrder,
     setLimitPrice,
-    setPendingEntryAction,
-    getDirectionForPrice,
-    placeLimitFromChart,
-    removeLine,
-    updateOverlayPositions,
+      setPendingEntryAction,
+      getTriggerDirection,
+      validateTriggerPrice,
+      placeLimitFromChart,
+      removeLine,
+      updateOverlayPositions,
   ])
 
   // Main line drawing sync.
@@ -651,9 +812,22 @@ export function ChartOrderOverlay({
       return
     }
 
-    if (isActive && isLimitOrTrigger && limitPrice != null) {
+    if (isActive && isLimitOrTrigger && hasPendingLineForSymbol) {
       const action = pendingAction
-      const entry = roundToTick(limitPrice)
+      const pendingTpPoints = hasPlacedLimitForSymbol
+        ? (pendingLimitPlacement?.tpPoints ?? tpPoints)
+        : tpPoints
+      const pendingSlPoints = hasPlacedLimitForSymbol
+        ? (pendingLimitPlacement?.slPoints ?? slPoints)
+        : slPoints
+      const pendingEntryPrice = hasPlacedLimitForSymbol
+        ? (pendingLimitPlacement?.entryPrice ?? limitPrice)
+        : limitPrice
+      if (pendingEntryPrice == null) {
+        clearEntrySet()
+        return
+      }
+      const entry = roundToTick(pendingEntryPrice)
       const lineColor = orderType === 'LIMIT' ? '#06b6d4' : '#ffa500'
       upsertLine(
         entryLineRef,
@@ -665,15 +839,15 @@ export function ChartOrderOverlay({
         `${orderType} ${action} @ ${entry.toFixed(2)}`
       )
 
-      if (tpPoints > 0) {
-        const tp = roundToTick(entry + (action === 'BUY' ? tpPoints : -tpPoints))
+      if (pendingTpPoints > 0) {
+        const tp = roundToTick(entry + (action === 'BUY' ? pendingTpPoints : -pendingTpPoints))
         upsertLine(tpLineRef, tpLineSeriesRef, tp, '#00ff88', LineStyle.Dashed, 1, `TP @ ${tp.toFixed(2)}`)
       } else {
         removeLine(tpLineRef, tpLineSeriesRef)
       }
 
-      if (slPoints > 0) {
-        const sl = roundToTick(entry + (action === 'BUY' ? -slPoints : slPoints))
+      if (pendingSlPoints > 0) {
+        const sl = roundToTick(entry + (action === 'BUY' ? -pendingSlPoints : pendingSlPoints))
         upsertLine(slLineRef, slLineSeriesRef, sl, '#ff4560', LineStyle.Dashed, 1, `SL @ ${sl.toFixed(2)}`)
       } else {
         removeLine(slLineRef, slLineSeriesRef)
@@ -690,8 +864,11 @@ export function ChartOrderOverlay({
     activeTrigger,
     isActive,
     isLimitOrTrigger,
+    hasPendingLineForSymbol,
     limitPrice,
     pendingAction,
+    pendingLimitPlacement,
+    hasPlacedLimitForSymbol,
     orderType,
     tpPoints,
     slPoints,
@@ -749,6 +926,7 @@ export function ChartOrderOverlay({
   // Guard against stale pending lines after an order/position is fully cleared.
   useEffect(() => {
     if (activeTPSL || activeTrigger) return
+    if (hasPlacedLimitForSymbol) return
     if (pendingEntryAction != null) return
     if (limitPrice == null && !entryLineRef.current && !tpLineRef.current && !slLineRef.current) return
 
@@ -759,7 +937,7 @@ export function ChartOrderOverlay({
     setTpOverlay(null)
     setSlOverlay(null)
     setLimitPrice(null)
-  }, [activeTPSL, activeTrigger, pendingEntryAction, limitPrice, removeLine, setLimitPrice])
+  }, [activeTPSL, activeTrigger, hasPlacedLimitForSymbol, pendingEntryAction, limitPrice, removeLine, setLimitPrice])
 
   // Cleanup on symbol changes.
   useEffect(() => {
@@ -789,7 +967,16 @@ export function ChartOrderOverlay({
     setSlOverlay(null)
     setLimitPrice(null)
     setPendingEntryAction(null)
-  }, [orderType, activeTPSL, activeTrigger, removeLine, setLimitPrice, setPendingEntryAction])
+    clearPendingLimitPlacement()
+  }, [
+    orderType,
+    activeTPSL,
+    activeTrigger,
+    removeLine,
+    setLimitPrice,
+    setPendingEntryAction,
+    clearPendingLimitPlacement,
+  ])
 
   const handleDragStart = useCallback(
     (type: DragType, e: React.MouseEvent) => {
@@ -822,7 +1009,7 @@ export function ChartOrderOverlay({
         if (!movingRef.current) return
 
         let title = ''
-        if (drag.type === 'entry') {
+          if (drag.type === 'entry') {
           if (drag.source === 'trigger') {
             const action = activeTrigger?.action ?? 'BUY'
             title = `TRIGGER ${action} @ ${rounded.toFixed(2)}`
@@ -924,11 +1111,37 @@ export function ChartOrderOverlay({
 
           if (drag.source === 'trigger' && activeTrigger) {
             if (drag.type === 'entry') {
-              updateTriggerOrder(activeTrigger.id, {
-                triggerPrice: finalPrice,
-                direction: getDirectionForPrice(finalPrice),
-              })
-              setLimitPrice(finalPrice)
+              const validation = validateTriggerPrice(activeTrigger.action, finalPrice)
+              if (!validation.ok) {
+                console.warn(`[Scalping] ${validation.message}`)
+                const restoredPrice = roundToTick(activeTrigger.triggerPrice)
+                entryLineRef.current?.applyOptions({
+                  price: restoredPrice,
+                  title: SHOW_NATIVE_LINE_TITLES
+                    ? `TRIGGER ${activeTrigger.action} @ ${restoredPrice.toFixed(2)}`
+                    : '',
+                })
+                const { tpPrice, slPrice } = deriveTriggerPrices(activeTrigger)
+                if (tpLineRef.current && tpPrice != null) {
+                  tpLineRef.current.applyOptions({
+                    price: tpPrice,
+                    title: SHOW_NATIVE_LINE_TITLES ? `TP @ ${tpPrice.toFixed(2)}` : '',
+                  })
+                }
+                if (slLineRef.current && slPrice != null) {
+                  slLineRef.current.applyOptions({
+                    price: slPrice,
+                    title: SHOW_NATIVE_LINE_TITLES ? `SL @ ${slPrice.toFixed(2)}` : '',
+                  })
+                }
+                setLimitPrice(restoredPrice)
+              } else {
+                updateTriggerOrder(activeTrigger.id, {
+                  triggerPrice: finalPrice,
+                  direction: getTriggerDirection(activeTrigger.action),
+                })
+                setLimitPrice(finalPrice)
+              }
             }
             if (drag.type === 'tp') {
               updateTriggerOrder(activeTrigger.id, {
@@ -944,9 +1157,34 @@ export function ChartOrderOverlay({
 
           if (drag.source === 'pending') {
             const entryPrice = entryLineRef.current?.options().price ?? limitPrice ?? finalPrice
-            if (drag.type === 'entry') setLimitPrice(finalPrice)
-            if (drag.type === 'tp') setTpPoints(formatPts(Math.abs(finalPrice - entryPrice)))
-            if (drag.type === 'sl') setSlPoints(formatPts(Math.abs(entryPrice - finalPrice)))
+            if (hasPlacedLimitForSymbol && pendingLimitPlacement) {
+              const nextPlacement = { ...pendingLimitPlacement }
+              if (drag.type === 'entry') {
+                nextPlacement.entryPrice = finalPrice
+                setLimitPrice(finalPrice)
+                queuePendingLimitModify(
+                  {
+                    orderId: nextPlacement.orderId,
+                    symbol: nextPlacement.symbol,
+                    action: nextPlacement.action,
+                    quantity: nextPlacement.quantity,
+                  },
+                  finalPrice,
+                  true
+                )
+              }
+              if (drag.type === 'tp') {
+                nextPlacement.tpPoints = formatPts(Math.abs(finalPrice - entryPrice))
+              }
+              if (drag.type === 'sl') {
+                nextPlacement.slPoints = formatPts(Math.abs(entryPrice - finalPrice))
+              }
+              setPendingLimitPlacement(nextPlacement)
+            } else {
+              if (drag.type === 'entry') setLimitPrice(finalPrice)
+              if (drag.type === 'tp') setTpPoints(formatPts(Math.abs(finalPrice - entryPrice)))
+              if (drag.type === 'sl') setSlPoints(formatPts(Math.abs(entryPrice - finalPrice)))
+            }
           }
         }
 
@@ -968,19 +1206,41 @@ export function ChartOrderOverlay({
       pendingAction,
       orderType,
       limitPrice,
+      hasPlacedLimitForSymbol,
+      pendingLimitPlacement,
       tpPoints,
       slPoints,
+      queuePendingLimitModify,
       updateVirtualTPSL,
       updateTriggerOrder,
-      getDirectionForPrice,
+      getTriggerDirection,
+      validateTriggerPrice,
       updateOverlayPositions,
+      setPendingLimitPlacement,
       setLimitPrice,
       setTpPoints,
       setSlPoints,
     ]
   )
 
-  const handleRemoveEntry = useCallback(() => {
+  const handleRemoveEntry = useCallback(async () => {
+    if (
+      hasPlacedLimitForSymbol &&
+      pendingLimitPlacement?.orderId &&
+      !paperMode
+    ) {
+      try {
+        const cancelRes = await tradingApi.cancelOrder(pendingLimitPlacement.orderId)
+        if (cancelRes.status !== 'success') {
+          console.error('[Scalping] Failed to cancel LIMIT order:', cancelRes)
+          return
+        }
+      } catch (err) {
+        console.error('[Scalping] Failed to cancel LIMIT order:', err)
+        return
+      }
+    }
+
     removeLine(entryLineRef, entryLineSeriesRef)
     removeLine(tpLineRef, tpLineSeriesRef)
     removeLine(slLineRef, slLineSeriesRef)
@@ -989,20 +1249,30 @@ export function ChartOrderOverlay({
     setSlOverlay(null)
 
     if (activeTPSL) {
-      removeVirtualTPSL(activeTPSL.id)
+      clearVirtualForSymbol(activeTPSL.symbol)
     }
     if (activeTrigger) {
       removeTriggerOrder(activeTrigger.id)
     }
 
+    if (hasPlacedLimitForSymbol) {
+      if (!pendingLimitPlacement?.orderId && !paperMode) {
+        console.warn('[Scalping] Pending LIMIT has no broker orderId; cleared local lines only.')
+      }
+    }
+    clearPendingLimitPlacement()
     setLimitPrice(null)
     setPendingEntryAction(null)
   }, [
     activeTPSL,
     activeTrigger,
+    hasPlacedLimitForSymbol,
+    pendingLimitPlacement,
+    paperMode,
     removeLine,
-    removeVirtualTPSL,
+    clearVirtualForSymbol,
     removeTriggerOrder,
+    clearPendingLimitPlacement,
     setLimitPrice,
     setPendingEntryAction,
   ])
@@ -1058,7 +1328,7 @@ export function ChartOrderOverlay({
         }
       }
 
-      removeVirtualTPSL(activeTPSL.id)
+      clearVirtualForSymbol(activeTPSL.symbol)
       removeLine(entryLineRef, entryLineSeriesRef)
       removeLine(tpLineRef, tpLineSeriesRef)
       removeLine(slLineRef, slLineSeriesRef)
@@ -1070,7 +1340,7 @@ export function ChartOrderOverlay({
     } finally {
       setIsClosingPosition(false)
     }
-  }, [activeTPSL, isClosingPosition, paperMode, product, removeVirtualTPSL, removeLine])
+  }, [activeTPSL, isClosingPosition, paperMode, product, clearVirtualForSymbol, removeLine])
 
   if (!containerRef.current) return null
 
@@ -1149,7 +1419,7 @@ export function ChartOrderOverlay({
               className="text-[11px] font-black w-5 h-5 flex items-center justify-center rounded-sm border border-border/70 bg-card/95 text-foreground/90 hover:text-destructive hover:bg-destructive/10 shadow-sm"
               onClick={(e) => {
                 e.stopPropagation()
-                handleRemoveEntry()
+                void handleRemoveEntry()
               }}
               title={entryIsPosition ? 'Remove virtual position tracking' : 'Cancel pending order'}
             >

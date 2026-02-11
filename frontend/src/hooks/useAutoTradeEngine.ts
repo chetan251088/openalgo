@@ -13,7 +13,12 @@ import {
   calculateIndexBias,
   generateGhostSignal,
 } from '@/lib/autoTradeEngine'
-import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveFilledOrderPrice,
+  resolveEntryPrice,
+} from '@/lib/scalpingVirtualPosition'
 import { getCurrentZone } from '@/lib/marketClock'
 import type { ActiveSide } from '@/types/scalping'
 import type { PlaceOrderRequest } from '@/types/trading'
@@ -97,6 +102,7 @@ export function useAutoTradeEngine(
   const enabled = useAutoTradeStore((s) => s.enabled)
   const mode = useAutoTradeStore((s) => s.mode)
   const config = useAutoTradeStore((s) => s.config)
+  const activePresetId = useAutoTradeStore((s) => s.activePresetId)
   const optionsContext = useAutoTradeStore((s) => s.optionsContext)
   const regime = useAutoTradeStore((s) => s.regime)
   const consecutiveLosses = useAutoTradeStore((s) => s.consecutiveLosses)
@@ -121,8 +127,6 @@ export function useAutoTradeEngine(
 
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
 
   // Tick history for momentum calculation (refs for speed)
   const indexTicksRef = useRef<number[]>([])
@@ -168,7 +172,8 @@ export function useAutoTradeEngine(
     }
 
     // Get market clock sensitivity
-    const { sensitivity } = getCurrentZone(new Date(), false)
+    const isExpiryDayPreset = activePresetId === 'expiry'
+    const { sensitivity } = getCurrentZone(new Date(), isExpiryDayPreset)
 
     // Check both sides for signals
     const effectiveOptionsContext =
@@ -279,8 +284,33 @@ export function useAutoTradeEngine(
         const action: 'BUY' = 'BUY'
         const qty = quantity * lotSize
         const placeAutoEntry = async () => {
+          const isExecutionAllowed = () => {
+            const runtimeState = useAutoTradeStore.getState()
+            return (
+              runtimeState.enabled &&
+              runtimeState.mode === 'execute' &&
+              !runtimeState.replayMode &&
+              !(runtimeState.killSwitch || runtimeState.lockProfitTriggered)
+            )
+          }
+
           try {
+            if (!isExecutionAllowed()) {
+              pushExecutionSample({
+                timestamp: Date.now(),
+                side,
+                symbol,
+                spread: decision.spread,
+                expectedSlippage: decision.expectedSlippage,
+                status: 'rejected',
+                reason: 'Execution skipped: mode/risk changed',
+              })
+              return
+            }
+
             if (!paperMode && !apiKey) return
+
+            let brokerOrderId: string | null = null
 
             if (!paperMode && apiKey) {
               const order: PlaceOrderRequest = {
@@ -310,20 +340,42 @@ export function useAutoTradeEngine(
                 })
                 return
               }
-              console.log(`[AutoTrade] ${action} ${symbol} id=${res.data?.orderid} score=${decision.score}`)
+              brokerOrderId = extractOrderId(res)
+              console.log(
+                `[AutoTrade] ${action} ${symbol} id=${brokerOrderId ?? 'n/a'} score=${decision.score}`
+              )
             } else {
               console.log(`[AutoTrade Paper] ${action} ${side} ${symbol} score=${decision.score}`)
             }
 
-            const entryPrice = await resolveEntryPrice({
-              symbol,
-              exchange: optionExchange,
-              preferredPrice: ltp,
-              apiKey: paperMode ? null : apiKey,
-            })
+            if (!isExecutionAllowed()) {
+              pushExecutionSample({
+                timestamp: Date.now(),
+                side,
+                symbol,
+                spread: decision.spread,
+                expectedSlippage: decision.expectedSlippage,
+                status: 'rejected',
+                reason: 'Execution skipped before virtual attach: mode/risk changed',
+              })
+              return
+            }
+
+            const entryPrice = paperMode
+              ? await resolveEntryPrice({
+                  symbol,
+                  exchange: optionExchange,
+                  preferredPrice: ltp,
+                  apiKey: null,
+                })
+              : await resolveFilledOrderPrice({
+                  symbol,
+                  exchange: optionExchange,
+                  orderId: brokerOrderId,
+                  preferredPrice: ltp,
+                  apiKey,
+                })
             if (entryPrice > 0) {
-              const existingVirtual = getTPSLForSymbol(symbol)
-              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
               setVirtualTPSL(
                 buildVirtualPosition({
                   symbol,
@@ -395,13 +447,13 @@ export function useAutoTradeEngine(
       }
     }
   }, [
-    enabled, tickData, mode, config, selectedCESymbol, selectedPESymbol,
+    enabled, tickData, mode, config, activePresetId, selectedCESymbol, selectedPESymbol,
     optionsContext, regime, consecutiveLosses, tradesCount, realizedPnl,
     lastTradeTime, tradesThisMinute, lastLossTime, lastTradePnl,
     sideEntryCount, sideLastExitAt, replayMode, killSwitch, lockProfitTriggered,
     apiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
     selectedStrike, addGhostSignal, recordTrade, recordAutoEntry, pushDecision, pushExecutionSample, setRegime,
-    virtualTPSL, setVirtualTPSL, getTPSLForSymbol, removeVirtualTPSL,
+    virtualTPSL, setVirtualTPSL,
     underlying, indexExchange,
   ])
 }

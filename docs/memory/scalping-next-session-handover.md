@@ -1,6 +1,6 @@
 # Scalping Next-Session Handover
 
-Date: 2026-02-10
+Date: 2026-02-11
 Commit baseline: `63f5d091` on `main`
 
 ## Current State
@@ -12,6 +12,26 @@ Commit baseline: `63f5d091` on `main`
    - `ghost`: signal + popup only
    - `execute`: signal + popup + auto execution
 5. Frontend build passed after these changes.
+6. Trigger/TP-SL parity fixes landed:
+   - TRIGGER now enforces legacy action-direction rules (`BUY` above / `SELL` below current LTP)
+   - virtual close/trigger execution uses per-order exchange (safe across underlying switches)
+   - live reconciliation preserves auto-trailed SL instead of resetting to base SL points
+   - execute mode re-checks mode/risk gates before order fire and before virtual attach
+7. Pending LIMIT line parity fixes landed:
+   - pending LIMIT state now robustly stores broker order id across response shapes
+   - drag-to-reprice for pending LIMIT now sends `modify_order` reliably
+   - `X` on pending LIMIT now calls broker `cancel_order` before line cleanup
+8. Multi-entry line behavior improved:
+   - repeated entries on same strike/side are now tracked as fill-anchored virtual entries (no weighted overwrite)
+   - line labels can still reflect running average context while anchors stay on fill prices
+9. Fill-anchored entry behavior update:
+   - same-strike repeated entries now keep per-fill virtual lines (no weighted merge overwrite)
+   - virtual lines no longer snap to broker average during live reconciliation
+   - pending LIMIT attach resolves fill entry via order id and keeps TP/SL relative to that fill anchor
+10. Auto decision-gate/timing update:
+   - auto score gate no longer explodes to impossible min-score values in low-sensitivity windows
+   - timing is now explicitly gated when hot-zone sensitivity is zero
+   - Expiry preset now uses expiry-zone sensitivity schedule for decision scaling
 
 ## Safe Upstream Merge Setup (Already Prepared)
 

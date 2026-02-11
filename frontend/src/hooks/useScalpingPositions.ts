@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/authStore'
 import type { Position } from '@/types/trading'
 import type { ActiveSide, ScalpingPosition } from '@/types/scalping'
 
+const POSITION_POLL_MS = 2500
+
 function parseNumber(value: unknown): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null
@@ -88,7 +90,7 @@ export function useScalpingPositions() {
 
   useEffect(() => {
     fetchPositions()
-    const interval = setInterval(fetchPositions, 10000)
+    const interval = setInterval(fetchPositions, POSITION_POLL_MS)
     return () => clearInterval(interval)
   }, [fetchPositions])
 

@@ -43,6 +43,17 @@ interface ScalpingState {
   slPoints: number
   limitPrice: number | null // price for LIMIT/TRIGGER orders (set by chart click)
   pendingEntryAction: OrderAction | null // BUY/SELL arm state for chart placement
+  pendingLimitPlacement: {
+    symbol: string
+    side: ActiveSide
+    action: OrderAction
+    orderId: string | null
+    quantity: number
+    entryPrice: number
+    tpPoints: number
+    slPoints: number
+    createdAt: number
+  } | null
   paperMode: boolean
 
   // UI state
@@ -90,6 +101,20 @@ interface ScalpingActions {
   setSlPoints: (pts: number) => void
   setLimitPrice: (price: number | null) => void
   setPendingEntryAction: (action: OrderAction | null) => void
+  setPendingLimitPlacement: (
+    placement: {
+      symbol: string
+      side: ActiveSide
+      action: OrderAction
+      orderId: string | null
+      quantity: number
+      entryPrice: number
+      tpPoints: number
+      slPoints: number
+      createdAt?: number
+    } | null
+  ) => void
+  clearPendingLimitPlacement: () => void
   setPaperMode: (on: boolean) => void
   setControlTab: (tab: ControlTab) => void
   setHotkeysEnabled: (on: boolean) => void
@@ -143,6 +168,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       slPoints: 5,
       limitPrice: null,
       pendingEntryAction: null,
+      pendingLimitPlacement: null,
       paperMode: true,
       controlTab: 'manual',
       hotkeysEnabled: true,
@@ -243,7 +269,9 @@ export const useScalpingStore = create<ScalpingStore>()(
       setOrderType: (t) =>
         set({
           orderType: t,
-          ...(t === 'MARKET' ? { limitPrice: null, pendingEntryAction: null } : {}),
+          ...(t === 'MARKET'
+            ? { limitPrice: null, pendingEntryAction: null, pendingLimitPlacement: null }
+            : {}),
         }),
       setProduct: (p) => set({ product: p }),
       setTpPoints: (pts) => set({ tpPoints: Math.max(0, pts) }),
@@ -252,6 +280,33 @@ export const useScalpingStore = create<ScalpingStore>()(
         set((s) => (s.limitPrice === price ? s : { limitPrice: price })),
       setPendingEntryAction: (action) =>
         set((s) => (s.pendingEntryAction === action ? s : { pendingEntryAction: action })),
+      setPendingLimitPlacement: (placement) =>
+        set((s) => {
+          if (placement === null) {
+            return s.pendingLimitPlacement === null ? s : { pendingLimitPlacement: null }
+          }
+          const next = {
+            ...placement,
+            createdAt: placement.createdAt ?? Date.now(),
+          }
+          const current = s.pendingLimitPlacement
+          if (
+            current &&
+            current.symbol === next.symbol &&
+            current.side === next.side &&
+            current.action === next.action &&
+            current.orderId === next.orderId &&
+            current.quantity === next.quantity &&
+            current.entryPrice === next.entryPrice &&
+            current.tpPoints === next.tpPoints &&
+            current.slPoints === next.slPoints
+          ) {
+            return s
+          }
+          return { pendingLimitPlacement: next }
+        }),
+      clearPendingLimitPlacement: () =>
+        set((s) => (s.pendingLimitPlacement === null ? s : { pendingLimitPlacement: null })),
       setPaperMode: (on) =>
         set((s) => (s.paperMode === on ? s : { paperMode: on })),
       setControlTab: (tab) => set({ controlTab: tab }),

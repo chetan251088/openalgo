@@ -5,7 +5,12 @@ import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
 import { MarketDataManager } from '@/lib/MarketDataManager'
-import { buildVirtualPosition, resolveEntryPrice } from '@/lib/scalpingVirtualPosition'
+import {
+  buildVirtualPosition,
+  extractOrderId,
+  resolveFilledOrderPrice,
+  resolveEntryPrice,
+} from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
 
 /**
@@ -30,13 +35,14 @@ export function FloatingTradeWidget() {
   const slPoints = useScalpingStore((s) => s.slPoints)
   const orderType = useScalpingStore((s) => s.orderType)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
+  const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
+  const setPendingLimitPlacement = useScalpingStore((s) => s.setPendingLimitPlacement)
+  const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const paperMode = useScalpingStore((s) => s.paperMode)
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
-  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
-  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
   const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
@@ -149,6 +155,7 @@ export function FloatingTradeWidget() {
         if (existingTrigger) {
           removeTriggerOrder(existingTrigger.id)
         }
+        clearPendingLimitPlacement()
         setLimitPrice(null)
         setPendingEntryAction(action)
         console.log(`[Scalping] TRIGGER armed (${action}) — click chart to place trigger line`)
@@ -163,6 +170,16 @@ export function FloatingTradeWidget() {
         setExecuting(false)
         return
       }
+      if (
+        orderType === 'LIMIT' &&
+        pendingLimitPlacement &&
+        pendingLimitPlacement.symbol === symbol &&
+        pendingLimitPlacement.side === activeSide
+      ) {
+        console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
+        setExecuting(false)
+        return
+      }
 
       if (paperMode) {
         console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
@@ -173,8 +190,6 @@ export function FloatingTradeWidget() {
             preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? ltp ?? undefined) : (ltp ?? undefined),
           })
           if (entryPrice > 0) {
-            const existingVirtual = getTPSLForSymbol(symbol)
-            if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
             setVirtualTPSL(
               buildVirtualPosition({
                 symbol,
@@ -184,14 +199,16 @@ export function FloatingTradeWidget() {
                 entryPrice,
                 quantity: quantity * lotSize,
                 tpPoints,
-                  slPoints,
-                })
-              )
-              if (orderType === 'LIMIT') {
-                setLimitPrice(null)
-              }
+                slPoints,
+                managedBy: 'manual',
+              })
+            )
+            if (orderType === 'LIMIT') {
+              setLimitPrice(null)
+            }
           }
         }
+        clearPendingLimitPlacement()
         incrementTradeCount()
         setExecuting(false)
         return
@@ -221,21 +238,42 @@ export function FloatingTradeWidget() {
         console.log(`[Scalping] Placing ${action} ${symbol} qty=${quantity * lotSize} ${pricetype}`)
         const res = await tradingApi.placeOrder(order)
         if (res.status === 'success') {
-          console.log(`[Scalping] Order placed: ${action} ${symbol} id=${res.data?.orderid}`)
+          const brokerOrderId = extractOrderId(res)
+          console.log(`[Scalping] Order placed: ${action} ${symbol} id=${brokerOrderId ?? 'n/a'}`)
           setPendingEntryAction(null)
+
+          if (pricetype === 'LIMIT') {
+            const pendingEntryPrice = limitPrice ?? ltp ?? 0
+            if (pendingEntryPrice <= 0) {
+              console.warn('[Scalping] LIMIT order acknowledged without a usable entry price; keeping existing line state.')
+            }
+            setPendingLimitPlacement({
+              symbol,
+              side: activeSide,
+              action,
+              orderId: brokerOrderId,
+              quantity: quantity * lotSize,
+              entryPrice: pendingEntryPrice,
+              tpPoints,
+              slPoints,
+            })
+            if (pendingEntryPrice > 0) setLimitPrice(pendingEntryPrice)
+            setExecuting(false)
+            return
+          }
+
+          clearPendingLimitPlacement()
           incrementTradeCount()
 
-          // Market and limit entries should immediately render virtual position/TP/SL lines.
-          if (pricetype === 'MARKET' || pricetype === 'LIMIT') {
-            const entryPrice = await resolveEntryPrice({
+          if (pricetype === 'MARKET') {
+            const entryPrice = await resolveFilledOrderPrice({
               symbol,
               exchange: optionExchange,
-              preferredPrice: pricetype === 'LIMIT' ? (limitPrice ?? undefined) : (ltp ?? undefined),
+              orderId: brokerOrderId,
+              preferredPrice: ltp ?? undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
-              const existingVirtual = getTPSLForSymbol(symbol)
-              if (existingVirtual) removeVirtualTPSL(existingVirtual.id)
               setVirtualTPSL(
                 buildVirtualPosition({
                   symbol,
@@ -246,11 +284,9 @@ export function FloatingTradeWidget() {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  managedBy: 'manual',
                 })
               )
-              if (pricetype === 'LIMIT') {
-                setLimitPrice(null)
-              }
             }
           }
         } else {
@@ -270,20 +306,22 @@ export function FloatingTradeWidget() {
       product,
       orderType,
       limitPrice,
+      pendingLimitPlacement,
       tpPoints,
       slPoints,
       paperMode,
-      getTPSLForSymbol,
-      removeVirtualTPSL,
+      clearVirtualForSymbol,
       triggerOrders,
       executing,
       ltp,
       ensureApiKey,
       incrementTradeCount,
+      setPendingLimitPlacement,
       setVirtualTPSL,
       removeTriggerOrder,
       setLimitPrice,
       setPendingEntryAction,
+      clearPendingLimitPlacement,
     ]
   )
 
@@ -347,33 +385,18 @@ export function FloatingTradeWidget() {
       clearVirtualForSymbol(symbol)
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
       return
     }
 
-    const key = await ensureApiKey()
-    if (!key) return
-
     try {
-      // Close by placing opposite MARKET order (same as old chart_window.html)
-      const order: PlaceOrderRequest = {
-        apikey: key,
-        strategy: 'Scalping',
-        exchange: optionExchange,
-        symbol,
-        action: 'SELL',
-        quantity: quantity * lotSize,
-        pricetype: 'MARKET',
-        product,
-        price: 0,
-        trigger_price: 0,
-        disclosed_quantity: 0,
-      }
-      const res = await tradingApi.placeOrder(order)
+      const res = await tradingApi.closePosition(symbol, optionExchange, product)
       if (res.status === 'success') {
-        console.log(`[Scalping] Closed ${activeSide} ${symbol} id=${res.data?.orderid}`)
+        console.log(`[Scalping] Closed ${activeSide} ${symbol}`)
         clearVirtualForSymbol(symbol)
         setLimitPrice(null)
         setPendingEntryAction(null)
+        clearPendingLimitPlacement()
       } else {
         console.error('[Scalping] Close rejected:', res)
       }
@@ -383,15 +406,13 @@ export function FloatingTradeWidget() {
   }, [
     symbol,
     activeSide,
-    quantity,
-    lotSize,
     optionExchange,
     product,
     paperMode,
-    ensureApiKey,
     clearVirtualForSymbol,
     setLimitPrice,
     setPendingEntryAction,
+    clearPendingLimitPlacement,
   ])
 
   if (!showFloatingWidget || !symbol) return null

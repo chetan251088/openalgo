@@ -34,7 +34,10 @@ export function useTrailingMonitor() {
   }, [optionsContext])
 
   const trailingOrders = useMemo(
-    () => Object.values(virtualTPSL).filter((order) => order.slPrice != null),
+    () =>
+      Object.values(virtualTPSL).filter(
+        (order) => order.managedBy === 'auto' && order.slPrice != null
+      ),
     [virtualTPSL]
   )
 
@@ -102,12 +105,15 @@ export function useTrailingMonitor() {
           const roundedSL = Math.round(result.newSL / 0.05) * 0.05
           const storeSL = liveOrder.slPrice
           const prevSL = prevSLByOrderRef.current[order.id]
-          const slChangedFromStore = storeSL == null || Math.abs(roundedSL - storeSL) >= 0.05
-          const slChangedFromPrev = prevSL == null || Math.abs(roundedSL - prevSL) >= 0.05
+          const monotonicSL = isBuy
+            ? Math.max(storeSL ?? roundedSL, roundedSL)
+            : Math.min(storeSL ?? roundedSL, roundedSL)
+          const slChangedFromStore = storeSL == null || Math.abs(monotonicSL - storeSL) >= 0.05
+          const slChangedFromPrev = prevSL == null || Math.abs(monotonicSL - prevSL) >= 0.05
 
           if (slChangedFromStore && slChangedFromPrev) {
-            prevSLByOrderRef.current[order.id] = roundedSL
-            updateVirtualTPSL(order.id, { slPrice: roundedSL })
+            prevSLByOrderRef.current[order.id] = monotonicSL
+            updateVirtualTPSL(order.id, { slPrice: monotonicSL })
           }
         }
       )

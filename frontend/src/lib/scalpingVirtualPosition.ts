@@ -60,6 +60,124 @@ export async function resolveEntryPrice({
   return 0
 }
 
+function parseNumeric(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim())
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getOrderIdFromRecord(record: Record<string, unknown>): string | null {
+  return normalizeOrderId(record.orderid ?? record.order_id)
+}
+
+function getOrderStatus(record: Record<string, unknown>): string {
+  const raw = record.order_status ?? record.status ?? ''
+  return String(raw).trim().toUpperCase()
+}
+
+function extractFilledPrice(record: Record<string, unknown>): number | null {
+  const candidates = [
+    record.average_price,
+    record.averageprice,
+    record.fill_price,
+    record.fillprice,
+    record.traded_price,
+    record.tradedprice,
+    record.price,
+  ]
+  for (const value of candidates) {
+    const parsed = normalizePrice(parseNumeric(value))
+    if (parsed != null) return parsed
+  }
+  return null
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+interface ResolveFilledOrderPriceParams {
+  symbol: string
+  exchange: string
+  orderId?: string | null
+  preferredPrice?: number | null
+  fallbackPrice?: number | null
+  apiKey?: string | null
+  maxAttempts?: number
+  retryDelayMs?: number
+}
+
+/**
+ * Resolve fill price with orderbook-first logic.
+ *
+ * Priority:
+ * 1) Filled order price from orderbook (when orderId + apiKey are available)
+ * 2) Generic entry resolver fallback (preferred/cache/fallback/quote)
+ */
+export async function resolveFilledOrderPrice({
+  symbol,
+  exchange,
+  orderId = null,
+  preferredPrice = null,
+  fallbackPrice = null,
+  apiKey = null,
+  maxAttempts = 5,
+  retryDelayMs = 250,
+}: ResolveFilledOrderPriceParams): Promise<number> {
+  const normalizedOrderId = normalizeOrderId(orderId)
+  if (apiKey && normalizedOrderId) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const orderbook = await tradingApi.getOrders(apiKey)
+        const orders = orderbook.data?.orders
+        if (Array.isArray(orders)) {
+          const matched = orders.find((raw) => {
+            if (!raw || typeof raw !== 'object') return false
+            const record = raw as unknown as Record<string, unknown>
+            return getOrderIdFromRecord(record) === normalizedOrderId
+          })
+
+          if (matched && typeof matched === 'object') {
+            const record = matched as unknown as Record<string, unknown>
+            const status = getOrderStatus(record)
+            const filledPrice = extractFilledPrice(record)
+            const isFilled =
+              status.includes('COMPLETE') ||
+              status.includes('FILLED') ||
+              status.includes('EXECUTED') ||
+              status.includes('TRADED')
+
+            if (filledPrice != null && (isFilled || attempt === maxAttempts - 1)) {
+              return filledPrice
+            }
+          }
+        }
+      } catch {
+        // Ignore transient orderbook failures and fall back below.
+      }
+
+      if (attempt < maxAttempts - 1) {
+        await wait(retryDelayMs)
+      }
+    }
+  }
+
+  return resolveEntryPrice({
+    symbol,
+    exchange,
+    preferredPrice,
+    fallbackPrice,
+    apiKey,
+  })
+}
+
 interface BuildVirtualPositionParams {
   id?: string
   symbol: string
@@ -118,5 +236,87 @@ export function buildVirtualPosition({
     managedBy,
     autoEntryScore,
     autoEntryReason,
+  }
+}
+
+function normalizeOrderId(value: unknown): string | null {
+  if (value == null) return null
+  const text = String(value).trim()
+  return text.length > 0 ? text : null
+}
+
+/**
+ * Broker responses can expose order ids in different shapes:
+ * - { status, data: { orderid } }
+ * - { status, orderid }
+ * - snake_case variants with order_id
+ */
+export function extractOrderId(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null
+  const root = response as Record<string, unknown>
+  const rootId = normalizeOrderId(root.orderid ?? root.order_id)
+  const data = root.data
+  if (!data || typeof data !== 'object') return rootId
+  const dataRecord = data as Record<string, unknown>
+  const dataId = normalizeOrderId(dataRecord.orderid ?? dataRecord.order_id)
+  return dataId ?? rootId
+}
+
+/**
+ * Merge a fresh entry into an existing virtual position for the same symbol.
+ * This keeps line/PnL continuity when users stack entries on the same strike.
+ */
+export function mergeVirtualPosition(
+  existing: VirtualTPSL | undefined,
+  incoming: VirtualTPSL
+): VirtualTPSL {
+  if (!existing) return incoming
+  if (existing.symbol !== incoming.symbol || existing.exchange !== incoming.exchange) return incoming
+
+  const sameDirection = existing.side === incoming.side && existing.action === incoming.action
+  if (!sameDirection) {
+    // Replace direction but retain id so overlay/line handles stay stable.
+    return {
+      ...incoming,
+      id: existing.id,
+    }
+  }
+
+  const existingQty = Math.max(0, existing.quantity)
+  const incomingQty = Math.max(0, incoming.quantity)
+  const mergedQty = existingQty + incomingQty
+  if (mergedQty <= 0) {
+    return {
+      ...incoming,
+      id: existing.id,
+    }
+  }
+
+  const weightedEntry = roundToTick(
+    (existing.entryPrice * existingQty + incoming.entryPrice * incomingQty) / mergedQty
+  )
+  const tpPoints = existing.tpPrice == null ? 0 : existing.tpPoints
+  const slPoints = existing.slPrice == null ? 0 : existing.slPoints
+  const isBuy = incoming.action === 'BUY'
+
+  return {
+    ...incoming,
+    id: existing.id,
+    createdAt: incoming.createdAt,
+    quantity: mergedQty,
+    entryPrice: weightedEntry,
+    tpPoints,
+    slPoints,
+    tpPrice:
+      tpPoints > 0
+        ? roundToTick(weightedEntry + (isBuy ? tpPoints : -tpPoints))
+        : null,
+    slPrice:
+      slPoints > 0
+        ? roundToTick(weightedEntry + (isBuy ? -slPoints : slPoints))
+        : null,
+    managedBy: incoming.managedBy ?? existing.managedBy,
+    autoEntryScore: incoming.autoEntryScore ?? existing.autoEntryScore,
+    autoEntryReason: incoming.autoEntryReason ?? existing.autoEntryReason,
   }
 }

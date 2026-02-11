@@ -60,7 +60,9 @@ export const useVirtualOrderStore = create<VirtualOrderStore>()(
 
       getTPSLForSymbol: (symbol) => {
         const entries = Object.values(get().virtualTPSL)
-        return entries.find((o) => o.symbol === symbol)
+          .filter((o) => o.symbol === symbol)
+          .sort((a, b) => b.createdAt - a.createdAt)
+        return entries[0]
       },
 
       addTriggerOrder: (order) =>

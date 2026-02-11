@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -20,9 +20,13 @@ import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
+import { buildVirtualPosition, resolveFilledOrderPrice } from '@/lib/scalpingVirtualPosition'
+
+const VIRTUAL_POSITION_SYNC_GRACE_MS = 15000
 
 export default function ScalpingDashboard() {
   const [showHelp, setShowHelp] = useState(false)
+  const pendingLimitAttachRef = useRef(false)
 
   const toggleHelp = useCallback(() => setShowHelp((v) => !v), [])
   const closeHelp = useCallback(() => setShowHelp(false), [])
@@ -34,8 +38,11 @@ export default function ScalpingDashboard() {
   const product = useScalpingStore((s) => s.product)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
+  const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
+  const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
+  const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
   const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
   const virtualTPSL = useVirtualOrderStore((s) => s.virtualTPSL)
@@ -43,6 +50,9 @@ export default function ScalpingDashboard() {
   const clearVirtualOrders = useVirtualOrderStore((s) => s.clearAll)
   const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
   const clearTriggerOrders = useVirtualOrderStore((s) => s.clearTriggerOrders)
+  const removeVirtualTPSL = useVirtualOrderStore((s) => s.removeVirtualTPSL)
+  const updateVirtualTPSL = useVirtualOrderStore((s) => s.updateVirtualTPSL)
+  const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
   const imbalanceFilterEnabled = useAutoTradeStore((s) => s.config.imbalanceFilterEnabled)
   const updateRiskState = useAutoTradeStore((s) => s.updateRiskState)
   const apiKey = useAuthStore((s) => s.apiKey)
@@ -74,6 +84,7 @@ export default function ScalpingDashboard() {
         clearVirtualForSymbol(symbol)
         setLimitPrice(null)
         setPendingEntryAction(null)
+        clearPendingLimitPlacement()
         return
       }
       try {
@@ -82,11 +93,20 @@ export default function ScalpingDashboard() {
         clearVirtualForSymbol(symbol)
         setLimitPrice(null)
         setPendingEntryAction(null)
+        clearPendingLimitPlacement()
       } catch (err) {
         console.error('[Scalping] Close failed:', err)
       }
     },
-    [paperMode, optionExchange, product, clearVirtualForSymbol, setLimitPrice, setPendingEntryAction]
+    [
+      paperMode,
+      optionExchange,
+      product,
+      clearVirtualForSymbol,
+      setLimitPrice,
+      setPendingEntryAction,
+      clearPendingLimitPlacement,
+    ]
   )
 
   // Close all positions
@@ -96,6 +116,7 @@ export default function ScalpingDashboard() {
       clearVirtualOrders()
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
       return
     }
     try {
@@ -104,10 +125,11 @@ export default function ScalpingDashboard() {
       clearVirtualOrders()
       setLimitPrice(null)
       setPendingEntryAction(null)
+      clearPendingLimitPlacement()
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
     }
-  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction])
+  }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 
   // Reversal: close current position, enter opposite direction
   const handleReversal = useCallback(
@@ -206,6 +228,119 @@ export default function ScalpingDashboard() {
   useEffect(() => {
     updateRiskState(liveOpenPnl)
   }, [liveOpenPnl, updateRiskState])
+
+  // Reconcile virtual lines with live broker positions in live mode:
+  // 1) clear stale lines after grace when broker no longer reports a position
+  // 2) preserve per-fill entry anchors (never snap to broker average)
+  // 3) cap tracked qty to live qty to avoid over-closing on TP/SL
+  useEffect(() => {
+    if (paperMode) return
+
+    const liveBySymbol = new Map(livePositions.map((p) => [p.symbol, p]))
+    const orders = Object.values(virtualTPSL)
+
+    for (const order of orders) {
+      const live = liveBySymbol.get(order.symbol)
+      if (!live) {
+        const createdAt = typeof order.createdAt === 'number' ? order.createdAt : 0
+        const ageMs = createdAt > 0 ? Date.now() - createdAt : Number.POSITIVE_INFINITY
+        if (ageMs < VIRTUAL_POSITION_SYNC_GRACE_MS) continue
+        removeVirtualTPSL(order.id)
+        continue
+      }
+
+      if (live.side !== order.side || live.action !== order.action || order.quantity <= 0) {
+        removeVirtualTPSL(order.id)
+      }
+    }
+
+    const syncedOrders = Object.values(useVirtualOrderStore.getState().virtualTPSL)
+    const trackedBySymbol = new Map<string, (typeof syncedOrders)>()
+    for (const order of syncedOrders) {
+      const list = trackedBySymbol.get(order.symbol) ?? []
+      list.push(order)
+      trackedBySymbol.set(order.symbol, list)
+    }
+
+    for (const [symbol, tracked] of trackedBySymbol.entries()) {
+      const live = liveBySymbol.get(symbol)
+      if (!live) continue
+
+      const liveQty = Math.max(0, live.quantity)
+      const trackedQty = tracked.reduce((sum, order) => sum + Math.max(0, order.quantity), 0)
+      let overflow = trackedQty - liveQty
+      if (overflow <= 0) continue
+
+      // LIFO trim: reduce/remove newest tracked fills first.
+      const newestFirst = [...tracked].sort((a, b) => b.createdAt - a.createdAt)
+      for (const order of newestFirst) {
+        if (overflow <= 0) break
+        const qty = Math.max(0, order.quantity)
+        if (qty <= overflow + 1e-6) {
+          removeVirtualTPSL(order.id)
+          overflow -= qty
+          continue
+        }
+        const nextQty = Math.max(0, Number((qty - overflow).toFixed(2)))
+        updateVirtualTPSL(order.id, { quantity: nextQty })
+        overflow = 0
+      }
+    }
+
+    // Attach virtual TP/SL for live LIMIT only after fill confirmation.
+    if (!pendingLimitPlacement || pendingLimitAttachRef.current) return
+    const live = liveBySymbol.get(pendingLimitPlacement.symbol)
+    if (!live) return
+    if (live.side !== pendingLimitPlacement.side || live.action !== pendingLimitPlacement.action) return
+
+    pendingLimitAttachRef.current = true
+    void (async () => {
+      try {
+        const entryPrice = await resolveFilledOrderPrice({
+          symbol: pendingLimitPlacement.symbol,
+          exchange: live.exchange,
+          orderId: pendingLimitPlacement.orderId,
+          preferredPrice: pendingLimitPlacement.entryPrice,
+          fallbackPrice: live.avgPrice,
+          apiKey,
+        })
+        if (entryPrice <= 0) return
+
+        setVirtualTPSL(
+          buildVirtualPosition({
+            symbol: pendingLimitPlacement.symbol,
+            exchange: live.exchange,
+            side: pendingLimitPlacement.side,
+            action: pendingLimitPlacement.action,
+            entryPrice,
+            quantity: pendingLimitPlacement.quantity,
+            tpPoints: pendingLimitPlacement.tpPoints,
+            slPoints: pendingLimitPlacement.slPoints,
+            managedBy: 'manual',
+          })
+        )
+        incrementTradeCount()
+        clearPendingLimitPlacement()
+        setLimitPrice(null)
+        setPendingEntryAction(null)
+      } finally {
+        pendingLimitAttachRef.current = false
+      }
+    })()
+  }, [
+    paperMode,
+    livePositions,
+    virtualTPSL,
+    pendingLimitPlacement,
+    apiKey,
+    removeVirtualTPSL,
+    updateVirtualTPSL,
+    setVirtualTPSL,
+    incrementTradeCount,
+    clearPendingLimitPlacement,
+    setLimitPrice,
+    setPendingEntryAction,
+  ])
 
   // Auto-trade engine (execute or ghost mode)
   useAutoTradeEngine(tickData)

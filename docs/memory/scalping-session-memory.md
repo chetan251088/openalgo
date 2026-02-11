@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-02-10
+Last updated: 2026-02-11
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -112,6 +112,54 @@ Major implemented behavior (high level):
 9. Signals now active in both modes with popup behavior:
    - ghost mode: signal only
    - execute mode: signal + execute
+10. Virtual line lifecycle hardened:
+   - symbol-level dedupe/replacement when creating virtual TP/SL (prevents duplicate/stuck lines)
+   - live broker-position reconciliation clears stale virtual lines after closes and aligns qty/action/entry
+11. TP/SL trigger close path hardened:
+   - virtual TP/SL still fires MARKET close first
+   - fallback to `closePosition` if MARKET close call fails
+12. Trailing monitor tightened for auto mode:
+   - only auto-managed virtual orders are trailed
+   - trailing SL updates are monotonic (never loosen SL)
+13. LIMIT lifecycle hardened for live brokers:
+   - live LIMIT now stays in `pendingLimitPlacement` (entry/TP/SL lines visible on chart)
+   - virtual TP/SL is attached only after real fill appears in positionbook reconciliation
+   - avoids immediate TP/SL market exits before LIMIT fill
+14. Live position-sync grace for virtual lines:
+   - reconciliation now waits briefly before pruning virtual lines with no live position
+   - prevents immediate disappearance of MARKET/TRIGGER lines while broker positionbook lags
+15. Trigger order parity with legacy chart window:
+   - trigger direction is now action-driven (`BUY -> above`, `SELL -> below`)
+   - trigger placement/drag now blocks immediate-fire levels relative to current LTP
+16. Virtual TP/SL close path made exchange-safe:
+   - close and trigger-entry MARKET calls now use each order’s own exchange instead of mutable UI exchange
+   - prevents wrong-exchange closes when underlying/exchange is switched mid-session
+17. Auto trailing SL preservation in live reconciliation:
+   - positionbook sync no longer resets auto-managed trailed SL/TP back to static point offsets
+   - if broker entry price shifts, existing auto-managed TP/SL are shifted by entry delta instead of reset
+18. Auto mode safety gating:
+   - execute path now re-checks runtime mode/risk gates before order fire and before virtual attach
+   - avoids stray execute fills when toggling from `execute` to `ghost` (or when kill-switch trips) mid-decision
+19. LIMIT modify/cancel parity fixes:
+   - pending LIMIT placements now capture broker order id from both `data.orderid` and root `orderid` response shapes
+   - dragging a pending LIMIT line now consistently calls `modifyOrder` (order id no longer lost)
+   - clicking `X` on a pending LIMIT line now attempts broker `cancelOrder` before clearing local lines
+20. Same-strike multi-entry behavior (superseded):
+   - earlier build used weighted-merge virtual lines for repeated entries on same symbol/side
+   - this has now been replaced by fill-anchored per-entry tracking (see items 21-23)
+21. Fill-anchored multi-entry behavior (latest update):
+   - virtual entry lines now anchor to per-order fill price (orderbook-first), not broker net average
+   - repeated entries on same strike now create separate virtual fill records instead of weighted merge
+   - chart line title now shows fill anchor plus running weighted average context label
+22. Live reconciliation no longer average-snaps lines:
+   - live sync keeps fill entry anchors intact and only prunes stale/mismatched lines
+   - when broker net qty drops below tracked qty, newest virtual fills are trimmed first (LIFO) to avoid TP/SL over-close
+23. LIMIT fill attach now uses pending-order identity:
+   - pending LIMIT virtual attach resolves entry from pending order id (with fallback), then creates a fill-specific TP/SL line
+24. Auto-engine gating sanity + timing fix:
+   - adjusted score-gate now clamps to realistic bounds (prevents impossible `minScore` inflation like `50`)
+   - when hot-zone timing is respected and sensitivity is zero, decision now blocks explicitly as timing gate
+   - market-clock sensitivity now uses expiry-zone schedule when Expiry preset is active
 
 ## 7) Still Important Gaps / Follow-ups
 

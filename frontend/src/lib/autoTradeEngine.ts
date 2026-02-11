@@ -297,8 +297,12 @@ export function shouldEnterTrade(
       : null
 
   const effectiveSensitivity = config.respectHotZones ? sensitivity : 1
-  const sensitivityFactor = Math.max(0.1, effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier))
-  const adjustedMinScore = config.entryMinScore / sensitivityFactor
+  const sensitivityFactor = Math.max(
+    0.25,
+    effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier)
+  )
+  // Keep score-gate realistic for current scoring weights (max practical score ~= 8).
+  const adjustedMinScore = Math.min(8, Math.max(1, config.entryMinScore / sensitivityFactor))
 
   const addCheck = (id: string, label: string, pass: boolean, value?: string) => {
     checks.push({ id, label, pass, value })
@@ -339,6 +343,17 @@ export function shouldEnterTrade(
   addCheck('kill-switch', 'Kill switch', killSwitchOff)
   if (!killSwitchOff) {
     return block('Kill switch active', 'kill-switch')
+  }
+
+  const hotZoneAllowed = !config.respectHotZones || effectiveSensitivity > 0
+  addCheck(
+    'hot-zone',
+    'Market hot-zone timing',
+    hotZoneAllowed,
+    config.respectHotZones ? effectiveSensitivity.toFixed(2) : 'OFF'
+  )
+  if (!hotZoneAllowed) {
+    return block('Outside configured market hot-zone timing', 'hot-zone')
   }
 
   const noOpenPositionOnSide = !runtime.sideOpen
