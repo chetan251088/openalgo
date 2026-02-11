@@ -160,6 +160,28 @@ Major implemented behavior (high level):
    - adjusted score-gate now clamps to realistic bounds (prevents impossible `minScore` inflation like `50`)
    - when hot-zone timing is respected and sensitivity is zero, decision now blocks explicitly as timing gate
    - market-clock sensitivity now uses expiry-zone schedule when Expiry preset is active
+25. Chart price-scale readability on load/refresh:
+   - CE/PE option charts now use stepped autoscale rounding with 10-point ladders and a minimum vertical span
+   - index chart now uses stepped autoscale rounding with 50-point ladders and a wider minimum vertical span
+   - helps avoid over-zoomed tick-level Y-axis at startup and preserves big-picture candle readability
+26. Auto-entry volume influence added (index + option side):
+   - auto engine now consumes WS volume for index spot and CE/PE option symbols
+   - decision path adds three volume checks:
+     - index volume flow ratio
+     - selected side option volume flow ratio
+     - selected side vs opposite-side volume dominance
+   - weak option participation can block entry when both side-flow and dominance are weak
+   - new config knobs exposed in Auto config:
+     - enable/disable volume influence
+     - lookback ticks
+     - min ratios for index flow, option flow, and side dominance
+     - volume score weight
+   - persisted auto config now merges with `DEFAULT_CONFIG` on hydrate to avoid missing new fields
+27. Scalping hotkeys expanded for direct side entries:
+   - `ArrowUp` now places CE `BUY` as forced `MARKET`
+   - `ArrowDown` now places PE `BUY` as forced `MARKET`
+   - both shortcuts use the same post-fill virtual TP/SL attach pipeline as regular hotkey buys
+   - bottom-bar and hotkey-help labels updated to reflect new mappings
 
 ## 7) Still Important Gaps / Follow-ups
 

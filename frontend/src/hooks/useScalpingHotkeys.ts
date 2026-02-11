@@ -24,7 +24,7 @@ interface UseScalpingHotkeysOptions {
  * Keyboard hotkey handler for scalping - active-side-aware.
  * B = Buy active side, S = Sell active side, C = Close active side,
  * X = Close all, R = Reversal, Tab = Toggle side, W = Toggle widget,
- * ArrowUp/Down = Move strike selection
+ * ArrowUp = CE market buy, ArrowDown = PE market buy
  */
 export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const hotkeysEnabled = useScalpingStore((s) => s.hotkeysEnabled)
@@ -50,6 +50,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
+  const setActiveSide = useScalpingStore((s) => s.setActiveSide)
   const toggleActiveSide = useScalpingStore((s) => s.toggleActiveSide)
   const toggleFloatingWidget = useScalpingStore((s) => s.toggleFloatingWidget)
   const setQuantity = useScalpingStore((s) => s.setQuantity)
@@ -60,6 +61,11 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const getActiveSymbol = useCallback(() => {
     return activeSide === 'CE' ? selectedCESymbol : selectedPESymbol
   }, [activeSide, selectedCESymbol, selectedPESymbol])
+
+  const getSymbolForSide = useCallback(
+    (side: 'CE' | 'PE') => (side === 'CE' ? selectedCESymbol : selectedPESymbol),
+    [selectedCESymbol, selectedPESymbol]
+  )
 
   // Ensure apiKey is available — fetch if missing
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
@@ -79,17 +85,23 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   }, [apiKey, setApiKey])
 
   const placeOrder = useCallback(
-    async (action: 'BUY' | 'SELL') => {
-      const symbol = getActiveSymbol()
+    async (
+      action: 'BUY' | 'SELL',
+      sideOverride?: 'CE' | 'PE',
+      forceMarket: boolean = false
+    ) => {
+      const side = sideOverride ?? activeSide
+      const symbol = getSymbolForSide(side)
+      const effectiveOrderType = forceMarket ? 'MARKET' : orderType
       if (!symbol) {
         console.warn('[Scalping] No symbol selected — click a strike first')
         return
       }
 
       // TRIGGER mode: arm side/action and place trigger only from chart click.
-      if (orderType === 'TRIGGER') {
+      if (effectiveOrderType === 'TRIGGER') {
         const existingTrigger = Object.values(triggerOrders).find(
-          (t) => t.symbol === symbol && t.exchange === optionExchange && t.side === activeSide
+          (t) => t.symbol === symbol && t.exchange === optionExchange && t.side === side
         )
         if (existingTrigger) {
           removeTriggerOrder(existingTrigger.id)
@@ -102,35 +114,35 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       }
 
       // LIMIT mode: require chart click to set a limit line first.
-      if (orderType === 'LIMIT' && !limitPrice) {
+      if (effectiveOrderType === 'LIMIT' && !limitPrice) {
         setPendingEntryAction(action)
         console.log(`[Scalping] LIMIT armed (${action}) — click chart to set limit line`)
         return
       }
       if (
-        orderType === 'LIMIT' &&
+        effectiveOrderType === 'LIMIT' &&
         pendingLimitPlacement &&
         pendingLimitPlacement.symbol === symbol &&
-        pendingLimitPlacement.side === activeSide
+        pendingLimitPlacement.side === side
       ) {
         console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
         return
       }
 
       if (paperMode) {
-        console.log(`[Paper] ${action} ${activeSide} ${symbol} qty=${quantity * lotSize} @ ${orderType}`)
-        if (orderType === 'MARKET' || orderType === 'LIMIT') {
+        console.log(`[Paper] ${action} ${side} ${symbol} qty=${quantity * lotSize} @ ${effectiveOrderType}`)
+        if (effectiveOrderType === 'MARKET' || effectiveOrderType === 'LIMIT') {
           const entryPrice = await resolveEntryPrice({
             symbol,
             exchange: optionExchange,
-            preferredPrice: orderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
+            preferredPrice: effectiveOrderType === 'LIMIT' ? (limitPrice ?? undefined) : undefined,
           })
           if (entryPrice > 0) {
             setVirtualTPSL(
               buildVirtualPosition({
                 symbol,
                 exchange: optionExchange,
-                side: activeSide,
+                side,
                 action,
                 entryPrice,
                 quantity: quantity * lotSize,
@@ -139,7 +151,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 managedBy: 'hotkey',
               })
               )
-            if (orderType === 'LIMIT') {
+            if (effectiveOrderType === 'LIMIT') {
               setLimitPrice(null)
             }
           }
@@ -152,7 +164,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       if (!key) return
 
       // MARKET or LIMIT — real broker order
-      const pricetype = orderType === 'LIMIT' ? 'LIMIT' : 'MARKET'
+      const pricetype = effectiveOrderType === 'LIMIT' ? 'LIMIT' : 'MARKET'
 
       const order: PlaceOrderRequest = {
         apikey: key,
@@ -163,7 +175,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         quantity: quantity * lotSize,
         pricetype,
         product,
-        price: orderType === 'LIMIT' && limitPrice ? limitPrice : 0,
+        price: effectiveOrderType === 'LIMIT' && limitPrice ? limitPrice : 0,
         trigger_price: 0,
         disclosed_quantity: 0,
       }
@@ -182,7 +194,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
             }
             setPendingLimitPlacement({
               symbol,
-              side: activeSide,
+              side,
               action,
               orderId: brokerOrderId,
               quantity: quantity * lotSize,
@@ -209,7 +221,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 buildVirtualPosition({
                   symbol,
                   exchange: optionExchange,
-                  side: activeSide,
+                  side,
                   action,
                   entryPrice,
                   quantity: quantity * lotSize,
@@ -228,7 +240,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       }
     },
     [
-      getActiveSymbol,
+      getSymbolForSide,
       activeSide,
       quantity,
       lotSize,
@@ -327,6 +339,24 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
           opts.onToggleHelp?.()
           break
         }
+        case 'arrowup': {
+          e.preventDefault()
+          if (selectedCESymbol) {
+            setActiveSide('CE')
+            placeOrder('BUY', 'CE', true)
+            opts.onBuy?.('CE', selectedCESymbol)
+          }
+          break
+        }
+        case 'arrowdown': {
+          e.preventDefault()
+          if (selectedPESymbol) {
+            setActiveSide('PE')
+            placeOrder('BUY', 'PE', true)
+            opts.onBuy?.('PE', selectedPESymbol)
+          }
+          break
+        }
       }
     }
 
@@ -338,8 +368,11 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
     getActiveSymbol,
     placeOrder,
     toggleActiveSide,
+    setActiveSide,
     toggleFloatingWidget,
     setQuantity,
+    selectedCESymbol,
+    selectedPESymbol,
     opts,
   ])
 }

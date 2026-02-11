@@ -89,6 +89,10 @@ export function BottomBar({ positions, totalPnl, isLivePnl }: BottomBarProps) {
             <span>Widget</span>
             <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">Tab</kbd>
             <span>Side</span>
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">↑</kbd>
+            <span>CE Mkt Buy</span>
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">↓</kbd>
+            <span>PE Mkt Buy</span>
           </>
         ) : (
           <span>Hotkeys disabled</span>

@@ -13,6 +13,8 @@ const HOTKEYS = [
   { key: 'X', description: 'Close ALL positions' },
   { key: 'W', description: 'Toggle floating trade widget' },
   { key: 'Tab', description: 'Toggle active side (CE ↔ PE)' },
+  { key: '↑', description: 'CE direct market buy (with virtual TP/SL)' },
+  { key: '↓', description: 'PE direct market buy (with virtual TP/SL)' },
   { key: '1', description: 'Set quantity to 1 lot' },
   { key: '2', description: 'Set quantity to 2 lots' },
   { key: '3', description: 'Set quantity to 3 lots' },
