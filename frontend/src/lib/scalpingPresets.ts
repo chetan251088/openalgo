@@ -17,6 +17,14 @@ export interface AutoTradeConfigFields {
   entryMinScore: number
   entryMaxSpread: number
 
+  // Volume influence
+  volumeInfluenceEnabled: boolean
+  volumeLookbackTicks: number
+  indexVolumeMinRatio: number
+  optionVolumeMinRatio: number
+  sideVolumeDominanceRatio: number
+  volumeScoreWeight: number
+
   // Trailing SL (5-stage)
   trailInitialSL: number
   trailBreakevenTrigger: number
@@ -87,6 +95,13 @@ export const DEFAULT_CONFIG: AutoTradeConfigFields = {
   entryMomentumVelocity: 3,
   entryMinScore: 6,
   entryMaxSpread: 5,
+
+  volumeInfluenceEnabled: true,
+  volumeLookbackTicks: 20,
+  indexVolumeMinRatio: 1.05,
+  optionVolumeMinRatio: 1.15,
+  sideVolumeDominanceRatio: 1.1,
+  volumeScoreWeight: 1.0,
 
   trailInitialSL: 15,
   trailBreakevenTrigger: 10,

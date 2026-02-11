@@ -26,10 +26,13 @@ import {
   isWithinIndiaMarketHours,
   parseHistoryTimestampToEpochSeconds,
 } from '@/lib/indiaMarketTime'
+import { createSteppedAutoscaleProvider } from '@/lib/chartAutoscale'
 
 const INDICATOR_THROTTLE_MS = 120
 const MAX_CANDLE_CACHE = 500
 const HISTORY_LOOKBACK_DAYS = 1
+const INDEX_PRICE_STEP = 50
+const INDEX_MIN_PRICE_SPAN = 200
 
 interface IndexChartViewProps {
   showEma9: boolean
@@ -555,6 +558,10 @@ export function IndexChartView({
     if (!container) return
 
     const colors = getChartColors(isDark)
+    const steppedAutoscale = createSteppedAutoscaleProvider(
+      INDEX_PRICE_STEP,
+      INDEX_MIN_PRICE_SPAN
+    )
 
     const chart = createChart(container, {
       width: container.offsetWidth,
@@ -594,6 +601,7 @@ export function IndexChartView({
       borderVisible: false,
       wickUpColor: colors.upColor,
       wickDownColor: colors.downColor,
+      autoscaleInfoProvider: steppedAutoscale,
     })
 
     const ema9 = chart.addSeries(LineSeries, {
@@ -603,6 +611,7 @@ export function IndexChartView({
       lastValueVisible: false,
       priceLineVisible: false,
       visible: indicatorConfigRef.current.showEma9,
+      autoscaleInfoProvider: steppedAutoscale,
     })
 
     const ema21 = chart.addSeries(LineSeries, {
@@ -612,6 +621,7 @@ export function IndexChartView({
       lastValueVisible: false,
       priceLineVisible: false,
       visible: indicatorConfigRef.current.showEma21,
+      autoscaleInfoProvider: steppedAutoscale,
     })
 
     const supertrend = chart.addSeries(LineSeries, {
@@ -621,6 +631,7 @@ export function IndexChartView({
       lastValueVisible: false,
       priceLineVisible: false,
       visible: indicatorConfigRef.current.showSupertrend,
+      autoscaleInfoProvider: steppedAutoscale,
     })
 
     const vwap = chart.addSeries(LineSeries, {
@@ -631,6 +642,7 @@ export function IndexChartView({
       lastValueVisible: false,
       priceLineVisible: false,
       visible: indicatorConfigRef.current.showVwap,
+      autoscaleInfoProvider: steppedAutoscale,
     })
 
     chartRef.current = chart

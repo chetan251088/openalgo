@@ -75,6 +75,15 @@ export function AutoTradeConfig() {
         <NumField label="Max Spread" field="entryMaxSpread" />
       </Section>
 
+      <Section title="Volume Flow">
+        <BoolField label="Influence Enabled" field="volumeInfluenceEnabled" />
+        <NumField label="Lookback Ticks" field="volumeLookbackTicks" />
+        <NumField label="Index Vol Min Ratio" field="indexVolumeMinRatio" step={0.05} />
+        <NumField label="Option Vol Min Ratio" field="optionVolumeMinRatio" step={0.05} />
+        <NumField label="Side Dominance Ratio" field="sideVolumeDominanceRatio" step={0.05} />
+        <NumField label="Volume Score Weight" field="volumeScoreWeight" step={0.1} />
+      </Section>
+
       <Section title="Trailing SL (5-Stage)">
         <NumField label="Initial SL (pts)" field="trailInitialSL" />
         <NumField label="Breakeven Trigger" field="trailBreakevenTrigger" />

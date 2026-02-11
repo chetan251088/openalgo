@@ -30,8 +30,10 @@ export function AutoTradeTab() {
   const killSwitch = useAutoTradeStore((s) => s.killSwitch)
   const lockProfitEnabled = useAutoTradeStore((s) => s.lockProfitEnabled)
   const lockProfitTriggered = useAutoTradeStore((s) => s.lockProfitTriggered)
-  const dailyPeakPnl = useAutoTradeStore((s) => s.dailyPeakPnl)
-  const dailyDrawdown = useAutoTradeStore((s) => s.dailyDrawdown)
+  const accountPeakPnl = useAutoTradeStore((s) => s.accountPeakPnl)
+  const accountDrawdown = useAutoTradeStore((s) => s.accountDrawdown)
+  const autoPeakPnl = useAutoTradeStore((s) => s.autoPeakPnl)
+  const autoDrawdown = useAutoTradeStore((s) => s.autoDrawdown)
   const sideEntryCount = useAutoTradeStore((s) => s.sideEntryCount)
   const sideLastExitAt = useAutoTradeStore((s) => s.sideLastExitAt)
   const sideLossPnl = useAutoTradeStore((s) => s.sideLossPnl)
@@ -72,6 +74,17 @@ export function AutoTradeTab() {
     )
   }, [virtualTPSL])
 
+  const autoExposure = useMemo(() => {
+    return Object.values(virtualTPSL).reduce(
+      (acc, order) => {
+        if (order.managedBy !== 'auto') return acc
+        acc[order.side] += order.quantity
+        return acc
+      },
+      { CE: 0, PE: 0 }
+    )
+  }, [virtualTPSL])
+
   const fillStats = useMemo(() => {
     const recent = executionSamples.slice(-10)
     const fills = recent.filter((s) => s.status === 'filled')
@@ -102,6 +115,11 @@ export function AutoTradeTab() {
   const activeLastExitAgo = sideLastExitAt[activeSide] > 0
     ? Math.max(0, Math.round((Date.now() - sideLastExitAt[activeSide]) / 1000))
     : null
+
+  const formatLoss = (value: number) => {
+    if (value <= 0) return '0'
+    return `-${value.toFixed(0)}`
+  }
 
   return (
     <div className="p-2 space-y-3 text-xs overflow-y-auto">
@@ -171,12 +189,12 @@ export function AutoTradeTab() {
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Trades</span>
+            <span className="text-muted-foreground">Auto Trades</span>
             <span className="font-bold">{tradesCount}</span>
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">P&L</span>
+            <span className="text-muted-foreground">Auto P&L</span>
             <span
               className={`font-bold tabular-nums ${
                 realizedPnl > 0 ? 'text-green-500' : realizedPnl < 0 ? 'text-red-500' : ''
@@ -327,20 +345,36 @@ export function AutoTradeTab() {
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Peak P&L</span>
-              <span className="font-mono">{dailyPeakPnl.toFixed(0)}</span>
+              <span className="text-muted-foreground">Peak P&L (All)</span>
+              <span className="font-mono">{accountPeakPnl.toFixed(0)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Drawdown</span>
-              <span className={`font-mono ${dailyDrawdown > 0 ? 'text-red-500' : ''}`}>{dailyDrawdown.toFixed(0)}</span>
+              <span className="text-muted-foreground">Drawdown (All)</span>
+              <span className={`font-mono ${accountDrawdown > 0 ? 'text-red-500' : ''}`}>{accountDrawdown.toFixed(0)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Exposure CE</span>
+              <span className="text-muted-foreground">Peak P&L (Auto)</span>
+              <span className="font-mono">{autoPeakPnl.toFixed(0)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Drawdown (Auto)</span>
+              <span className={`font-mono ${autoDrawdown > 0 ? 'text-red-500' : ''}`}>{autoDrawdown.toFixed(0)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Exposure CE (Virtual)</span>
               <span className="font-mono">{exposure.CE}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Exposure PE</span>
+              <span className="text-muted-foreground">Exposure PE (Virtual)</span>
               <span className="font-mono">{exposure.PE}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Exposure CE (Auto)</span>
+              <span className="font-mono">{autoExposure.CE}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Exposure PE (Auto)</span>
+              <span className="font-mono">{autoExposure.PE}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">CE Entries</span>
@@ -352,11 +386,15 @@ export function AutoTradeTab() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">CE Loss</span>
-              <span className="font-mono text-red-500">-{sideLossPnl.CE.toFixed(0)}</span>
+              <span className={`font-mono ${sideLossPnl.CE > 0 ? 'text-red-500' : ''}`}>
+                {formatLoss(sideLossPnl.CE)}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">PE Loss</span>
-              <span className="font-mono text-red-500">-{sideLossPnl.PE.toFixed(0)}</span>
+              <span className={`font-mono ${sideLossPnl.PE > 0 ? 'text-red-500' : ''}`}>
+                {formatLoss(sideLossPnl.PE)}
+              </span>
             </div>
           </div>
         </div>

@@ -24,6 +24,21 @@ import type { ActiveSide } from '@/types/scalping'
 import type { PlaceOrderRequest } from '@/types/trading'
 import type { MarketData } from '@/lib/MarketDataManager'
 
+interface VolumeFlowStats {
+  latestDelta: number | null
+  avgDelta: number | null
+  ratio: number | null
+}
+
+interface VolumeSignalSnapshot {
+  indexDelta: number | null
+  indexDeltaRatio: number | null
+  optionDelta: number | null
+  optionDeltaRatio: number | null
+  oppositeDelta: number | null
+  sideDominanceRatio: number | null
+}
+
 function calculateEMAValue(prices: number[], period: number): number | null {
   if (prices.length < period) return null
   const k = 2 / (period + 1)
@@ -69,6 +84,44 @@ function buildIndicatorSnapshot(prices: number[]) {
     supertrend: null as number | null,
     rsi: calculateRSIValue(prices, 14),
     vwap: null as number | null,
+  }
+}
+
+function toNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return value
+}
+
+function pushMetricValue(history: number[], value: number, maxSize = 360): void {
+  history.push(value)
+  if (history.length > maxSize) history.splice(0, history.length - maxSize)
+}
+
+function computeVolumeFlow(cumulativeVolumes: number[], lookbackTicks: number): VolumeFlowStats {
+  if (cumulativeVolumes.length < 3) return { latestDelta: null, avgDelta: null, ratio: null }
+
+  const windowSize = Math.max(3, lookbackTicks + 1)
+  const recent = cumulativeVolumes.slice(-windowSize)
+  if (recent.length < 3) return { latestDelta: null, avgDelta: null, ratio: null }
+
+  const deltas: number[] = []
+  for (let i = 1; i < recent.length; i++) {
+    const diff = recent[i] - recent[i - 1]
+    deltas.push(diff > 0 && Number.isFinite(diff) ? diff : 0)
+  }
+  if (deltas.length < 2) return { latestDelta: null, avgDelta: null, ratio: null }
+
+  const latestDelta = deltas[deltas.length - 1]
+  const baseline = deltas.slice(0, -1)
+  const baselineAvg = baseline.length > 0
+    ? baseline.reduce((sum, value) => sum + value, 0) / baseline.length
+    : 0
+  const ratio = baselineAvg > 0 ? latestDelta / baselineAvg : null
+
+  return {
+    latestDelta,
+    avgDelta: baselineAvg > 0 ? baselineAvg : null,
+    ratio,
   }
 }
 
@@ -132,6 +185,9 @@ export function useAutoTradeEngine(
   const indexTicksRef = useRef<number[]>([])
   const ceTicksRef = useRef<number[]>([])
   const peTicksRef = useRef<number[]>([])
+  const indexVolumeRef = useRef<number[]>([])
+  const ceVolumeRef = useRef<number[]>([])
+  const peVolumeRef = useRef<number[]>([])
   const lastProcessTimeRef = useRef(0)
   const executingRef = useRef(false)
   const lastDecisionSignatureRef = useRef<Record<ActiveSide, string>>({ CE: '', PE: '' })
@@ -156,6 +212,9 @@ export function useAutoTradeEngine(
     const indexLtp = tickData.get(`${indexExchange}:${underlying}`)?.data?.ltp
     const ceLtp = ceSymbol ? tickData.get(`${optionExchange}:${ceSymbol}`)?.data?.ltp : undefined
     const peLtp = peSymbol ? tickData.get(`${optionExchange}:${peSymbol}`)?.data?.ltp : undefined
+    const indexVolume = toNonNegativeNumber(tickData.get(`${indexExchange}:${underlying}`)?.data?.volume)
+    const ceVolume = ceSymbol ? toNonNegativeNumber(tickData.get(`${optionExchange}:${ceSymbol}`)?.data?.volume) : null
+    const peVolume = peSymbol ? toNonNegativeNumber(tickData.get(`${optionExchange}:${peSymbol}`)?.data?.volume) : null
 
     // Update tick history
     if (indexLtp) {
@@ -170,6 +229,14 @@ export function useAutoTradeEngine(
       peTicksRef.current.push(peLtp)
       if (peTicksRef.current.length > 300) peTicksRef.current = peTicksRef.current.slice(-300)
     }
+    if (indexVolume != null) pushMetricValue(indexVolumeRef.current, indexVolume)
+    if (ceVolume != null) pushMetricValue(ceVolumeRef.current, ceVolume)
+    if (peVolume != null) pushMetricValue(peVolumeRef.current, peVolume)
+
+    const volumeLookbackTicks = Math.max(5, Number(config.volumeLookbackTicks) || 20)
+    const indexVolumeFlow = computeVolumeFlow(indexVolumeRef.current, volumeLookbackTicks)
+    const ceVolumeFlow = computeVolumeFlow(ceVolumeRef.current, volumeLookbackTicks)
+    const peVolumeFlow = computeVolumeFlow(peVolumeRef.current, volumeLookbackTicks)
 
     // Get market clock sensitivity
     const isExpiryDayPreset = activePresetId === 'expiry'
@@ -186,6 +253,20 @@ export function useAutoTradeEngine(
       const ltp = side === 'CE' ? ceLtp : peLtp
       const ticks = side === 'CE' ? ceTicksRef.current : peTicksRef.current
       const sideOpen = Object.values(virtualTPSL).some((order) => order.side === side)
+      const sideVolumeFlow = side === 'CE' ? ceVolumeFlow : peVolumeFlow
+      const oppositeVolumeFlow = side === 'CE' ? peVolumeFlow : ceVolumeFlow
+      const sideDominanceRatio =
+        sideVolumeFlow.latestDelta != null && oppositeVolumeFlow.latestDelta != null
+          ? sideVolumeFlow.latestDelta / Math.max(1, oppositeVolumeFlow.latestDelta)
+          : null
+      const volumeFlow: VolumeSignalSnapshot = {
+        indexDelta: indexVolumeFlow.latestDelta,
+        indexDeltaRatio: indexVolumeFlow.ratio,
+        optionDelta: sideVolumeFlow.latestDelta,
+        optionDeltaRatio: sideVolumeFlow.ratio,
+        oppositeDelta: oppositeVolumeFlow.latestDelta,
+        sideDominanceRatio,
+      }
 
       if (!symbol || !ltp || ticks.length < 5) continue
 
@@ -231,7 +312,7 @@ export function useAutoTradeEngine(
       }
       const decision = shouldEnterTrade(
         side, ltp, config, runtime, momentum, indicators,
-        indexBias, effectiveOptionsContext, sensitivity, spread, depthInfo, ticks
+        indexBias, effectiveOptionsContext, sensitivity, spread, depthInfo, ticks, volumeFlow
       )
 
       // Persist trader-facing "why trade" diagnostics at low frequency.

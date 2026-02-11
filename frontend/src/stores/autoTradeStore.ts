@@ -80,6 +80,10 @@ interface AutoTradeState {
   lockProfitTriggered: boolean
   dailyPeakPnl: number
   dailyDrawdown: number
+  accountPeakPnl: number
+  accountDrawdown: number
+  autoPeakPnl: number
+  autoDrawdown: number
   decisionHistory: AutoTradeDecisionSnapshot[]
   lastDecisionBySide: Partial<Record<ActiveSide, AutoTradeDecisionSnapshot>>
   executionSamples: AutoTradeExecutionSample[]
@@ -146,6 +150,10 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
       lockProfitTriggered: false,
       dailyPeakPnl: 0,
       dailyDrawdown: 0,
+      accountPeakPnl: 0,
+      accountDrawdown: 0,
+      autoPeakPnl: 0,
+      autoDrawdown: 0,
       decisionHistory: [],
       lastDecisionBySide: {},
       executionSamples: [],
@@ -175,6 +183,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
         })),
       updateRiskState: (currentPnl) =>
         set((s) => {
+          const accountPeak = Math.max(s.accountPeakPnl, currentPnl)
+          const accountDrawdown = Math.max(0, accountPeak - currentPnl)
           const peak = Math.max(s.dailyPeakPnl, currentPnl)
           const drawdown = Math.max(0, peak - currentPnl)
           const lockTriggered = s.lockProfitEnabled && peak > 0
@@ -184,6 +194,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           return {
             dailyPeakPnl: peak,
             dailyDrawdown: drawdown,
+            accountPeakPnl: accountPeak,
+            accountDrawdown,
             lockProfitTriggered: lockTriggered,
             killSwitch: s.killSwitch || limitHit || lockTriggered,
           }
@@ -202,6 +214,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           const realized = s.realizedPnl + pnl
           const peak = Math.max(s.dailyPeakPnl, realized)
           const drawdown = Math.max(0, peak - realized)
+          const autoPeak = Math.max(s.autoPeakPnl, realized)
+          const autoDrawdown = Math.max(0, autoPeak - realized)
           return {
             realizedPnl: realized,
             lastTradePnl: pnl,
@@ -213,6 +227,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
             lastLossTime: pnl < 0 ? now : s.lastLossTime,
             dailyPeakPnl: peak,
             dailyDrawdown: drawdown,
+            autoPeakPnl: autoPeak,
+            autoDrawdown,
           }
         }),
 
@@ -223,6 +239,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           const realized = s.realizedPnl + pnl
           const peak = Math.max(s.dailyPeakPnl, realized)
           const drawdown = Math.max(0, peak - realized)
+          const autoPeak = Math.max(s.autoPeakPnl, realized)
+          const autoDrawdown = Math.max(0, autoPeak - realized)
           const lockTriggered = s.lockProfitEnabled && peak > 0
             ? s.lockProfitTriggered || drawdown >= peak * 0.4
             : s.lockProfitTriggered
@@ -233,6 +251,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
             lastLossTime: pnl < 0 ? now : s.lastLossTime,
             dailyPeakPnl: peak,
             dailyDrawdown: drawdown,
+            autoPeakPnl: autoPeak,
+            autoDrawdown,
             lockProfitTriggered: lockTriggered,
             killSwitch: s.killSwitch || lockTriggered,
           }
@@ -305,6 +325,10 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           lockProfitTriggered: false,
           dailyPeakPnl: 0,
           dailyDrawdown: 0,
+          accountPeakPnl: 0,
+          accountDrawdown: 0,
+          autoPeakPnl: 0,
+          autoDrawdown: 0,
           decisionHistory: [],
           lastDecisionBySide: {},
           executionSamples: [],
@@ -316,6 +340,18 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
         config: state.config,
         activePresetId: state.activePresetId,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<AutoTradeStore>
+        return {
+          ...currentState,
+          ...persisted,
+          config: {
+            ...DEFAULT_CONFIG,
+            ...(persisted.config ?? {}),
+          },
+          activePresetId: persisted.activePresetId ?? currentState.activePresetId,
+        }
+      },
     }
   )
 )

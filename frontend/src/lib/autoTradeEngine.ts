@@ -49,6 +49,15 @@ interface TrailResult {
   newStage: TrailingStage
 }
 
+interface VolumeSignalSnapshot {
+  indexDelta: number | null
+  indexDeltaRatio: number | null
+  optionDelta: number | null
+  optionDeltaRatio: number | null
+  oppositeDelta: number | null
+  sideDominanceRatio: number | null
+}
+
 // --- Momentum ---
 
 export function calculateMomentum(
@@ -283,7 +292,8 @@ export function shouldEnterTrade(
   sensitivity: number,
   spread: number,
   depthInfo?: { totalBid: number; totalAsk: number },
-  recentPrices: number[] = []
+  recentPrices: number[] = [],
+  volumeFlow?: VolumeSignalSnapshot
 ): EntryDecision {
   let score = 0
   const reasons: string[] = []
@@ -301,8 +311,8 @@ export function shouldEnterTrade(
     0.25,
     effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier)
   )
-  // Keep score-gate realistic for current scoring weights (max practical score ~= 8).
-  const adjustedMinScore = Math.min(8, Math.max(1, config.entryMinScore / sensitivityFactor))
+  // Keep score-gate realistic for current scoring weights.
+  const adjustedMinScore = Math.min(10, Math.max(1, config.entryMinScore / sensitivityFactor))
 
   const addCheck = (id: string, label: string, pass: boolean, value?: string) => {
     checks.push({ id, label, pass, value })
@@ -446,6 +456,75 @@ export function shouldEnterTrade(
   addCheck('spread', 'Spread gate', spread <= config.entryMaxSpread, `${spread.toFixed(2)}/${config.entryMaxSpread}`)
   if (spread > config.entryMaxSpread) {
     return block(`Spread too wide: ${spread.toFixed(1)}`, 'spread')
+  }
+
+  // Volume influence (index + option-side + side-vs-opposite participation)
+  if (config.volumeInfluenceEnabled) {
+    const indexMinRatio = Math.max(0.1, config.indexVolumeMinRatio || 1)
+    const optionMinRatio = Math.max(0.1, config.optionVolumeMinRatio || 1)
+    const dominanceMinRatio = Math.max(0.1, config.sideVolumeDominanceRatio || 1)
+    const volumeScoreWeight = Math.max(0, config.volumeScoreWeight || 0)
+
+    const indexRatio = volumeFlow?.indexDeltaRatio ?? null
+    const optionRatio = volumeFlow?.optionDeltaRatio ?? null
+    const dominanceRatio = volumeFlow?.sideDominanceRatio ?? null
+    const indexDelta = volumeFlow?.indexDelta
+    const optionDelta = volumeFlow?.optionDelta
+    const oppositeDelta = volumeFlow?.oppositeDelta
+
+    const indexPass = indexRatio == null ? true : indexRatio >= indexMinRatio
+    const optionPass = optionRatio == null ? true : optionRatio >= optionMinRatio
+    const dominancePass = dominanceRatio == null ? true : dominanceRatio >= dominanceMinRatio
+
+    addCheck(
+      'volume-index',
+      'Index volume flow',
+      indexPass,
+      indexRatio == null
+        ? 'NA'
+        : `${indexRatio.toFixed(2)}x/${indexMinRatio.toFixed(2)}x d:${(indexDelta ?? 0).toFixed(0)}`
+    )
+    addCheck(
+      'volume-option',
+      `${side} volume flow`,
+      optionPass,
+      optionRatio == null
+        ? 'NA'
+        : `${optionRatio.toFixed(2)}x/${optionMinRatio.toFixed(2)}x d:${(optionDelta ?? 0).toFixed(0)}`
+    )
+    addCheck(
+      'volume-dominance',
+      `${side} vs opposite volume`,
+      dominancePass,
+      dominanceRatio == null
+        ? 'NA'
+        : `${dominanceRatio.toFixed(2)}x/${dominanceMinRatio.toFixed(2)}x opp:${(oppositeDelta ?? 0).toFixed(0)}`
+    )
+
+    // Only hard-block when both side intensity and side-dominance are weak while data exists.
+    const weakOptionFlow =
+      optionRatio != null &&
+      dominanceRatio != null &&
+      !optionPass &&
+      !dominancePass
+    if (weakOptionFlow) {
+      return block(`Weak ${side} volume participation`, 'volume-option')
+    }
+
+    if (indexRatio != null && indexPass && volumeScoreWeight > 0) {
+      score += 0.5 * volumeScoreWeight
+      reasons.push(`IdxVol x${indexRatio.toFixed(2)}`)
+    }
+    if (optionRatio != null && optionPass && volumeScoreWeight > 0) {
+      score += 1.0 * volumeScoreWeight
+      reasons.push(`${side}Vol x${optionRatio.toFixed(2)}`)
+    }
+    if (dominanceRatio != null && dominancePass && volumeScoreWeight > 0) {
+      score += 0.75 * volumeScoreWeight
+      reasons.push(`${side}>Opp x${dominanceRatio.toFixed(2)}`)
+    }
+  } else {
+    addCheck('volume-influence', 'Volume influence', true, 'OFF')
   }
 
   const inNoTradeZone =
