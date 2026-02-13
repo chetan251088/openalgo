@@ -1,0 +1,135 @@
+{
+  "version": "1.0",
+  "name": "TOMIC Options Selling Regime Router",
+  "description": "Auto-selects Iron Condor / Bull Put Spread / Bear Call Spread from tomicSnapshot(signals) and enqueues one sell-side strategy.",
+  "exported_at": "2026-02-13T13:40:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 180 },
+      "data": {
+        "scheduleType": "daily",
+        "time": "09:25",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "ctl_start",
+      "type": "tomicControl",
+      "position": { "x": 360, "y": 60 },
+      "data": {
+        "action": "start",
+        "outputVariable": "tomicCtl"
+      }
+    },
+    {
+      "id": "snap_signals",
+      "type": "tomicSnapshot",
+      "position": { "x": 360, "y": 220 },
+      "data": {
+        "source": "signals",
+        "runScan": true,
+        "outputVariable": "tomicSignals"
+      }
+    },
+    {
+      "id": "sell_router",
+      "type": "tomicSignal",
+      "position": { "x": 640, "y": 220 },
+      "data": {
+        "instrument": "NIFTY",
+        "strategyType": "AUTO_SELL_BY_REGIME",
+        "autoSelect": true,
+        "snapshotVariable": "tomicSignals",
+        "fallbackStrategy": "IRON_CONDOR",
+        "direction": "SELL",
+        "exchange": "NSE_INDEX",
+        "product": "MIS",
+        "source": "FLOW_OPTIONS_SELL",
+        "lotSize": 75,
+        "confidence": 0,
+        "instrumentVol": 0.25,
+        "winRate": 0.55,
+        "rrRatio": 2.0,
+        "legsJson": "",
+        "outputVariable": "queuedAutoSell"
+      }
+    },
+    {
+      "id": "delay_1",
+      "type": "delay",
+      "position": { "x": 900, "y": 220 },
+      "data": {
+        "delayValue": 2,
+        "delayUnit": "seconds"
+      }
+    },
+    {
+      "id": "snap_risk",
+      "type": "tomicSnapshot",
+      "position": { "x": 1140, "y": 220 },
+      "data": {
+        "source": "risk",
+        "limit": 20,
+        "outputVariable": "riskTrace"
+      }
+    },
+    {
+      "id": "log_1",
+      "type": "log",
+      "position": { "x": 1400, "y": 220 },
+      "data": {
+        "level": "info",
+        "message": "Selected={{queuedAutoSell.auto_selection.selected_strategy}} | Regime={{queuedAutoSell.auto_selection.regime_phase}}({{queuedAutoSell.auto_selection.regime_score}}) | Instrument={{queuedAutoSell.auto_selection.selected_instrument}} | Pending={{queuedAutoSell.pending_signals}}"
+      }
+    },
+    {
+      "id": "log_2",
+      "type": "log",
+      "position": { "x": 640, "y": 360 },
+      "data": {
+        "level": "info",
+        "message": "NoAction={{tomicSignals.data.diagnostics.no_action_reasons}}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_ctl",
+      "source": "start_1",
+      "target": "ctl_start"
+    },
+    {
+      "id": "e_ctl_snap",
+      "source": "ctl_start",
+      "target": "snap_signals"
+    },
+    {
+      "id": "e_snap_router",
+      "source": "snap_signals",
+      "target": "sell_router"
+    },
+    {
+      "id": "e_router_delay",
+      "source": "sell_router",
+      "target": "delay_1"
+    },
+    {
+      "id": "e_delay_risk",
+      "source": "delay_1",
+      "target": "snap_risk"
+    },
+    {
+      "id": "e_risk_log",
+      "source": "snap_risk",
+      "target": "log_1"
+    },
+    {
+      "id": "e_snap_log2",
+      "source": "snap_signals",
+      "target": "log_2"
+    }
+  ]
+}
+

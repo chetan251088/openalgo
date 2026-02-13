@@ -276,6 +276,26 @@ def react_auto_trade_tuning():
 def react_manual_trades_analytics():
     return serve_react_app()
 
+# TOMIC dashboards
+@react_bp.route("/tomic", strict_slashes=False)
+def react_tomic_root():
+    return serve_react_app()
+
+
+@react_bp.route("/tomic/dashboard", strict_slashes=False)
+def react_tomic_dashboard():
+    return serve_react_app()
+
+
+@react_bp.route("/tomic/agents", strict_slashes=False)
+def react_tomic_agents():
+    return serve_react_app()
+
+
+@react_bp.route("/tomic/risk", strict_slashes=False)
+def react_tomic_risk():
+    return serve_react_app()
+
 
 # ============================================================
 # Phase 6 Routes - Strategy & Automation
@@ -486,6 +506,7 @@ def react_historify():
 # Scalping Dashboard (React, replaces old Jinja2 scalping interface)
 @react_bp.route("/scalping", strict_slashes=False)
 @react_bp.route("/scalping-v2", strict_slashes=False)
+@react_bp.route("/scalping-unified", strict_slashes=False)
 def react_scalping():
     return serve_react_app()
 

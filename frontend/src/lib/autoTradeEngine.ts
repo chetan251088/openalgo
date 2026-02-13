@@ -374,23 +374,39 @@ export function shouldEnterTrade(
 
   const reEntryCountForSide = runtime.reEntryCountForSide ?? 0
   const lastExitAtForSide = runtime.lastExitAtForSide ?? 0
-  if (!config.reEntryEnabled && reEntryCountForSide > 0) {
-    addCheck('reentry-enabled', 'Re-entry enabled', false, 'OFF')
-    return block(`Re-entry disabled for ${side}`, 'reentry-enabled')
-  }
+  const reEntryEnabled = config.reEntryEnabled === true
+  addCheck('reentry-setting', 'Re-entry', true, reEntryEnabled ? 'ON' : 'OFF (first entry only)')
 
-  addCheck('reentry-count', 'Re-entry cap', config.reEntryMaxPerSide <= 0 || reEntryCountForSide < config.reEntryMaxPerSide, `${reEntryCountForSide}/${config.reEntryMaxPerSide}`)
-  if (config.reEntryEnabled && config.reEntryMaxPerSide > 0 && reEntryCountForSide >= config.reEntryMaxPerSide) {
-    return block(`Re-entry cap reached for ${side}`, 'reentry-count')
-  }
+  if (!reEntryEnabled) {
+    const firstEntryOnlyPass = reEntryCountForSide === 0
+    addCheck('reentry-first', 'First entry only', firstEntryOnlyPass, `${reEntryCountForSide}/1`)
+    if (!firstEntryOnlyPass) {
+      return block(`Re-entry disabled for ${side}`, 'reentry-first')
+    }
+  } else {
+    addCheck(
+      'reentry-count',
+      'Re-entry cap',
+      config.reEntryMaxPerSide <= 0 || reEntryCountForSide < config.reEntryMaxPerSide,
+      `${reEntryCountForSide}/${config.reEntryMaxPerSide}`
+    )
+    if (config.reEntryMaxPerSide > 0 && reEntryCountForSide >= config.reEntryMaxPerSide) {
+      return block(`Re-entry cap reached for ${side}`, 'reentry-count')
+    }
 
-  if (config.reEntryEnabled && config.reEntryDelaySec > 0 && lastExitAtForSide > 0) {
-    const elapsed = now - lastExitAtForSide
-    const delayMs = config.reEntryDelaySec * 1000
-    const pass = elapsed >= delayMs
-    addCheck('reentry-delay', 'Re-entry delay', pass, pass ? `${config.reEntryDelaySec}s` : `${Math.ceil((delayMs - elapsed) / 1000)}s left`)
-    if (!pass) {
-      return block(`Re-entry delay active: ${Math.ceil((delayMs - elapsed) / 1000)}s`, 'reentry-delay')
+    if (config.reEntryDelaySec > 0 && lastExitAtForSide > 0) {
+      const elapsed = now - lastExitAtForSide
+      const delayMs = config.reEntryDelaySec * 1000
+      const pass = elapsed >= delayMs
+      addCheck(
+        'reentry-delay',
+        'Re-entry delay',
+        pass,
+        pass ? `${config.reEntryDelaySec}s` : `${Math.ceil((delayMs - elapsed) / 1000)}s left`
+      )
+      if (!pass) {
+        return block(`Re-entry delay active: ${Math.ceil((delayMs - elapsed) / 1000)}s`, 'reentry-delay')
+      }
     }
   }
 

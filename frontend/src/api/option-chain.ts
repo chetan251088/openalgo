@@ -1,5 +1,6 @@
 import type { OptionChainResponse } from '@/types/option-chain'
 import { apiClient } from './client'
+import { isMultiBrokerUnifiedMode, proxyV1ByRole } from './multi-broker'
 
 export interface ExpiryResponse {
   status: 'success' | 'error'
@@ -15,6 +16,15 @@ export const optionChainApi = {
     expiryDate: string,
     strikeCount?: number
   ): Promise<OptionChainResponse> => {
+    if (isMultiBrokerUnifiedMode()) {
+      return proxyV1ByRole<OptionChainResponse>('feed', 'optionchain', {
+        apikey: apiKey,
+        underlying,
+        exchange,
+        expiry_date: expiryDate,
+        strike_count: strikeCount ?? 20,
+      })
+    }
     const response = await apiClient.post<OptionChainResponse>('/optionchain', {
       apikey: apiKey,
       underlying,
@@ -31,6 +41,14 @@ export const optionChainApi = {
     exchange: string,
     instrumenttype: string = 'options'
   ): Promise<ExpiryResponse> => {
+    if (isMultiBrokerUnifiedMode()) {
+      return proxyV1ByRole<ExpiryResponse>('feed', 'expiry', {
+        apikey: apiKey,
+        symbol,
+        exchange,
+        instrumenttype,
+      })
+    }
     const response = await apiClient.post<ExpiryResponse>('/expiry', {
       apikey: apiKey,
       symbol,

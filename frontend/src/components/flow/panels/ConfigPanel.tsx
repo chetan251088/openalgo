@@ -116,6 +116,7 @@ const NODE_TITLES: Record<string, string> = {
   timings: 'Market Timings', holdings: 'Holdings', funds: 'Funds', margin: 'Margin Calculator',
   delay: 'Delay', waitUntil: 'Wait Until', log: 'Log', telegramAlert: 'Telegram Alert',
   variable: 'Variable', mathExpression: 'Math Expression', httpRequest: 'HTTP Request',
+  tomicControl: 'TOMIC Control', tomicSignal: 'TOMIC Signal', tomicSnapshot: 'TOMIC Snapshot',
   timeWindow: 'Time Window', timeCondition: 'Time Condition', priceCondition: 'Price Condition',
   positionCheck: 'Position Check', fundCheck: 'Fund Check', andGate: 'AND Gate',
   orGate: 'OR Gate', notGate: 'NOT Gate', group: 'Group',
@@ -239,6 +240,47 @@ export function ConfigPanel() {
           </>)}
 
           {/* ===== PLACE ORDER ===== */}
+          {nodeType === 'tomicControl' && (<>
+            <div className="space-y-2"><Label className="text-xs">Action</Label><Select value={(nodeData.action as string) || 'start'} onValueChange={(v) => handleDataChange('action', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="start">Start</SelectItem><SelectItem value="pause">Pause</SelectItem><SelectItem value="resume">Resume</SelectItem><SelectItem value="stop">Stop</SelectItem></SelectContent></Select></div>
+            {(nodeData.action as string) === 'pause' && (<div className="space-y-2"><Label className="text-xs">Pause Reason</Label><Input className="h-8" placeholder="Manual pause from flow" value={(nodeData.reason as string) || ''} onChange={(e) => handleDataChange('reason', e.target.value)} /></div>)}
+            <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="tomicControl" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{tomicControl.runtime.runtime}}`}</p></div>
+          </>)}
+
+          {nodeType === 'tomicSignal' && (<>
+            <div className="space-y-2"><Label className="text-xs">Instrument</Label><Input className="h-8" placeholder="NIFTY / BANKNIFTY / SENSEX" value={(nodeData.instrument as string) || ''} onChange={(e) => handleDataChange('instrument', e.target.value)} /></div>
+            <div className="flex items-center justify-between rounded-lg border p-3"><div><Label className="text-xs">Auto Select Selling Strategy</Label><p className="text-[10px] text-muted-foreground">Use snapshot(regime+top volatility) to pick IC/BPS/BCS</p></div><Switch checked={(nodeData.autoSelect as boolean) || false} onCheckedChange={(v) => handleDataChange('autoSelect', v)} /></div>
+            {(nodeData.autoSelect as boolean) ? (<>
+              <div className="space-y-2"><Label className="text-xs">Snapshot Variable</Label><Input className="h-8" placeholder="tomicSignals" value={(nodeData.snapshotVariable as string) || 'tomicSignals'} onChange={(e) => handleDataChange('snapshotVariable', e.target.value)} /></div>
+              <div className="space-y-2"><Label className="text-xs">Fallback Strategy</Label><Select value={(nodeData.fallbackStrategy as string) || 'IRON_CONDOR'} onValueChange={(v) => handleDataChange('fallbackStrategy', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="IRON_CONDOR">IRON_CONDOR</SelectItem><SelectItem value="BULL_PUT_SPREAD">BULL_PUT_SPREAD</SelectItem><SelectItem value="BEAR_CALL_SPREAD">BEAR_CALL_SPREAD</SelectItem></SelectContent></Select></div>
+              <p className="text-[10px] text-muted-foreground">Direction is forced to SELL for credit strategies in auto mode.</p>
+            </>) : (
+              <div className="space-y-2"><Label className="text-xs">Strategy Type</Label><Input className="h-8" placeholder="DITM_CALL / BULL_PUT_SPREAD / IRON_CONDOR" value={(nodeData.strategyType as string) || ''} onChange={(e) => handleDataChange('strategyType', e.target.value)} /></div>
+            )}
+            <div className="space-y-2"><Label className="text-xs">Direction</Label><Select value={(nodeData.direction as string) || 'BUY'} onValueChange={(v) => handleDataChange('direction', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BUY">BUY</SelectItem><SelectItem value="SELL">SELL</SelectItem></SelectContent></Select></div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2"><Label className="text-xs">Exchange</Label><Input className="h-8" placeholder="NSE_INDEX" value={(nodeData.exchange as string) || ''} onChange={(e) => handleDataChange('exchange', e.target.value)} /></div>
+              <div className="space-y-2"><Label className="text-xs">Product</Label><Select value={(nodeData.product as string) || 'MIS'} onValueChange={(v) => handleDataChange('product', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{PRODUCT_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}</SelectContent></Select></div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2"><Label className="text-xs">Lot Size</Label><Input type="number" min={0} className="h-8" value={(nodeData.lotSize as number) || 0} onChange={(e) => handleDataChange('lotSize', parseInt(e.target.value, 10) || 0)} /></div>
+              <div className="space-y-2"><Label className="text-xs">Confidence %</Label><Input type="number" min={0} max={100} className="h-8" value={(nodeData.confidence as number) || 0} onChange={(e) => handleDataChange('confidence', parseFloat(e.target.value) || 0)} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2"><Label className="text-xs">Entry Price</Label><Input type="number" step="0.05" className="h-8" value={(nodeData.entryPrice as number) || 0} onChange={(e) => handleDataChange('entryPrice', parseFloat(e.target.value) || 0)} /></div>
+              <div className="space-y-2"><Label className="text-xs">Stop Price</Label><Input type="number" step="0.05" className="h-8" value={(nodeData.stopPrice as number) || 0} onChange={(e) => handleDataChange('stopPrice', parseFloat(e.target.value) || 0)} /></div>
+            </div>
+            <div className="space-y-2"><Label className="text-xs">Expiry Date (optional)</Label><Input className="h-8" placeholder="26FEB26" value={(nodeData.expiryDate as string) || ''} onChange={(e) => handleDataChange('expiryDate', e.target.value)} /></div>
+            <div className="space-y-2"><Label className="text-xs">Legs JSON (optional)</Label><Textarea className="min-h-[80px] font-mono text-xs" placeholder='[{"offset":"OTM2","option_type":"CE","direction":"SELL","quantity":1}]' value={(nodeData.legsJson as string) || ''} onChange={(e) => handleDataChange('legsJson', e.target.value)} /></div>
+            <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="tomicSignal" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{tomicSignal.pending_signals}}`}</p></div>
+          </>)}
+
+          {nodeType === 'tomicSnapshot' && (<>
+            <div className="space-y-2"><Label className="text-xs">Source</Label><Select value={(nodeData.source as string) || 'status'} onValueChange={(v) => handleDataChange('source', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="status">Runtime Status</SelectItem><SelectItem value="metrics">Metrics</SelectItem><SelectItem value="signals">Signal Quality</SelectItem><SelectItem value="positions">Positions</SelectItem><SelectItem value="journal">Journal</SelectItem><SelectItem value="analytics">Analytics</SelectItem><SelectItem value="risk">Risk Telemetry</SelectItem><SelectItem value="router">Router Diagnostics</SelectItem></SelectContent></Select></div>
+            {(nodeData.source as string) === 'signals' && (<div className="flex items-center justify-between rounded-lg border p-3"><div><Label className="text-xs">Run Live Scan</Label><p className="text-[10px] text-muted-foreground">Scan Sniper+Volatility during node execution</p></div><Switch checked={(nodeData.runScan as boolean) ?? true} onCheckedChange={(v) => handleDataChange('runScan', v)} /></div>)}
+            {['journal', 'risk', 'router'].includes((nodeData.source as string) || '') && (<div className="space-y-2"><Label className="text-xs">Limit</Label><Input type="number" min={1} max={200} className="h-8" value={(nodeData.limit as number) || 25} onChange={(e) => handleDataChange('limit', parseInt(e.target.value, 10) || 25)} /></div>)}
+            <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="tomicSnapshot" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{tomicSnapshot.data}}`}</p></div>
+          </>)}
+
           {nodeType === 'placeOrder' && (<>
             <div className="space-y-2"><Label className="text-xs">Symbol</Label><Input className="h-8" placeholder="RELIANCE" value={(nodeData.symbol as string) || ''} onChange={(e) => handleDataChange('symbol', e.target.value)} /></div>
             <div className="space-y-2"><Label className="text-xs">Exchange</Label><Select value={(nodeData.exchange as string) || 'NSE'} onValueChange={(v) => handleDataChange('exchange', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{EXCHANGES.map((e) => (<SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>))}</SelectContent></Select></div>

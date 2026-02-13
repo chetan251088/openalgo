@@ -1,0 +1,156 @@
+{
+  "version": "1.0",
+  "name": "Scalping WS -> Virtual TP/SL Bridge",
+  "description": "Uses subscribeQuote (WebSocket-first) to fetch live option LTP and enqueues a flow event for scalping virtual TP/SL line attachment. This template does not place broker orders.",
+  "exported_at": "2026-02-13T16:25:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 220 },
+      "data": {
+        "scheduleType": "interval",
+        "intervalValue": 5,
+        "intervalUnit": "minutes",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "var_base",
+      "type": "variable",
+      "position": { "x": 360, "y": 40 },
+      "data": {
+        "variableName": "baseUrl",
+        "operation": "set",
+        "value": "http://127.0.0.1:5002"
+      }
+    },
+    {
+      "id": "var_key",
+      "type": "variable",
+      "position": { "x": 360, "y": 110 },
+      "data": {
+        "variableName": "openalgoApiKey",
+        "operation": "set",
+        "value": "REPLACE_SCALPING_API_KEY"
+      }
+    },
+    {
+      "id": "var_symbol",
+      "type": "variable",
+      "position": { "x": 360, "y": 180 },
+      "data": {
+        "variableName": "optionSymbol",
+        "operation": "set",
+        "value": "NIFTY26FEB2625600CE"
+      }
+    },
+    {
+      "id": "var_exchange",
+      "type": "variable",
+      "position": { "x": 360, "y": 250 },
+      "data": {
+        "variableName": "optionExchange",
+        "operation": "set",
+        "value": "NFO"
+      }
+    },
+    {
+      "id": "var_action",
+      "type": "variable",
+      "position": { "x": 360, "y": 320 },
+      "data": {
+        "variableName": "entryAction",
+        "operation": "set",
+        "value": "BUY"
+      }
+    },
+    {
+      "id": "var_qty",
+      "type": "variable",
+      "position": { "x": 360, "y": 390 },
+      "data": {
+        "variableName": "entryQty",
+        "operation": "set",
+        "value": "65"
+      }
+    },
+    {
+      "id": "var_tp",
+      "type": "variable",
+      "position": { "x": 360, "y": 460 },
+      "data": {
+        "variableName": "tpPoints",
+        "operation": "set",
+        "value": "8"
+      }
+    },
+    {
+      "id": "var_sl",
+      "type": "variable",
+      "position": { "x": 360, "y": 530 },
+      "data": {
+        "variableName": "slPoints",
+        "operation": "set",
+        "value": "5"
+      }
+    },
+    {
+      "id": "ws_quote",
+      "type": "subscribeQuote",
+      "position": { "x": 700, "y": 260 },
+      "data": {
+        "symbol": "{{optionSymbol}}",
+        "exchange": "{{optionExchange}}",
+        "outputVariable": "wsQuote"
+      }
+    },
+    {
+      "id": "req_bridge_enqueue",
+      "type": "httpRequest",
+      "position": { "x": 1020, "y": 260 },
+      "data": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/scalpingbridge",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"apikey\":\"{{openalgoApiKey}}\",\"symbol\":\"{{optionSymbol}}\",\"exchange\":\"{{optionExchange}}\",\"action\":\"{{entryAction}}\",\"quantity\":\"{{entryQty}}\",\"entry_price\":\"{{wsQuote.ltp}}\",\"tp_points\":\"{{tpPoints}}\",\"sl_points\":\"{{slPoints}}\",\"source\":\"FLOW_WS\",\"managed_by\":\"flow\"}",
+        "timeout": 15,
+        "outputVariable": "bridgeResult"
+      }
+    },
+    {
+      "id": "log_1",
+      "type": "log",
+      "position": { "x": 1320, "y": 260 },
+      "data": {
+        "level": "info",
+        "message": "WS LTP={{wsQuote.ltp}} | Bridge={{bridgeResult.data.status}} | EventId={{bridgeResult.data.data.id}}"
+      }
+    },
+    {
+      "id": "log_2",
+      "type": "log",
+      "position": { "x": 1580, "y": 260 },
+      "data": {
+        "level": "info",
+        "message": "Scalping dashboard consumes bridge queue and applies normal virtual TP/SL + trail logic."
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_base", "source": "start_1", "target": "var_base" },
+    { "id": "e_base_key", "source": "var_base", "target": "var_key" },
+    { "id": "e_key_symbol", "source": "var_key", "target": "var_symbol" },
+    { "id": "e_symbol_exchange", "source": "var_symbol", "target": "var_exchange" },
+    { "id": "e_exchange_action", "source": "var_exchange", "target": "var_action" },
+    { "id": "e_action_qty", "source": "var_action", "target": "var_qty" },
+    { "id": "e_qty_tp", "source": "var_qty", "target": "var_tp" },
+    { "id": "e_tp_sl", "source": "var_tp", "target": "var_sl" },
+    { "id": "e_sl_ws", "source": "var_sl", "target": "ws_quote" },
+    { "id": "e_ws_bridge", "source": "ws_quote", "target": "req_bridge_enqueue" },
+    { "id": "e_bridge_log1", "source": "req_bridge_enqueue", "target": "log_1" },
+    { "id": "e_log1_log2", "source": "log_1", "target": "log_2" }
+  ]
+}

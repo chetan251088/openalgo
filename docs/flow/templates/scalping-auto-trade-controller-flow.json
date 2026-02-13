@@ -1,0 +1,152 @@
+{
+  "version": "1.0",
+  "name": "Scalping Auto-Trade Controller",
+  "description": "Starts scalping auto-trader service, then fetches live status/logs/analytics for monitoring in one flow run.",
+  "exported_at": "2026-02-13T15:40:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 220 },
+      "data": {
+        "scheduleType": "daily",
+        "time": "09:20",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "var_base",
+      "type": "variable",
+      "position": { "x": 360, "y": 80 },
+      "data": {
+        "variableName": "scalpBaseUrl",
+        "operation": "set",
+        "value": "http://127.0.0.1:5002"
+      }
+    },
+    {
+      "id": "var_api_key",
+      "type": "variable",
+      "position": { "x": 360, "y": 160 },
+      "data": {
+        "variableName": "scalpApiKey",
+        "operation": "set",
+        "value": "REPLACE_SCALPING_API_KEY"
+      }
+    },
+    {
+      "id": "var_underlying",
+      "type": "variable",
+      "position": { "x": 360, "y": 240 },
+      "data": {
+        "variableName": "underlying",
+        "operation": "set",
+        "value": "NIFTY"
+      }
+    },
+    {
+      "id": "var_opt_exchange",
+      "type": "variable",
+      "position": { "x": 360, "y": 320 },
+      "data": {
+        "variableName": "optionExchange",
+        "operation": "set",
+        "value": "NFO"
+      }
+    },
+    {
+      "id": "req_auto_start",
+      "type": "httpRequest",
+      "position": { "x": 700, "y": 180 },
+      "data": {
+        "method": "POST",
+        "url": "{{scalpBaseUrl}}/ai_scalper/start",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"apikey\":\"{{scalpApiKey}}\",\"underlying\":\"{{underlying}}\",\"exchange\":\"NSE_INDEX\",\"option_exchange\":\"{{optionExchange}}\",\"product\":\"MIS\",\"trade_mode\":\"AUTO\",\"paper_mode\":true,\"assist_only\":false,\"qty_mult\":1,\"max_qty\":65,\"per_trade_max_loss\":1200,\"daily_max_loss\":3000}",
+        "timeout": 20,
+        "outputVariable": "autoStart"
+      }
+    },
+    {
+      "id": "delay_1",
+      "type": "delay",
+      "position": { "x": 940, "y": 180 },
+      "data": {
+        "delayValue": 3,
+        "delayUnit": "seconds"
+      }
+    },
+    {
+      "id": "req_auto_status",
+      "type": "httpRequest",
+      "position": { "x": 1180, "y": 100 },
+      "data": {
+        "method": "GET",
+        "url": "{{scalpBaseUrl}}/ai_scalper/status",
+        "headers": {},
+        "body": "",
+        "timeout": 15,
+        "outputVariable": "autoStatus"
+      }
+    },
+    {
+      "id": "req_auto_logs",
+      "type": "httpRequest",
+      "position": { "x": 1180, "y": 220 },
+      "data": {
+        "method": "GET",
+        "url": "{{scalpBaseUrl}}/ai_scalper/logs?limit=25",
+        "headers": {},
+        "body": "",
+        "timeout": 15,
+        "outputVariable": "autoLogs"
+      }
+    },
+    {
+      "id": "req_auto_analytics",
+      "type": "httpRequest",
+      "position": { "x": 1180, "y": 340 },
+      "data": {
+        "method": "GET",
+        "url": "{{scalpBaseUrl}}/ai_scalper/analytics?limit=500",
+        "headers": {},
+        "body": "",
+        "timeout": 20,
+        "outputVariable": "autoAnalytics"
+      }
+    },
+    {
+      "id": "log_summary",
+      "type": "log",
+      "position": { "x": 1500, "y": 180 },
+      "data": {
+        "level": "info",
+        "message": "Start={{autoStart.data.status}} Running={{autoStatus.data.running}} LastSignal={{autoStatus.data.last_signal}} Trades={{autoAnalytics.data.summary.total_trades}} PnL={{autoAnalytics.data.summary.total_pnl}}"
+      }
+    },
+    {
+      "id": "log_note",
+      "type": "log",
+      "position": { "x": 1820, "y": 180 },
+      "data": {
+        "level": "info",
+        "message": "This flow controls backend auto-trader service. UI virtual TP/SL lines are managed by scalping frontend runtime."
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_base", "source": "start_1", "target": "var_base" },
+    { "id": "e_base_key", "source": "var_base", "target": "var_api_key" },
+    { "id": "e_key_underlying", "source": "var_api_key", "target": "var_underlying" },
+    { "id": "e_underlying_exchange", "source": "var_underlying", "target": "var_opt_exchange" },
+    { "id": "e_exchange_start", "source": "var_opt_exchange", "target": "req_auto_start" },
+    { "id": "e_start_delay", "source": "req_auto_start", "target": "delay_1" },
+    { "id": "e_delay_status", "source": "delay_1", "target": "req_auto_status" },
+    { "id": "e_status_logs", "source": "req_auto_status", "target": "req_auto_logs" },
+    { "id": "e_logs_analytics", "source": "req_auto_logs", "target": "req_auto_analytics" },
+    { "id": "e_analytics_log_summary", "source": "req_auto_analytics", "target": "log_summary" },
+    { "id": "e_log_summary_note", "source": "log_summary", "target": "log_note" }
+  ]
+}

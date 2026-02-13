@@ -20,6 +20,8 @@ import { CancelOrderNode } from './CancelOrderNode'
 import { ModifyOrderNode } from './ModifyOrderNode'
 import { BasketOrderNode } from './BasketOrderNode'
 import { SplitOrderNode } from './SplitOrderNode'
+import { TomicControlNode } from './TomicControlNode'
+import { TomicSignalNode } from './TomicSignalNode'
 
 // Condition Nodes
 import { PositionCheckNode } from './PositionCheckNode'
@@ -62,6 +64,7 @@ import { UnsubscribeNode } from './UnsubscribeNode'
 import { HoldingsNode } from './HoldingsNode'
 import { FundsNode } from './FundsNode'
 import { MarginNode } from './MarginNode'
+import { TomicSnapshotNode } from './TomicSnapshotNode'
 
 // Utility Nodes
 import { TelegramAlertNode } from './TelegramAlertNode'
@@ -93,6 +96,8 @@ export {
   ModifyOrderNode,
   BasketOrderNode,
   SplitOrderNode,
+  TomicControlNode,
+  TomicSignalNode,
   // Conditions
   PositionCheckNode,
   FundCheckNode,
@@ -128,6 +133,7 @@ export {
   HoldingsNode,
   FundsNode,
   MarginNode,
+  TomicSnapshotNode,
   // Utilities
   TelegramAlertNode,
   DelayNode,
@@ -162,6 +168,8 @@ export const nodeTypes = {
   modifyOrder: ModifyOrderNode,
   basketOrder: BasketOrderNode,
   splitOrder: SplitOrderNode,
+  tomicControl: TomicControlNode,
+  tomicSignal: TomicSignalNode,
 
   // Conditions
   positionCheck: PositionCheckNode,
@@ -202,6 +210,7 @@ export const nodeTypes = {
   holdings: HoldingsNode,
   funds: FundsNode,
   margin: MarginNode,
+  tomicSnapshot: TomicSnapshotNode,
 
   // Utilities
   telegramAlert: TelegramAlertNode,

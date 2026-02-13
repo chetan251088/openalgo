@@ -1,0 +1,102 @@
+{
+  "version": "1.0",
+  "name": "TOMIC Signal Routing (Flow Triggered)",
+  "description": "Starts runtime, enqueues a signal into risk pipeline, then captures risk telemetry.",
+  "exported_at": "2026-02-13T12:00:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 160 },
+      "data": {
+        "scheduleType": "daily",
+        "time": "09:20",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "ctl_start",
+      "type": "tomicControl",
+      "position": { "x": 360, "y": 60 },
+      "data": {
+        "action": "start",
+        "outputVariable": "tomicCtl"
+      }
+    },
+    {
+      "id": "sig_1",
+      "type": "tomicSignal",
+      "position": { "x": 360, "y": 220 },
+      "data": {
+        "instrument": "NIFTY",
+        "strategyType": "DITM_CALL",
+        "direction": "BUY",
+        "exchange": "NSE_INDEX",
+        "product": "MIS",
+        "confidence": 62,
+        "lotSize": 75,
+        "instrumentVol": 0.25,
+        "winRate": 0.55,
+        "rrRatio": 2.0,
+        "source": "FLOW",
+        "outputVariable": "queuedSignal"
+      }
+    },
+    {
+      "id": "delay_1",
+      "type": "delay",
+      "position": { "x": 620, "y": 220 },
+      "data": {
+        "delayValue": 2,
+        "delayUnit": "seconds"
+      }
+    },
+    {
+      "id": "snap_risk",
+      "type": "tomicSnapshot",
+      "position": { "x": 860, "y": 220 },
+      "data": {
+        "source": "risk",
+        "limit": 20,
+        "outputVariable": "riskTrace"
+      }
+    },
+    {
+      "id": "log_1",
+      "type": "log",
+      "position": { "x": 1120, "y": 220 },
+      "data": {
+        "level": "info",
+        "message": "Pending={{riskTrace.data.pending_signals}} | Evaluated={{riskTrace.data.counters.evaluated}} | Enqueued={{queuedSignal.pending_signals}}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_ctl",
+      "source": "start_1",
+      "target": "ctl_start"
+    },
+    {
+      "id": "e_ctl_sig",
+      "source": "ctl_start",
+      "target": "sig_1"
+    },
+    {
+      "id": "e_sig_delay",
+      "source": "sig_1",
+      "target": "delay_1"
+    },
+    {
+      "id": "e_delay_risk",
+      "source": "delay_1",
+      "target": "snap_risk"
+    },
+    {
+      "id": "e_risk_log",
+      "source": "snap_risk",
+      "target": "log_1"
+    }
+  ]
+}
+

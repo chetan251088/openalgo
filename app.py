@@ -49,6 +49,7 @@ from blueprints.master_contract_status import (
 )
 from blueprints.manual_trades import manual_trades_bp
 from blueprints.mock_replay import mock_replay_bp
+from blueprints.multi_broker import multi_broker_bp
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
@@ -71,6 +72,10 @@ from blueprints.system_permissions import (
 )
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
+from blueprints.tomic import (
+    set_tomic_runtime,
+    tomic_bp,  # Import the TOMIC multi-agent blueprint
+)
 from blueprints.tv_json import tv_json_bp
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from cors import cors  # Import the CORS instance
@@ -249,6 +254,7 @@ def create_app():
     app.register_blueprint(ai_scalper_bp)
     app.register_blueprint(manual_trades_bp)
     app.register_blueprint(mock_replay_bp)
+    app.register_blueprint(multi_broker_bp)  # Register multi-broker proxy blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
@@ -263,6 +269,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
+    app.register_blueprint(tomic_bp)  # Register TOMIC multi-agent trading blueprint
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -546,6 +553,20 @@ def setup_environment(app):
 
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+
+        # Bootstrap TOMIC runtime once so /tomic/* APIs are live.
+        try:
+            import atexit
+
+            from tomic.runtime import TomicRuntime
+
+            tomic_runtime = TomicRuntime()
+            set_tomic_runtime(tomic_runtime)
+            app.extensions["tomic_runtime"] = tomic_runtime
+            atexit.register(tomic_runtime.stop)
+            logger.debug("TOMIC runtime bootstrapped")
+        except Exception as e:
+            logger.error(f"Failed to bootstrap TOMIC runtime: {e}")
 
         # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
         # This must be AFTER database initialization to avoid "no such table" errors

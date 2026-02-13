@@ -189,6 +189,21 @@ class NodeExecutor:
                 return default
         return float(value) if value else default
 
+    def get_bool(self, node_data: dict, key: str, default: bool = False) -> bool:
+        """Get interpolated boolean value from node data"""
+        value = node_data.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            token = self.context.interpolate(value).strip().lower()
+            if token in {"1", "true", "yes", "on"}:
+                return True
+            if token in {"0", "false", "no", "off"}:
+                return False
+        return bool(default)
+
     # === Order Nodes ===
 
     def execute_place_order(self, node_data: dict) -> dict:
@@ -1217,6 +1232,303 @@ class NodeExecutor:
         except requests.exceptions.RequestException as e:
             return {"status": "error", "message": str(e)}
 
+    def _get_tomic_runtime(self):
+        """Fetch TOMIC runtime instance if available."""
+        try:
+            from blueprints.tomic import _get_runtime  # type: ignore
+
+            return _get_runtime()
+        except Exception as exc:
+            self.log(f"TOMIC runtime lookup failed: {exc}", "error")
+            return None
+
+    def execute_tomic_snapshot(self, node_data: dict) -> dict:
+        """Execute TOMIC Snapshot node - fetch runtime diagnostics."""
+        runtime = self._get_tomic_runtime()
+        if not runtime:
+            return {"status": "error", "message": "TOMIC runtime not initialized"}
+
+        source = self.get_str(node_data, "source", "status").strip().lower()
+        limit = max(1, min(self.get_int(node_data, "limit", 25), 200))
+        run_scan = self.get_bool(node_data, "runScan", True)
+
+        self.log(f"TOMIC snapshot requested: source={source}")
+
+        try:
+            if source == "status":
+                data = runtime.get_status()
+            elif source == "metrics":
+                circuit_breakers_data = {}
+                if runtime.circuit_breakers:
+                    if hasattr(runtime.circuit_breakers, "status_summary"):
+                        circuit_breakers_data = runtime.circuit_breakers.status_summary()
+                    elif hasattr(runtime.circuit_breakers, "get_status_summary"):
+                        circuit_breakers_data = runtime.circuit_breakers.get_status_summary()
+
+                freshness_data = {}
+                if runtime.freshness_tracker:
+                    if hasattr(runtime.freshness_tracker, "diagnostic_summary"):
+                        freshness_data = runtime.freshness_tracker.diagnostic_summary()
+                    elif hasattr(runtime.freshness_tracker, "get_all_ages"):
+                        freshness_data = runtime.freshness_tracker.get_all_ages()
+
+                data = {
+                    "circuit_breakers": circuit_breakers_data,
+                    "freshness": freshness_data,
+                    "ws_data": runtime.ws_data_manager.get_status() if runtime.ws_data_manager else {},
+                    "market_bridge": runtime.market_bridge.get_status()
+                    if getattr(runtime, "market_bridge", None)
+                    else {},
+                }
+            elif source == "signals":
+                data = runtime.get_signal_quality(run_scan=run_scan)
+            elif source == "positions":
+                snap = runtime.position_book.read_snapshot()
+                data = {
+                    "version": snap.version,
+                    "total_positions": snap.total_positions,
+                    "positions": [p.__dict__ for p in snap.positions.values()],
+                }
+            elif source == "journal":
+                data = runtime.journaling_agent.get_recent_trades(limit=limit)
+            elif source == "analytics":
+                data = {
+                    "metrics": runtime.journaling_agent.get_performance_metrics(),
+                    "strategy_breakdown": runtime.journaling_agent.get_strategy_breakdown(),
+                }
+            elif source == "risk":
+                if hasattr(runtime.risk_agent, "get_telemetry_summary"):
+                    data = runtime.risk_agent.get_telemetry_summary(limit=limit)
+                else:
+                    data = {}
+            elif source == "router":
+                if hasattr(runtime.conflict_router, "diagnostics"):
+                    data = runtime.conflict_router.diagnostics(limit=limit)
+                else:
+                    data = {}
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Unsupported TOMIC snapshot source: {source}",
+                }
+
+            result = {"status": "success", "source": source, "data": data}
+            self.store_output(node_data, result)
+            return result
+        except Exception as exc:
+            self.log(f"TOMIC snapshot error: {exc}", "error")
+            return {"status": "error", "message": str(exc), "source": source}
+
+    def execute_tomic_control(self, node_data: dict) -> dict:
+        """Execute TOMIC Control node - start/pause/resume/stop runtime."""
+        runtime = self._get_tomic_runtime()
+        if not runtime:
+            return {"status": "error", "message": "TOMIC runtime not initialized"}
+
+        action = self.get_str(node_data, "action", "start").strip().lower()
+        reason = self.get_str(node_data, "reason", "Flow control")
+        self.log(f"TOMIC control action: {action}")
+
+        try:
+            if action == "start":
+                runtime.start()
+            elif action == "stop":
+                runtime.stop()
+            elif action == "pause":
+                runtime.kill_switch(reason or "Flow pause")
+            elif action == "resume":
+                runtime.resume()
+            else:
+                return {"status": "error", "message": f"Unsupported TOMIC action: {action}"}
+
+            status = runtime.get_status()
+            result = {"status": "success", "action": action, "runtime": status}
+            self.store_output(node_data, result)
+            return result
+        except Exception as exc:
+            self.log(f"TOMIC control failed: {exc}", "error")
+            return {"status": "error", "message": str(exc), "action": action}
+
+    def execute_tomic_enqueue_signal(self, node_data: dict) -> dict:
+        """
+        Execute TOMIC Signal node - enqueue a synthetic signal directly to Risk Agent.
+        Useful for visual flow-driven strategy routing and dry/live orchestration.
+        """
+        runtime = self._get_tomic_runtime()
+        if not runtime:
+            return {"status": "error", "message": "TOMIC runtime not initialized"}
+
+        instrument = self.get_str(node_data, "instrument", "").strip().upper()
+        strategy_type = self.get_str(node_data, "strategyType", "DITM_CALL").strip().upper()
+        direction = self.get_str(node_data, "direction", "BUY").strip().upper()
+        exchange = self.get_str(node_data, "exchange", "NSE_INDEX").strip().upper()
+        product = self.get_str(node_data, "product", "MIS").strip().upper()
+        expiry_date = self.get_str(node_data, "expiryDate", "").strip().upper()
+        source = self.get_str(node_data, "source", "FLOW").strip().upper()
+        snapshot_variable = self.get_str(node_data, "snapshotVariable", "tomicSignals").strip() or "tomicSignals"
+        fallback_strategy = (
+            self.get_str(node_data, "fallbackStrategy", "IRON_CONDOR").strip().upper() or "IRON_CONDOR"
+        )
+        auto_select = self.get_bool(node_data, "autoSelect", False) or strategy_type in {
+            "AUTO",
+            "AUTO_SELL",
+            "AUTO_SELL_BY_REGIME",
+        }
+        confidence = self.get_float(node_data, "confidence", 0.0)
+        lot_size = self.get_int(node_data, "lotSize", 0)
+        entry_price = self.get_float(node_data, "entryPrice", 0.0)
+        stop_price = self.get_float(node_data, "stopPrice", 0.0)
+        instrument_vol = self.get_float(node_data, "instrumentVol", 0.25)
+        win_rate = self.get_float(node_data, "winRate", 0.55)
+        rr_ratio = self.get_float(node_data, "rrRatio", 2.0)
+        correlation = self.get_float(node_data, "correlation", 0.0)
+        sector_margin_pct = self.get_float(node_data, "sectorMarginPct", 0.0)
+
+        auto_meta: Dict[str, Any] = {}
+        if auto_select:
+            snapshot_payload = self.context.get_variable(snapshot_variable, {})
+            if isinstance(snapshot_payload, str):
+                try:
+                    snapshot_payload = json.loads(snapshot_payload)
+                except Exception:
+                    snapshot_payload = {}
+            if not isinstance(snapshot_payload, dict):
+                snapshot_payload = {}
+
+            snapshot_data = snapshot_payload.get("data", snapshot_payload)
+            if not isinstance(snapshot_data, dict):
+                snapshot_data = {}
+
+            selected_strategy = fallback_strategy
+            selected_instrument = instrument
+
+            top_vol = (
+                snapshot_data.get("signals", {}).get("top_volatility", [])
+                if isinstance(snapshot_data.get("signals", {}), dict)
+                else []
+            )
+            if isinstance(top_vol, list):
+                for row in top_vol:
+                    if not isinstance(row, dict):
+                        continue
+                    candidate = str(row.get("strategy_type", "") or "").strip().upper()
+                    if candidate in {"IRON_CONDOR", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"}:
+                        selected_strategy = candidate
+                        if not selected_instrument:
+                            selected_instrument = str(row.get("underlying", "") or "").strip().upper()
+                        strength = row.get("strength")
+                        if confidence <= 0 and strength is not None:
+                            try:
+                                confidence = float(strength)
+                            except (TypeError, ValueError):
+                                pass
+                        break
+
+            regime = snapshot_data.get("regime", {}) if isinstance(snapshot_data.get("regime", {}), dict) else {}
+            regime_phase = str(regime.get("phase", "") or "").strip().upper()
+            regime_score = float(regime.get("score", 0.0) or 0.0)
+            if selected_strategy == fallback_strategy:
+                if regime_phase in {"BULLISH"} or regime_score >= 6:
+                    selected_strategy = "BULL_PUT_SPREAD"
+                elif regime_phase in {"BEARISH"} or regime_score <= -6:
+                    selected_strategy = "BEAR_CALL_SPREAD"
+                else:
+                    selected_strategy = "IRON_CONDOR"
+
+            strategy_type = selected_strategy
+            direction = "SELL"
+            instrument = selected_instrument
+            auto_meta = {
+                "selected_strategy": selected_strategy,
+                "selected_instrument": selected_instrument,
+                "snapshot_variable": snapshot_variable,
+                "regime_phase": regime_phase,
+                "regime_score": regime_score,
+            }
+
+        if not instrument:
+            return {
+                "status": "error",
+                "message": "instrument is required (or provide snapshotVariable with detectable underlying)",
+            }
+
+        legs_raw = node_data.get("legsJson", "")
+        parsed_legs: List[Dict[str, Any]] = []
+        if isinstance(legs_raw, str) and legs_raw.strip():
+            try:
+                parsed_candidate = json.loads(self.context.interpolate(legs_raw))
+                if not isinstance(parsed_candidate, list):
+                    return {"status": "error", "message": "legsJson must decode to a list"}
+                parsed_legs = [row for row in parsed_candidate if isinstance(row, dict)]
+            except Exception as exc:
+                return {"status": "error", "message": f"Invalid legsJson: {exc}"}
+
+        if not parsed_legs and strategy_type in {"IRON_CONDOR", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"}:
+            if strategy_type == "IRON_CONDOR":
+                parsed_legs = [
+                    {"offset": "OTM1", "option_type": "PE", "direction": "SELL"},
+                    {"offset": "OTM4", "option_type": "PE", "direction": "BUY"},
+                    {"offset": "OTM1", "option_type": "CE", "direction": "SELL"},
+                    {"offset": "OTM4", "option_type": "CE", "direction": "BUY"},
+                ]
+            elif strategy_type == "BULL_PUT_SPREAD":
+                parsed_legs = [
+                    {"offset": "OTM1", "option_type": "PE", "direction": "SELL"},
+                    {"offset": "OTM3", "option_type": "PE", "direction": "BUY"},
+                ]
+            elif strategy_type == "BEAR_CALL_SPREAD":
+                parsed_legs = [
+                    {"offset": "OTM1", "option_type": "CE", "direction": "SELL"},
+                    {"offset": "OTM3", "option_type": "CE", "direction": "BUY"},
+                ]
+
+        signal_payload: Dict[str, Any] = {
+            "instrument": instrument,
+            "strategy_type": strategy_type,
+            "direction": direction,
+            "signal_direction": direction,
+            "exchange": exchange,
+            "product": product,
+            "source": source,
+            "confidence": confidence,
+            "instrument_vol": instrument_vol,
+            "win_rate": win_rate,
+            "rr_ratio": rr_ratio,
+            "correlation": correlation,
+            "sector_margin_pct": sector_margin_pct,
+            "flow_origin": True,
+            "flow_triggered_at": datetime.now().isoformat(),
+        }
+        if lot_size > 0:
+            signal_payload["lot_size"] = lot_size
+        if entry_price > 0:
+            signal_payload["entry_price"] = entry_price
+        if stop_price > 0:
+            signal_payload["stop_price"] = stop_price
+        if expiry_date:
+            signal_payload["expiry_date"] = expiry_date
+        if parsed_legs:
+            signal_payload["legs"] = parsed_legs
+
+        try:
+            runtime.risk_agent.enqueue_signal(signal_payload)
+            pending = runtime.risk_agent.pending_signal_count()
+            result = {
+                "status": "success",
+                "message": "Signal enqueued to TOMIC risk pipeline",
+                "pending_signals": pending,
+                "signal": signal_payload,
+                "auto_selection": auto_meta,
+            }
+            self.log(
+                f"TOMIC signal enqueued: {instrument} {strategy_type} {direction} (pending={pending})"
+            )
+            self.store_output(node_data, result)
+            return result
+        except Exception as exc:
+            self.log(f"TOMIC signal enqueue failed: {exc}", "error")
+            return {"status": "error", "message": str(exc)}
+
     # === Condition Nodes ===
 
     def _evaluate_condition(self, value: float, operator: str, threshold: float) -> bool:
@@ -2024,6 +2336,12 @@ def execute_node_chain(
         result = executor.execute_telegram_alert(node_data)
     elif node_type == "httpRequest":
         result = executor.execute_http_request(node_data)
+    elif node_type == "tomicSnapshot":
+        result = executor.execute_tomic_snapshot(node_data)
+    elif node_type == "tomicControl":
+        result = executor.execute_tomic_control(node_data)
+    elif node_type == "tomicSignal":
+        result = executor.execute_tomic_enqueue_signal(node_data)
     elif node_type == "positionCheck":
         result = executor.execute_position_check(node_data)
     elif node_type == "fundCheck":

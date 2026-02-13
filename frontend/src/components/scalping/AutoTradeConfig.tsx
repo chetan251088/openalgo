@@ -46,7 +46,7 @@ function BoolField({ label, field }: { label: string; field: BooleanField }) {
     <div className="flex items-center justify-between gap-2">
       <Label className="text-[10px] text-muted-foreground">{label}</Label>
       <Switch
-        checked={value}
+        checked={value === true}
         onCheckedChange={(v) => updateConfig({ [field]: v })}
         className="h-4 w-7"
       />

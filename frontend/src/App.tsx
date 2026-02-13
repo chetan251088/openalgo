@@ -101,11 +101,15 @@ const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'
 
 // Scalping Dashboard
 const ScalpingDashboard = lazy(() => import('@/pages/scalping'))
+const ScalpingUnifiedDashboard = lazy(() => import('@/pages/scalping-unified'))
 
 // AI Scalper & Manual Trades pages
 const AutoTradeAnalytics = lazy(() => import('@/pages/AutoTradeAnalytics'))
 const AutoTradeModelTuning = lazy(() => import('@/pages/AutoTradeModelTuning'))
 const ManualTradeAnalytics = lazy(() => import('@/pages/ManualTradeAnalytics'))
+const TomicDashboard = lazy(() => import('@/pages/tomic/TomicDashboard'))
+const TomicAgents = lazy(() => import('@/pages/tomic/TomicAgents'))
+const TomicRisk = lazy(() => import('@/pages/tomic/TomicRisk'))
 
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
@@ -210,6 +214,11 @@ function App() {
                 <Route path="/auto-trade/analytics" element={<AutoTradeAnalytics />} />
                 <Route path="/auto-trade/model-tuning" element={<AutoTradeModelTuning />} />
                 <Route path="/manual-trades/analytics" element={<ManualTradeAnalytics />} />
+                {/* TOMIC Multi-Agent */}
+                <Route path="/tomic" element={<TomicDashboard />} />
+                <Route path="/tomic/dashboard" element={<TomicDashboard />} />
+                <Route path="/tomic/agents" element={<TomicAgents />} />
+                <Route path="/tomic/risk" element={<TomicRisk />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />
@@ -235,6 +244,7 @@ function App() {
                 {/* Scalping Dashboard */}
                 <Route path="/scalping" element={<ScalpingDashboard />} />
                 <Route path="/scalping-v2" element={<ScalpingDashboard />} />
+                <Route path="/scalping-unified" element={<ScalpingUnifiedDashboard />} />
               </Route>
 
               {/* 404 Not Found */}

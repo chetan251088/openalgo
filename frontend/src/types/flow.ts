@@ -487,6 +487,57 @@ export interface MarginNodeData {
   outputVariable?: string
 }
 
+/** TOMIC Control Node - Start/Pause/Resume/Stop runtime */
+export interface TomicControlNodeData {
+  label?: string
+  action: 'start' | 'pause' | 'resume' | 'stop'
+  reason?: string
+  outputVariable?: string
+}
+
+/** TOMIC Signal Node - Enqueue synthetic signal into TOMIC risk queue */
+export interface TomicSignalNodeData {
+  label?: string
+  instrument: string
+  strategyType: string
+  autoSelect?: boolean
+  snapshotVariable?: string
+  fallbackStrategy?: 'IRON_CONDOR' | 'BULL_PUT_SPREAD' | 'BEAR_CALL_SPREAD'
+  direction: 'BUY' | 'SELL'
+  exchange?: string
+  product?: 'MIS' | 'CNC' | 'NRML'
+  expiryDate?: string
+  source?: string
+  confidence?: number
+  lotSize?: number
+  entryPrice?: number
+  stopPrice?: number
+  instrumentVol?: number
+  winRate?: number
+  rrRatio?: number
+  correlation?: number
+  sectorMarginPct?: number
+  legsJson?: string
+  outputVariable?: string
+}
+
+/** TOMIC Snapshot Node - Fetch runtime status/metrics/signals/telemetry */
+export interface TomicSnapshotNodeData {
+  label?: string
+  source:
+    | 'status'
+    | 'metrics'
+    | 'signals'
+    | 'positions'
+    | 'journal'
+    | 'analytics'
+    | 'risk'
+    | 'router'
+  runScan?: boolean
+  limit?: number
+  outputVariable?: string
+}
+
 // =============================================================================
 // UTILITY NODE DATA TYPES
 // =============================================================================
@@ -567,6 +618,8 @@ export type ActionNodeData =
   | CancelOrderNodeData
   | CancelAllOrdersNodeData
   | ClosePositionsNodeData
+  | TomicControlNodeData
+  | TomicSignalNodeData
 
 /** All Condition Node Data Types */
 export type ConditionNodeDataTypes =
@@ -608,6 +661,7 @@ export type DataNodeData =
   | HoldingsNodeData
   | FundsNodeData
   | MarginNodeData
+  | TomicSnapshotNodeData
 
 /** All Utility Node Data Types */
 export type UtilityNodeData =
@@ -699,6 +753,9 @@ export const NODE_TYPES = {
   HOLDINGS: 'holdings',
   FUNDS: 'funds',
   MARGIN: 'margin',
+  TOMIC_CONTROL: 'tomicControl',
+  TOMIC_SIGNAL: 'tomicSignal',
+  TOMIC_SNAPSHOT: 'tomicSnapshot',
   // Utilities
   TELEGRAM_ALERT: 'telegramAlert',
   DELAY: 'delay',

@@ -8,6 +8,7 @@ Supports split orders per leg if splitsize is specified.
 
 import copy
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,7 +18,7 @@ from database.apilog_db import executor as log_executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from extensions import socketio
-from services.option_symbol_service import get_option_symbol, parse_underlying_symbol
+from services.option_symbol_service import get_option_exchange, get_option_symbol, parse_underlying_symbol
 from services.place_order_service import place_order
 from services.quotes_service import get_quotes
 from services.telegram_alert_service import telegram_alert_service
@@ -27,6 +28,7 @@ logger = get_logger(__name__)
 
 # Maximum number of split orders per leg
 MAX_SPLIT_ORDERS_PER_LEG = 100
+OPTION_SYMBOL_RE = re.compile(r"(CE|PE)$", re.IGNORECASE)
 
 
 # Get rate limit from environment (default: 10 per second)
@@ -208,34 +210,45 @@ def resolve_and_place_leg(
         Result dictionary with leg details and order status
     """
     try:
-        # Step 1: Resolve option symbol
-        # Use leg-specific expiry_date if provided, otherwise fall back to common expiry_date
-        leg_expiry = leg_data.get("expiry_date") or common_data.get("expiry_date")
+        # Step 1: Resolve option symbol (direct symbol mode or offset mode)
+        resolved_symbol = str(leg_data.get("symbol") or "").strip().upper()
+        resolved_exchange = str(leg_data.get("exchange") or "").strip().upper()
+        leg_option_type = str(leg_data.get("option_type") or "").strip().upper()
 
-        success, symbol_response, status_code = get_option_symbol(
-            underlying=common_data.get("underlying"),
-            exchange=common_data.get("exchange"),
-            expiry_date=leg_expiry,
-            strike_int=common_data.get("strike_int"),
-            offset=leg_data.get("offset"),
-            option_type=leg_data.get("option_type"),
-            api_key=api_key,
-            underlying_ltp=underlying_ltp,
-        )
+        if resolved_symbol:
+            if not resolved_exchange:
+                resolved_exchange = get_option_exchange(str(common_data.get("exchange") or "NSE_INDEX"))
+            if not leg_option_type:
+                match = OPTION_SYMBOL_RE.search(resolved_symbol)
+                if match:
+                    leg_option_type = match.group(1).upper()
+        else:
+            # Offset mode (legacy): resolve symbol from underlying/expiry/offset
+            leg_expiry = leg_data.get("expiry_date") or common_data.get("expiry_date")
+            success, symbol_response, status_code = get_option_symbol(
+                underlying=common_data.get("underlying"),
+                exchange=common_data.get("exchange"),
+                expiry_date=leg_expiry,
+                strike_int=common_data.get("strike_int"),
+                offset=leg_data.get("offset"),
+                option_type=leg_option_type,
+                api_key=api_key,
+                underlying_ltp=underlying_ltp,
+            )
 
-        if not success:
-            return {
-                "leg": leg_index + 1,
-                "offset": leg_data.get("offset"),
-                "option_type": leg_data.get("option_type", "").upper(),
-                "action": leg_data.get("action", "").upper(),
-                "status": "error",
-                "message": symbol_response.get("message", "Failed to resolve option symbol"),
-            }
+            if not success:
+                return {
+                    "leg": leg_index + 1,
+                    "offset": leg_data.get("offset"),
+                    "option_type": leg_option_type,
+                    "action": leg_data.get("action", "").upper(),
+                    "status": "error",
+                    "message": symbol_response.get("message", "Failed to resolve option symbol"),
+                }
 
-        resolved_symbol = symbol_response.get("symbol")
-        resolved_exchange = symbol_response.get("exchange")
-        underlying_ltp = symbol_response.get("underlying_ltp")
+            resolved_symbol = str(symbol_response.get("symbol") or "").strip().upper()
+            resolved_exchange = str(symbol_response.get("exchange") or "").strip().upper()
+            underlying_ltp = symbol_response.get("underlying_ltp")
 
         # Check if split order is requested for this leg
         splitsize = leg_data.get("splitsize", 0) or 0
@@ -250,15 +263,15 @@ def resolve_and_place_leg(
 
             if total_split_orders > MAX_SPLIT_ORDERS_PER_LEG:
                 return {
-                    "leg": leg_index + 1,
-                    "symbol": resolved_symbol,
-                    "exchange": resolved_exchange,
-                    "offset": leg_data.get("offset"),
-                    "option_type": leg_data.get("option_type", "").upper(),
-                    "action": leg_data.get("action", "").upper(),
-                    "status": "error",
-                    "message": f"Split orders would exceed maximum limit of {MAX_SPLIT_ORDERS_PER_LEG} per leg",
-                }
+                "leg": leg_index + 1,
+                "symbol": resolved_symbol,
+                "exchange": resolved_exchange,
+                "offset": leg_data.get("offset"),
+                "option_type": leg_option_type,
+                "action": leg_data.get("action", "").upper(),
+                "status": "error",
+                "message": f"Split orders would exceed maximum limit of {MAX_SPLIT_ORDERS_PER_LEG} per leg",
+            }
 
             logger.info(
                 f"Split order for leg {leg_index + 1}: total_qty={total_quantity}, "
@@ -315,7 +328,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "exchange": resolved_exchange,
                 "offset": leg_data.get("offset"),
-                "option_type": leg_data.get("option_type", "").upper(),
+                "option_type": leg_option_type,
                 "action": leg_data.get("action", "").upper(),
                 "status": overall_status,
                 "total_quantity": total_quantity,
@@ -357,7 +370,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "exchange": resolved_exchange,
                 "offset": leg_data.get("offset"),
-                "option_type": leg_data.get("option_type", "").upper(),
+                "option_type": leg_option_type,
                 "action": leg_data.get("action", "").upper(),
                 "status": "success",
                 "orderid": order_response.get("orderid"),
@@ -374,7 +387,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "exchange": resolved_exchange,
                 "offset": leg_data.get("offset"),
-                "option_type": leg_data.get("option_type", "").upper(),
+                "option_type": leg_option_type,
                 "action": leg_data.get("action", "").upper(),
                 "status": "error",
                 "message": order_response.get("message", "Order placement failed"),
@@ -385,7 +398,7 @@ def resolve_and_place_leg(
         return {
             "leg": leg_index + 1,
             "offset": leg_data.get("offset", "Unknown"),
-            "option_type": leg_data.get("option_type", "").upper(),
+            "option_type": str(leg_data.get("option_type", "")).upper(),
             "action": leg_data.get("action", "").upper(),
             "status": "error",
             "message": f"Internal error: {str(e)}",
@@ -422,8 +435,10 @@ def process_multiorder_with_auth(
     results = []
     underlying_ltp = None
 
-    # Fetch underlying LTP once (single quote fetch for all legs)
-    if legs:
+    # Fetch underlying LTP once (single quote fetch for all legs) only when
+    # at least one leg requires offset-based symbol resolution.
+    needs_symbol_resolution = any(not str(leg.get("symbol") or "").strip() for leg in legs)
+    if legs and needs_symbol_resolution:
         underlying = common_data.get("underlying")
         exchange = common_data.get("exchange")
         success, ltp, error_msg = get_underlying_ltp(underlying, exchange, api_key)

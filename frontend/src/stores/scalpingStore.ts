@@ -137,9 +137,19 @@ type ScalpingStore = ScalpingState & ScalpingActions
 
 const UNDERLYING_CONFIG: Record<Underlying, { optionExchange: string; indexExchange: string; lotSize: number }> = {
   NIFTY: { optionExchange: 'NFO', indexExchange: 'NSE_INDEX', lotSize: 65 },
-  SENSEX: { optionExchange: 'BFO', indexExchange: 'BSE_INDEX', lotSize: 10 },
+  SENSEX: { optionExchange: 'BFO', indexExchange: 'BSE_INDEX', lotSize: 20 },
   BANKNIFTY: { optionExchange: 'NFO', indexExchange: 'NSE_INDEX', lotSize: 30 },
   FINNIFTY: { optionExchange: 'NFO', indexExchange: 'NSE_INDEX', lotSize: 25 },
+}
+
+function normalizeUnderlying(value: unknown): Underlying {
+  if (typeof value === 'string') {
+    const normalized = value.toUpperCase() as Underlying
+    if (normalized in UNDERLYING_CONFIG) {
+      return normalized
+    }
+  }
+  return 'NIFTY'
 }
 
 export const useScalpingStore = create<ScalpingStore>()(
@@ -349,6 +359,28 @@ export const useScalpingStore = create<ScalpingStore>()(
         ceWidgetPos: state.ceWidgetPos,
         peWidgetPos: state.peWidgetPos,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<ScalpingState>
+        const underlying = normalizeUnderlying(persisted.underlying ?? currentState.underlying)
+        const cfg = UNDERLYING_CONFIG[underlying]
+        return {
+          ...currentState,
+          ...persisted,
+          underlying,
+          optionExchange: cfg.optionExchange,
+          indexExchange: cfg.indexExchange,
+          lotSize: cfg.lotSize,
+          // Fresh chain/selection state after reload to avoid stale cross-underlying artifacts.
+          selectedStrike: null,
+          selectedCESymbol: null,
+          selectedPESymbol: null,
+          expiry: '',
+          expiries: [],
+          optionChainData: null,
+          optionChainLastUpdate: 0,
+          optionChainIsStreaming: false,
+        }
+      },
     }
   )
 )

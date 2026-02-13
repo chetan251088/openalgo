@@ -44,6 +44,7 @@ from .place_smart_order import api as place_smart_order_ns
 from .pnl_symbols import api as pnl_symbols_ns
 from .positionbook import api as positionbook_ns
 from .quotes import api as quotes_ns
+from .scalping_bridge import api as scalping_bridge_ns
 from .search import api as search_ns
 from .split_order import api as split_order_ns
 from .symbol import api as symbol_ns
@@ -93,3 +94,4 @@ api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
+api.add_namespace(scalping_bridge_ns, path="/scalpingbridge")

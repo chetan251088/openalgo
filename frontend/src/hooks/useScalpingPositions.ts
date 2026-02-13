@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useAuthStore } from '@/stores/authStore'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 import type { Position } from '@/types/trading'
 import type { ActiveSide, ScalpingPosition } from '@/types/scalping'
 
@@ -47,6 +48,7 @@ function toResolvedPnl(position: Position): number {
 export function useScalpingPositions() {
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
 
   const [rawPositions, setRawPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -95,15 +97,20 @@ export function useScalpingPositions() {
   }, [fetchPositions])
 
   const { data: enhancedPositions, isLive, isPaused } = useLivePrice(rawPositions, {
-    enabled: rawPositions.length > 0,
+    enabled: !unifiedMode && rawPositions.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
     pauseWhenHidden: true,
   })
 
+  const pricedPositions = useMemo(
+    () => (unifiedMode ? rawPositions : enhancedPositions),
+    [unifiedMode, rawPositions, enhancedPositions]
+  )
+
   const positions = useMemo<ScalpingPosition[]>(() => {
-    return enhancedPositions.flatMap((p) => {
+    return pricedPositions.flatMap((p) => {
       const side = deriveOptionSide(p.symbol)
       if (!side) return []
 
@@ -133,7 +140,7 @@ export function useScalpingPositions() {
         },
       ]
     })
-  }, [enhancedPositions])
+  }, [pricedPositions])
 
   const hasOpenPositions = useMemo(
     () => rawPositions.some((p) => toFiniteNumber(p.quantity) !== 0),
@@ -141,8 +148,8 @@ export function useScalpingPositions() {
   )
 
   const totalPnl = useMemo(
-    () => enhancedPositions.reduce((sum, p) => sum + toResolvedPnl(p), 0),
-    [enhancedPositions]
+    () => pricedPositions.reduce((sum, p) => sum + toResolvedPnl(p), 0),
+    [pricedPositions]
   )
 
   const getPositionForSide = useCallback(
@@ -164,8 +171,8 @@ export function useScalpingPositions() {
   return {
     positions,
     totalPnl,
-    isLive: isLive && hasOpenPositions,
-    isPaused,
+    isLive: !unifiedMode && isLive && hasOpenPositions,
+    isPaused: !unifiedMode && isPaused,
     isLoading,
     refetch: fetchPositions,
     getPositionForSide,

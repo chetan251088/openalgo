@@ -4,6 +4,7 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { OptionsContext } from '@/types/scalping'
+import { optionChainApi } from '@/api/option-chain'
 
 const UPDATE_THROTTLE_MS = 300
 const KEEPALIVE_UPDATE_MS = 2_000
@@ -256,21 +257,13 @@ export function useOptionsContext() {
     fallbackFetchInFlightRef.current = true
     lastFallbackFetchRef.current = now
     try {
-      const response = await fetch('/api/v1/optionchain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apikey: apiKey,
-          underlying,
-          exchange: indexExchange,
-          expiry_date: normalizeExpiryForApi(expiry),
-          strike_count: chainStrikeCount,
-        }),
-      })
-
-      if (!response.ok) return
-
-      const payload = (await response.json()) as OptionChainResponse
+      const payload = await optionChainApi.getOptionChain(
+        apiKey,
+        underlying,
+        indexExchange,
+        normalizeExpiryForApi(expiry),
+        chainStrikeCount
+      )
       if (payload.status !== 'success' || !Array.isArray(payload.chain) || payload.chain.length === 0) return
 
       const next = buildContextFromChain(payload, currentContext, Date.now())

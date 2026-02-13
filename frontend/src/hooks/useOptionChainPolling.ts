@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { OptionChainResponse } from '@/types/option-chain'
 import { usePageVisibility } from './usePageVisibility'
+import { optionChainApi } from '@/api/option-chain'
 
 interface UseOptionChainPollingOptions {
   enabled: boolean
@@ -74,27 +75,13 @@ export function useOptionChainPolling(
 
       // Backend expects expiry without hyphens (e.g. "10FEB26" not "10-FEB-26")
       const expiryForAPI = expiryDate.replace(/-/g, '').toUpperCase()
-
-      const response = await fetch('/api/v1/optionchain', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          apikey: apiKey,
-          underlying,
-          exchange,
-          expiry_date: expiryForAPI,
-          strike_count: strikeCount,
-        }),
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data: OptionChainResponse = await response.json()
+      const data: OptionChainResponse = await optionChainApi.getOptionChain(
+        apiKey,
+        underlying,
+        exchange,
+        expiryForAPI,
+        strikeCount
+      )
 
       if (data.status === 'success') {
         setState((prev) => ({

@@ -1,4 +1,4 @@
-from marshmallow import Schema, fields, validate
+from marshmallow import Schema, ValidationError, fields, validate, validates_schema
 
 
 class OrderSchema(Schema):
@@ -210,11 +210,16 @@ class OptionsOrderSchema(Schema):
 
 
 class OptionsMultiOrderLegSchema(Schema):
-    """Schema for a single leg in options multi-order (no symbol - resolved from offset)"""
+    """Schema for a single leg in options multi-order."""
 
-    offset = fields.Str(required=True)  # ATM, ITM1-ITM50, OTM1-OTM50
+    # Symbol mode (preferred for low-latency execution paths)
+    symbol = fields.Str(required=False, allow_none=True)
+    exchange = fields.Str(required=False, allow_none=True)
+
+    # Offset mode (legacy/compatible)
+    offset = fields.Str(required=False, allow_none=True)  # ATM, ITM1-ITM50, OTM1-OTM50
     option_type = fields.Str(
-        required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
+        required=False, allow_none=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
     )  # Call or Put
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(
@@ -245,6 +250,20 @@ class OptionsMultiOrderLegSchema(Schema):
         missing=0,
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
+
+    @validates_schema
+    def validate_leg_mode(self, data, **kwargs):
+        symbol = str(data.get("symbol") or "").strip()
+        offset = str(data.get("offset") or "").strip()
+        option_type = str(data.get("option_type") or "").strip().upper()
+
+        if symbol:
+            return
+        if offset and option_type in {"CE", "PE"}:
+            return
+        raise ValidationError(
+            "Each leg requires either 'symbol' (direct mode) or both 'offset' + 'option_type' (offset mode)."
+        )
 
 
 class OptionsMultiOrderSchema(Schema):

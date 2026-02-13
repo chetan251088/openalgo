@@ -1,0 +1,155 @@
+{
+  "version": "1.0",
+  "name": "Scalping Unified Feed/Exec Bridge Check",
+  "description": "Validates feed-side market reads and execution-side position reads using separate broker base URLs and API keys. No order placement is performed.",
+  "exported_at": "2026-02-13T15:40:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 200 },
+      "data": {
+        "scheduleType": "interval",
+        "intervalValue": 1,
+        "intervalUnit": "minutes",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "var_feed_base",
+      "type": "variable",
+      "position": { "x": 360, "y": 40 },
+      "data": {
+        "variableName": "feedBaseUrl",
+        "operation": "set",
+        "value": "http://127.0.0.1:5002"
+      }
+    },
+    {
+      "id": "var_feed_key",
+      "type": "variable",
+      "position": { "x": 360, "y": 120 },
+      "data": {
+        "variableName": "feedApiKey",
+        "operation": "set",
+        "value": "REPLACE_FEED_OPENALGO_API_KEY"
+      }
+    },
+    {
+      "id": "var_exec_base",
+      "type": "variable",
+      "position": { "x": 360, "y": 200 },
+      "data": {
+        "variableName": "execBaseUrl",
+        "operation": "set",
+        "value": "http://127.0.0.1:5000"
+      }
+    },
+    {
+      "id": "var_exec_key",
+      "type": "variable",
+      "position": { "x": 360, "y": 280 },
+      "data": {
+        "variableName": "execApiKey",
+        "operation": "set",
+        "value": "REPLACE_EXEC_OPENALGO_API_KEY"
+      }
+    },
+    {
+      "id": "var_underlying",
+      "type": "variable",
+      "position": { "x": 360, "y": 360 },
+      "data": {
+        "variableName": "underlying",
+        "operation": "set",
+        "value": "NIFTY"
+      }
+    },
+    {
+      "id": "var_expiry",
+      "type": "variable",
+      "position": { "x": 360, "y": 440 },
+      "data": {
+        "variableName": "expiryDate",
+        "operation": "set",
+        "value": "26FEB26"
+      }
+    },
+    {
+      "id": "req_feed_quote",
+      "type": "httpRequest",
+      "position": { "x": 700, "y": 120 },
+      "data": {
+        "method": "POST",
+        "url": "{{feedBaseUrl}}/api/v1/quotes",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"apikey\":\"{{feedApiKey}}\",\"symbol\":\"{{underlying}}\",\"exchange\":\"NSE_INDEX\"}",
+        "timeout": 15,
+        "outputVariable": "feedQuote"
+      }
+    },
+    {
+      "id": "req_feed_chain",
+      "type": "httpRequest",
+      "position": { "x": 700, "y": 240 },
+      "data": {
+        "method": "POST",
+        "url": "{{feedBaseUrl}}/api/v1/optionchain",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"apikey\":\"{{feedApiKey}}\",\"underlying\":\"{{underlying}}\",\"exchange\":\"NSE_INDEX\",\"expiry_date\":\"{{expiryDate}}\",\"strike_count\":10}",
+        "timeout": 20,
+        "outputVariable": "feedOptionChain"
+      }
+    },
+    {
+      "id": "req_exec_positions",
+      "type": "httpRequest",
+      "position": { "x": 700, "y": 360 },
+      "data": {
+        "method": "POST",
+        "url": "{{execBaseUrl}}/api/v1/positionbook",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"apikey\":\"{{execApiKey}}\"}",
+        "timeout": 15,
+        "outputVariable": "execPositions"
+      }
+    },
+    {
+      "id": "log_summary",
+      "type": "log",
+      "position": { "x": 1040, "y": 210 },
+      "data": {
+        "level": "info",
+        "message": "Feed={{feedBaseUrl}} QuoteStatus={{feedQuote.statusCode}} LTP={{feedQuote.data.data.ltp}} ChainStatus={{feedOptionChain.statusCode}} Exec={{execBaseUrl}} PositionStatus={{execPositions.statusCode}}"
+      }
+    },
+    {
+      "id": "log_note",
+      "type": "log",
+      "position": { "x": 1360, "y": 210 },
+      "data": {
+        "level": "info",
+        "message": "Bridge check only. No order is placed in this template."
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_feed_base", "source": "start_1", "target": "var_feed_base" },
+    { "id": "e_feed_base_feed_key", "source": "var_feed_base", "target": "var_feed_key" },
+    { "id": "e_feed_key_exec_base", "source": "var_feed_key", "target": "var_exec_base" },
+    { "id": "e_exec_base_exec_key", "source": "var_exec_base", "target": "var_exec_key" },
+    { "id": "e_exec_key_underlying", "source": "var_exec_key", "target": "var_underlying" },
+    { "id": "e_underlying_expiry", "source": "var_underlying", "target": "var_expiry" },
+    { "id": "e_expiry_feed_quote", "source": "var_expiry", "target": "req_feed_quote" },
+    { "id": "e_feed_quote_feed_chain", "source": "req_feed_quote", "target": "req_feed_chain" },
+    { "id": "e_feed_chain_exec_positions", "source": "req_feed_chain", "target": "req_exec_positions" },
+    { "id": "e_exec_positions_log_summary", "source": "req_exec_positions", "target": "log_summary" },
+    { "id": "e_log_summary_log_note", "source": "log_summary", "target": "log_note" }
+  ]
+}

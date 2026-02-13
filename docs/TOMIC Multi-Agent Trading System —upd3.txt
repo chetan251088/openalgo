@@ -1,0 +1,483 @@
+TOMIC Multi-Agent Trading System — Implementation Plan v3
+Goal: Build a fully autonomous, multi-agent options selling and directional trading system on the OpenAlgo platform, following the "One Man Insurance Company" (TOMIC) philosophy.
+
+Background
+6 specialized agents (Regime, Sniper, Volatility, Risk, Execution, Journaling) communicate via ZeroMQ (telemetry) + durable command table (order flow), consume live WebSocket data, and execute multi-leg options strategies through OpenAlgo's unified broker API. Completely separate from the existing scalping framework.
+
+Non-Negotiable Architecture Contracts
+1. Broker-Agnostic Runtime Config
+All endpoints are role-based — no hardcoded ports anywhere in agent code.
+
+python
+# tomic/config.py — canonical runtime config contract
+class BrokerEndpoints:
+    feed_primary_ws: str    # os.getenv('TOMIC_FEED_PRIMARY_WS')
+    feed_fallback_ws: str   # os.getenv('TOMIC_FEED_FALLBACK_WS')
+    execution_rest: str     # os.getenv('TOMIC_EXECUTION_REST')
+    execution_api_key: str  # os.getenv('TOMIC_EXECUTION_API_KEY')
+    analytics_rest: str     # os.getenv('TOMIC_ANALYTICS_REST')
+env
+# .env.tomic — example: Zerodha primary, Dhan fallback
+TOMIC_FEED_PRIMARY_WS=ws://127.0.0.1:8767
+TOMIC_FEED_FALLBACK_WS=ws://127.0.0.1:8766
+TOMIC_EXECUTION_REST=http://127.0.0.1:5002
+TOMIC_EXECUTION_API_KEY=your_api_key
+TOMIC_ANALYTICS_REST=http://127.0.0.1:5002
+IMPORTANT
+
+Historify is shared: All broker instances use 
+db/historify.duckdb
+. Download jobs run from one instance only.
+
+2. Dual Messaging Architecture
+Channel	Transport	Use Case	Delivery Guarantee
+Telemetry Bus	ZeroMQ Pub/Sub	REGIME_UPDATE, HEARTBEAT, ALERT, POSITION_UPDATE	Best-effort, fire-and-forget
+Command Table	SQLite WAL (db/tomic_commands.db)	ORDER_REQUEST, ORDER_FILL, ORDER_REJECT	At-least-once + idempotency
+WARNING
+
+Delivery is at-least-once, not exactly-once. If the Execution Agent crashes after broker accepts an order but before marking DONE, the command will be retried. Safety depends on idempotency enforcement against both the idempotency_key in the local table and the broker's order reference (via OpenAlgo /api/v1/orderbook reconciliation).
+
+Command table schema:
+
+sql
+CREATE TABLE commands (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id        TEXT UNIQUE NOT NULL,
+    correlation_id  TEXT NOT NULL,
+    idempotency_key TEXT UNIQUE NOT NULL,
+    event_type      TEXT NOT NULL,           -- ORDER_REQUEST | ORDER_FILL | ORDER_REJECT
+    event_version   INTEGER DEFAULT 1,
+    source_agent    TEXT NOT NULL,
+    payload         TEXT NOT NULL,           -- JSON (sensitive fields masked in logs)
+    status          TEXT DEFAULT 'PENDING',  -- PENDING | PROCESSING | DONE | FAILED | DEAD_LETTER
+    -- Retry mechanics
+    attempt_count   INTEGER DEFAULT 0,
+    max_attempts    INTEGER DEFAULT 3,
+    last_error      TEXT,
+    next_retry_at   TIMESTAMP,
+    -- Lease mechanics (stale PROCESSING recovery)
+    owner_token     TEXT,                    -- UUID assigned on dequeue
+    lease_expires   TIMESTAMP,              -- owner_token invalid after this
+    -- Broker reconciliation
+    broker_order_id TEXT,                    -- filled after broker accepts
+    -- Timestamps
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at    TIMESTAMP
+);
+CREATE INDEX idx_commands_status ON commands(status, next_retry_at);
+Retry policy by error class:
+
+Error Class	Retry	Max Attempts	Backoff
+Network timeout	Yes	3	Exponential (1s, 2s, 4s)
+Broker rate limit	Yes	5	Fixed (SMART_ORDER_DELAY × 2)
+Broker reject (margin/invalid)	No	1	→ FAILED immediately
+Validation failure	No	1	→ FAILED immediately
+Unknown error	Yes	2	Fixed 5s, then → DEAD_LETTER
+Lease recovery: If status = PROCESSING and lease_expires < now(), the Supervisor reclaims the row — sets status = PENDING, clears owner_token, increments attempt_count. If attempt_count >= max_attempts, sets DEAD_LETTER + [CRITICAL] alert.
+
+Dequeue flow:
+
+SELECT ... WHERE status = 'PENDING' AND (next_retry_at IS NULL OR next_retry_at <= now()) LIMIT 1
+UPDATE SET status = 'PROCESSING', owner_token = uuid4(), lease_expires = now() + 30s, attempt_count += 1
+Execute against OpenAlgo API
+On success: SET status = 'DONE', broker_order_id = <ref>, processed_at = now()
+On retryable error: SET status = 'PENDING', next_retry_at = now() + backoff, last_error = <msg>
+On fatal error: SET status = 'FAILED', last_error = <msg>
+3. Idempotency Contract
+Every event across both channels carries:
+
+Field	Purpose
+event_id	UUID v4, globally unique
+correlation_id	Links chain: SIGNAL → ORDER_REQUEST → ORDER_FILL
+strategy_id	Strategy instance (e.g., TOMIC_VOL_BPS_NIFTY_20260215)
+idempotency_key	{strategy_id}:{leg}:{action} — prevents duplicate orders
+event_version	Schema version for forward compatibility
+Execution Agent checks idempotency two ways:
+
+Local: idempotency_key UNIQUE constraint in command table
+Broker: query /api/v1/orderbook for matching strategy tag before placing
+Duplicates are logged with IDEMPOTENCY_SKIP event and skipped.
+
+4. Data Freshness Gates
+CAUTION
+
+No order may be placed if any of these conditions are true:
+
+Market data gates:
+
+Gate	Threshold	Action
+Underlying quote age	> 5 seconds	Block, log STALE_QUOTE
+Option quote age	> 10 seconds	Block, log STALE_QUOTE
+Feed switched (primary→fallback)	Within last 30 seconds	Block, log FEED_SWITCHING
+Depth data missing	Required for slippage check	Block, log NO_DEPTH
+Analytics data gates:
+
+Source	Staleness Threshold	Fallback
+PCR (OI Tracker)	> 120 seconds	Use last known; flag PCR_STALE
+GEX data	> 120 seconds	Skip GEX S/R, use Ichimoku only
+Max Pain	> 300 seconds	Skip Max Pain bias
+IV / Greeks	> 60 seconds	Fallback to OpenAlgo API; if API also stale > 120s → block credit spread signals
+VIX	> 60 seconds	Use last known; flag VIX_STALE
+All timestamps use monotonic clock (see §12).
+
+5. Execution Safety Invariants
+Non-bypassable — no config flag can disable these.
+
+Invariant 1 — Per-strategy legging policy (locked at config time, no runtime switching):
+
+Strategy	Legging Policy	Rationale
+Bull Put Spread	ATOMIC_PREFERRED → fallback: HEDGE_FIRST (buy long put → then sell short put)	Hedge exists before short exposure
+Bear Call Spread	ATOMIC_PREFERRED → fallback: HEDGE_FIRST (buy long call → then sell short call)	Same
+Iron Condor	ATOMIC_PREFERRED → fallback: HEDGE_FIRST per side (buy wings → sell shorts)	Never naked on either side
+Risk Reversal	ATOMIC_PREFERRED → fallback: SHORT_FIRST_WITH_KILL_SWITCH (sell put → buy call at MARKET within 3s)	Premium capture matters; call is cheap
+DITM Calls	SINGLE_LEG	No hedge leg needed
+Calendar/Diagonal	ATOMIC_PREFERRED → fallback: HEDGE_FIRST (buy back month → sell front month)	Long leg protects
+Invariant 2 — Unhedged exposure timer: If any short option exists without its paired hedge for > 5 seconds, auto-close at MARKET + [CRITICAL] alert.
+
+Invariant 3 — Smart Order Delay: Respect SMART_ORDER_DELAY (0.5s) between legs.
+
+6. System-Level Circuit Breakers
+These sit above all strategy logic. Checked by Supervisor before any command is executed.
+
+Breaker	Threshold	Action
+Daily max loss	Realized + unrealized < -6% of capital	Kill switch, [CRITICAL] alert
+Max order rate	> 30 orders per minute	Throttle all new commands, [RISK] alert
+Max notional	Total gross notional > 5× capital	Reject new orders, [RISK] alert
+Per-underlying cap	Single underlying > 30% of used margin	Reject new orders for that underlying
+Max unhedged seconds	Any short unhedged > 5s (Invariant 2)	Force close, log incident
+7. Sizing Precedence Chain
+Deterministic pipeline — each step can only reduce (never increase):
+
+Step 1: Carver Volatility Target
+  raw_size = (Capital × 20%) / (35-day EWMA daily vol)
+    ↓
+Step 2: Half-Kelly Cap
+  kelly_size = (Win% - Loss%/RR) / 2 × Capital
+  size = min(raw_size, kelly_size)
+    ↓
+Step 3: 2% Rule
+  max_size = (Capital × 2%) / SL_distance
+  size = min(size, max_size)
+    ↓
+Step 4: VIX Overlay
+  if VIX > 30: size = size × 0.5
+    ↓
+Step 5: IDM (Instrument Diversification)
+  if correlation > 0.7: size = size × 0.7
+    ↓
+Step 6: Sector Heat Cap
+  if sector_margin > 20%: size = 0 (REJECT)
+    ↓
+Step 7: Position Cap
+  if total_positions >= 10: size = 0 (REJECT)
+    ↓
+Step 8: Margin Reserve Gate
+  query /api/v1/funds → if post-order free_margin < 25%: size = 0 (REJECT)
+    ↓
+Final: Round down to nearest lot size → APPROVED or REJECTED
+Each step logs input/output. Journaling Agent records the full chain.
+
+8. PositionBook — Versioned Snapshot Model
+Concern	Design
+Single writer	Execution Agent is the only process that writes to PositionBook
+Versioned reads	Every write increments a monotonic snapshot_version counter
+Read API	Risk/Journal call position_book.read_snapshot() → returns (version, positions_dict)
+Staleness detection	If Risk Agent's last_read_version is behind by > 5 versions, it re-reads before sizing
+Persistence	Written to db/tomic_positions.db on every change
+Reconciliation	On startup: load from DB → diff against /api/v1/positionbook → log discrepancies → trust broker as authority
+AtomicRegimeState: Single writer (Regime Agent), versioned. Same pattern.
+
+Available margin: Risk Agent refreshes from API every 30s. Cached with timestamp; Execution Agent checks cache freshness before using.
+
+9. Universe Pre-filtering
+Stage	When	Output
+Daily Universe Build	9:00 AM (pre-market)	NIFTY 500 → RS(50d) top 50 + volume > 500K → Active Watchlist (30-50)
+Intraday Rescore	Every 15 minutes	Re-rank by VCP/S&D proximity → Hot List (top 10)
+Always included	—	NIFTY, BANKNIFTY
+Only Active Watchlist subscribes to WebSocket. Hot List drives Sniper scans.
+
+10. Auth, Security & Audit
+Control API auth (/tomic/start|stop|pause):
+
+Same auth as OpenAlgo (session + API key)
+All control actions logged to db/tomic_audit.db with timestamp, user, action, IP
+API keys and broker credentials masked in all log output (***key***)
+Payload logging sanitizes api_key, broker_order_id fields
+11. Schema Migration
+All new TOMIC SQLite databases (tomic_commands.db, tomic_positions.db, tomic_journal.db, tomic_audit.db) use versioned migrations:
+
+tomic/migrations/
+├── 001_create_commands.sql
+├── 002_create_positions.sql
+├── 003_create_journal.sql
+├── 004_create_audit.sql
+└── ...
+schema_version table tracks applied migrations
+On startup: tomic/migrate.py applies pending migrations sequentially
+Migrations are forward-only (no down migrations for safety)
+Schema changes require a new numbered migration file
+12. Monotonic Clock Policy
+All timeout, cooldown, and freshness checks use time.monotonic() (or time.monotonic_ns()), never datetime.now() or time.time().
+
+Why: Wall-clock can jump (NTP sync, DST, manual changes). A 2-second NTP correction could cause a 5s freshness gate to falsely pass or a lease timeout to expire early.
+Timestamps in DB: Use wall-clock (CURRENT_TIMESTAMP) for human-readable audit trails only. Freshness/timeout logic uses monotonic deltas stored as float offsets.
+Implementation: freshness.py stores {symbol: monotonic_timestamp}. Comparison: monotonic() - last_tick > threshold.
+13. Observability Contract
+Metric	Source	Alert Threshold
+Order placement latency (ms)	Execution Agent	p99 > 500ms → [RISK]
+Order reject rate (%)	Command table	> 10% rolling 1h → [RISK]
+Stale-data blocks / hour	Freshness gates	> 20 → [RISK] (possible feed issue)
+Feed failover count / day	WS Data Manager	> 3 → [CRITICAL]
+Unhedged exposure incidents	Execution Agent	Any occurrence → [CRITICAL]
+Command dead-letter count	Command table	Any occurrence → [CRITICAL]
+Lease timeout reclaims / hour	Supervisor	> 5 → [RISK] (agent instability)
+Paper-vs-live slippage drift	Journal	> 2× expected → flag for review
+Metrics written to db/tomic_metrics.db (time-series, 1-min buckets). Queryable via /tomic/analytics.
+
+14. Split-Failure Behavior
+Scenario	Behavior
+Feed broker down, execution broker up	30s freshness gate blocks all new orders. Existing positions managed using last known state. If fallback feed also down → kill switch.
+Execution broker down, feed broker up	Commands queue in command table (durable). Agents continue analysis/signaling. Orders retry per policy. After 5 consecutive timeouts → kill switch + [CRITICAL].
+Both down	Immediate kill switch.
+Proposed Changes
+Phase 0: Contracts & Safety Foundation
+[NEW] 
+tomic/config.py
+Role-based config, all 90+ trading parameters, per-strategy legging policy table, circuit breaker thresholds.
+
+[NEW] 
+tomic/events.py
+Pydantic event schemas with full idempotency fields.
+
+[NEW] 
+tomic/command_store.py
+Durable command table with retry/dead-letter, lease timeouts, ownership tokens.
+
+[NEW] 
+tomic/position_book.py
+Versioned snapshot model, single writer, reconciliation on startup.
+
+[NEW] 
+tomic/freshness.py
+Market data + analytics freshness gates. Monotonic clock throughout.
+
+[NEW] 
+tomic/circuit_breakers.py
+System-level breakers: daily max loss, order rate, notional cap, per-underlying cap.
+
+[NEW] 
+tomic/migrate.py
+Schema migration runner. Forward-only numbered SQL files.
+
+[NEW] 
+tomic/migrations/
+001_create_commands.sql through 004_create_audit.sql.
+
+Phase 1: Core Runtime
+[NEW] 
+tomic/event_bus.py
+ZeroMQ Pub/Sub (telemetry only). Events persisted for replay.
+
+[NEW] 
+tomic/agent_base.py
+Abstract base: start(), stop(), heartbeat() (60s), on_event(). Monotonic clock for all timers.
+
+[NEW] 
+tomic/supervisor.py
+Watchdog + lease reclamation + circuit breaker enforcement + kill switch + safe shutdown. Stale PROCESSING recovery.
+
+[NEW] 
+tomic/ws_data_manager.py
+Role-based WS consumer. Regime/Sniper → QUOTE; Execution → DEPTH. Auto-failover with 30s cooldown. Monotonic tick timestamps.
+
+[NEW] 
+tomic/greeks_engine.py
+py_vollib_vectorized. BS (European), Bjerksund-Stensland (American). API fallback.
+
+[NEW] 
+tomic/agents/execution_agent.py
+Polls command table with lease mechanics. Per-strategy legging policy. All 3 safety invariants. Broker idempotency check. Position lifecycle. Strategy tags. Semi-Auto / Full-Auto.
+
+[NEW] 
+tomic/agents/journaling_agent.py
+Reads DONE commands. Full sizing chain, regime state, all parameters. Idempotency-safe (skips already-journaled event_ids).
+
+[NEW] 
+tomic/sandbox_adapter.py
+Routes agents through Sandbox when TOMIC_MODE=sandbox.
+
+[MODIFY] 
+sandbox_db.py
+Add spread_leverage config (default: 5×).
+
+[NEW] 
+blueprints/tomic.py
+Flask blueprint with auth-protected control APIs: POST /tomic/start|stop|pause (requires session + API key, logged to audit table). GET /tomic/status|positions|journal|analytics|metrics.
+
+[MODIFY] 
+app.py
+Register TOMIC blueprint.
+
+Phase 2: Single Strategy E2E (Regime + Risk + Execution)
+[NEW] 
+tomic/agents/regime_agent.py
+Ichimoku (9,26,52) + Impulse (13-EMA, MACD). Congestion/Blowoff detection. PCR/GEX/MaxPain confirmation (secondary, subject to analytics freshness gates). VIX cutoffs. Publishes REGIME_UPDATE via telemetry.
+
+[NEW] 
+tomic/agents/risk_agent.py
+8-step sizing chain. Reads PositionBook versioned snapshot. Implied move for dynamic SL. Enqueues to command table.
+
+Black Swan Hedge bootstrap:
+
+< 30 trades: ₹5,000/month fixed budget
+≥ 30 trades: 1-2% of rolling expected monthly profit
+Always: 5-delta NIFTY puts, monthly roll
+One defined-risk strategy (Bull Put Spread / Iron Condor) in paper mode.
+
+Phase 3: Signal Agents + Conflict Router
+[NEW] 
+tomic/agents/sniper_agent.py
+VCP, S/D, 3-C. Pre-filtered universe. GEX S/R. Regime hierarchy. Signal ranking.
+
+[NEW] 
+tomic/agents/volatility_agent.py
+IV/HV, IV Rank, skew, term structure. Consumes IV Smile/Vol Surface/Straddle APIs (with analytics freshness gates).
+
+[NEW] 
+tomic/conflict_router.py
+Capital allocator. Regime = master filter. Congestion → Volatility priority.
+
+Phase 4: Dashboard & Alerts
+[NEW] React pages: TomicDashboard.tsx, TomicAgents.tsx, TomicRisk.tsx
+Routes: /tomic/dashboard, /tomic/agents, /tomic/risk.
+
+[MODIFY] 
+frontend/src/App.tsx
+ — add /tomic/* routes
+[MODIFY] Telegram alert service — TOMIC prefixes: [CRITICAL], [RISK], [SIGNAL], [REGIME]
+Phase 5: Controlled Live Rollout
+25% → 50% → 100% capital over 3 months
+Gates: positive expectancy, DD < 10%, 30 days / 50 signals paper
+Semi-Auto first 2 weeks live → Full-Auto after
+Operational Runbooks
+Kill Switch
+System_Pause = True (via /tomic/pause or Telegram)
+Cancel all open orders (/api/v1/cancelallorder)
+Reject all queued commands (set FAILED)
+Stop all signal agents
+Telegram [CRITICAL] notification
+Positions remain open (manual decision)
+Safe Shutdown
+POST /tomic/stop
+Agents complete current cycle (5s timeout)
+Persist PositionBook
+Flush journal entries
+Close WebSocket connections
+Cancel open orders as safety net
+Log shutdown to audit table
+Agent Crash Recovery
+Missing heartbeat (60s) detected
+Cancel all open orders
+Restart (max 3 retries, 10s backoff)
+If restart fails → full kill switch
+On recovery → PositionBook reconciles with broker
+Stale PROCESSING Recovery
+Supervisor scans for status = PROCESSING AND lease_expires < now()
+Reclaim: status = PENDING, clear owner_token, increment attempt_count
+If attempt_count >= max_attempts → DEAD_LETTER + [CRITICAL]
+Check broker orderbook for orphaned orders before retry
+Failover Drill (Monthly)
+Simulate primary WS disconnect → verify fallback within 1s
+Verify 30s cooldown blocks orders
+Simulate agent crash → verify kill switch < 60s
+Simulate stale data → verify freshness gate blocks
+Simulate execution broker timeout → verify retry + dead-letter
+Replay Validation
+Liquidity-bucketed microstructure model (not flat random rates):
+
+Factor	Model
+Slippage	By liquidity: Large-cap 0.05%, Mid-cap 0.15%, Options ATM 1 tick, OTM 3-5 ticks
+Partial fills	By moneyness: ATM 90% fill, 1-strike OTM 70%, deep OTM 50%
+Queue position	Fill only if price trades through level
+Time-of-day	9:15-9:30 and 3:00-3:30: 2× normal slippage, 50% fill rate
+Reject rate	2% random + 5% during high-vol periods (VIX > 25)
+Latency	100ms normal, 300ms during market stress
+Spread cost	From historical depth when available; estimated 2× tick_size when not
+Broker Compatibility Matrix
+Test critical endpoints across instances before Phase 5:
+
+Endpoint	Zerodha	Dhan	Test
+placeorder	✓	✓	Single equity + single option
+basketorder	✓	Verify	Multi-leg spread
+cancelallorder	✓	✓	Kill switch path
+positionbook	✓	✓	Reconciliation
+funds	✓	✓	Margin reserve check
+margin	✓	✓	Pre-order margin
+WebSocket QUOTE	✓	✓	Feed quality
+WebSocket DEPTH	✓	Verify	Level 5 depth
+If basketorder is not supported by the execution broker, the per-strategy legging policy governs fallback behavior.
+
+File Structure
+tomic/
+├── __init__.py
+├── config.py               # Role-based config, all parameters
+├── events.py               # Pydantic event schemas
+├── command_store.py         # Durable command table + retry/dead-letter
+├── position_book.py         # Versioned snapshot, single writer
+├── freshness.py             # Market + analytics staleness gates
+├── circuit_breakers.py      # System-level hard stops
+├── migrate.py               # Schema migration runner
+├── event_bus.py             # ZeroMQ Pub/Sub (telemetry)
+├── agent_base.py            # Abstract base class
+├── supervisor.py            # Watchdog + lease recovery + runbooks
+├── ws_data_manager.py       # WebSocket consumer (role-based)
+├── greeks_engine.py         # py_vollib_vectorized
+├── conflict_router.py       # Signal priority/allocation
+├── sandbox_adapter.py       # Sandbox routing
+├── replay_adapter.py        # Liquidity-bucketed replay
+├── migrations/
+│   ├── 001_create_commands.sql
+│   ├── 002_create_positions.sql
+│   ├── 003_create_journal.sql
+│   └── 004_create_audit.sql
+├── agents/
+│   ├── __init__.py
+│   ├── regime_agent.py      # Phase 2
+│   ├── risk_agent.py        # Phase 2
+│   ├── execution_agent.py   # Phase 1
+│   ├── journaling_agent.py  # Phase 1
+│   ├── sniper_agent.py      # Phase 3
+│   └── volatility_agent.py  # Phase 3
+└── tests/
+    ├── test_contracts.py         # Idempotency, schemas, freshness
+    ├── test_command_store.py     # Retry, dead-letter, lease recovery
+    ├── test_position_book.py     # Versioned reads, reconciliation
+    ├── test_execution_safety.py  # 3 invariants + legging policies
+    ├── test_circuit_breakers.py  # All 5 breakers
+    ├── test_sizing_chain.py      # 8-step precedence
+    ├── test_regime_agent.py
+    ├── test_risk_agent.py
+    ├── test_pipeline.py          # E2E with mock data
+    ├── test_replay.py            # Microstructure modeling
+    └── test_broker_compat.py     # Cross-broker endpoint tests
+Verification Plan
+Phase 0-1 (Safety-first)
+bash
+python -m pytest tomic/tests/test_contracts.py -v
+python -m pytest tomic/tests/test_command_store.py -v
+python -m pytest tomic/tests/test_position_book.py -v
+python -m pytest tomic/tests/test_execution_safety.py -v
+python -m pytest tomic/tests/test_circuit_breakers.py -v
+python -m pytest tomic/tests/test_sizing_chain.py -v
+Phase 2 (Single Strategy)
+bash
+python -m pytest tomic/tests/test_regime_agent.py -v
+python -m pytest tomic/tests/test_risk_agent.py -v
+python -m pytest tomic/tests/test_pipeline.py -v
+Pre-Phase 5 (Broker Compatibility)
+bash
+python -m pytest tomic/tests/test_broker_compat.py -v
+Replay
+bash
+python -m tomic.replay_adapter --start-date 2025-01-01 --end-date 2025-06-30
+# Check: expectancy, DD, slippage report, fill rate by liquidity bucket

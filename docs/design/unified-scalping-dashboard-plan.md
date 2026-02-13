@@ -34,6 +34,28 @@ Each broker runs as a separate Flask app with isolated ports and databases:
 
 The React frontend is **fully broker-agnostic**: it reads the WebSocket URL from `/api/websocket/config` on page load and connects to the right port automatically. The broker name is available from the auth session for display purposes.
 
+### Current Unified Route Operations (2026-02-13)
+
+In addition to `/scalping`, a unified route `/scalping-unified` is now available with two runtime selectors:
+
+1. `Feed` selector:
+   - `Auto (Zerodha -> Dhan)`, `Zerodha`, `Dhan`
+2. `Exec` selector:
+   - `Kotak`, `Dhan`, `Zerodha`
+
+Runtime behavior:
+
+1. Chart ticks follow `Feed` WebSocket targets.
+2. Option chain/expiry/history/multiquotes follow `Feed` via proxied REST.
+3. Order placement, positions, and P&L follow `Exec`.
+4. Cross-broker API keys are resolved server-side per target broker in `/api/multibroker` proxy.
+5. Market orders route directly to execution broker (no cross-broker quote pre-check).
+
+Operational checklist:
+
+1. `docs/design/scalping-unified-ops-checklist.md`
+2. `docs/design/tomic-unified-architecture.md`
+
 ---
 
 ## Architecture Decisions

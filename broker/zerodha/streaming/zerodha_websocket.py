@@ -696,14 +696,15 @@ class ZerodhaWebSocket:
 
                     # Log periodically
                     if self.tick_count % 1000 == 0:
+                        rate_text = "N/A"
+                        if self.last_message_time:
+                            elapsed = time.time() - self.last_message_time
+                            if elapsed > 0:
+                                rate_text = f"{1000 / elapsed:.1f} ticks/sec"
                         self._log_event(
                             "DATA",
                             f"Processed {self.tick_count:,} total ticks",
-                            {
-                                "rate": f"{1000 / (time.time() - self.last_message_time):.1f} ticks/sec"
-                                if self.last_message_time
-                                else "N/A"
-                            },
+                            {"rate": rate_text},
                         )
 
                     # Call tick callback

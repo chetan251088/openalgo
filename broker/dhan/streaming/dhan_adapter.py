@@ -32,6 +32,16 @@ from .dhan_websocket import DhanWebSocket
 class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Dhan-specific implementation of the WebSocket adapter"""
 
+    BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
+    NSE_INDEX_SYMBOLS = {
+        "NIFTY",
+        "BANKNIFTY",
+        "FINNIFTY",
+        "MIDCPNIFTY",
+        "NIFTYNXT50",
+        "INDIAVIX",
+    }
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("dhan_websocket")
@@ -64,6 +74,41 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_delay = 60
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
+
+    def _normalize_index_exchange(self, symbol: str, exchange: str) -> str:
+        """
+        Normalize index exchange for known NSE/BSE index symbols.
+
+        This guards against callers sending SENSEX/BANKEX with NSE_INDEX, which
+        causes token lookup failures in Dhan symbol mapping.
+        """
+        if not symbol or not exchange:
+            return exchange
+
+        normalized_exchange = exchange.upper()
+        if normalized_exchange not in {"NSE_INDEX", "BSE_INDEX"}:
+            return exchange
+
+        normalized_symbol = symbol.upper()
+        if (
+            normalized_symbol in self.BSE_INDEX_SYMBOLS
+            and normalized_exchange != "BSE_INDEX"
+        ):
+            self.logger.warning(
+                f"Normalizing exchange for {symbol}: {exchange} -> BSE_INDEX"
+            )
+            return "BSE_INDEX"
+
+        if (
+            normalized_symbol in self.NSE_INDEX_SYMBOLS
+            and normalized_exchange != "NSE_INDEX"
+        ):
+            self.logger.warning(
+                f"Normalizing exchange for {symbol}: {exchange} -> NSE_INDEX"
+            )
+            return "NSE_INDEX"
+
+        return normalized_exchange
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -239,6 +284,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             use_20_depth = True
             self.logger.debug(f"20-level depth requested via symbol suffix for {actual_symbol}")
 
+        # Normalize index exchange for known index symbols (e.g. SENSEX => BSE_INDEX)
+        exchange = self._normalize_index_exchange(actual_symbol, exchange)
+
         # Map symbol to token (use actual symbol without suffix)
         self.logger.debug(f"Looking up token for {actual_symbol}.{exchange}")
         token_info = SymbolMapper.get_token_from_symbol(actual_symbol, exchange)
@@ -412,6 +460,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Response with status
         """
+        # Keep unsubscribe parity with subscribe normalization.
+        exchange = self._normalize_index_exchange(symbol, exchange)
+
         # Map symbol to token
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:

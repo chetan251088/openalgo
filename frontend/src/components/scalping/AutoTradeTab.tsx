@@ -115,6 +115,7 @@ export function AutoTradeTab() {
   const activeLastExitAgo = sideLastExitAt[activeSide] > 0
     ? Math.max(0, Math.round((Date.now() - sideLastExitAt[activeSide]) / 1000))
     : null
+  const executeBlockedByReplay = enabled && mode === 'execute' && replayMode
 
   const formatLoss = (value: number) => {
     if (value <= 0) return '0'
@@ -135,10 +136,10 @@ export function AutoTradeTab() {
             />
           </div>
           <Badge
-            variant={enabled ? (mode === 'execute' ? 'default' : 'secondary') : 'outline'}
+            variant={enabled ? (mode === 'execute' && !replayMode ? 'default' : 'secondary') : 'outline'}
             className="text-[10px] h-4"
           >
-            {!enabled ? 'OFF' : mode === 'execute' ? 'EXECUTING' : 'GHOST'}
+            {!enabled ? 'OFF' : executeBlockedByReplay ? 'SIM (REPLAY)' : mode === 'execute' ? 'EXECUTING' : 'GHOST'}
           </Badge>
         </div>
 
@@ -170,6 +171,12 @@ export function AutoTradeTab() {
             When enabled, execute mode is blocked and engine runs as simulation-only diagnostics.
           </p>
         </div>
+
+        {executeBlockedByReplay && (
+          <div className="p-1 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-[10px] text-center font-medium">
+            EXECUTE BLOCKED - Replay/Simulator is ON
+          </div>
+        )}
 
         {mode === 'execute' && !paperMode && !replayMode && (
           <div className="p-1 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-[10px] text-center font-medium">
@@ -285,6 +292,12 @@ export function AutoTradeTab() {
             <span className="text-muted-foreground">Spread State</span>
             <span className={`font-medium ${spreadState === 'WIDE' ? 'text-red-500' : spreadState === 'TIGHT' ? 'text-green-500' : ''}`}>
               {spreadState}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Execution Gate</span>
+            <span className={`font-medium ${executeBlockedByReplay ? 'text-amber-400' : mode === 'execute' ? 'text-green-500' : 'text-muted-foreground'}`}>
+              {executeBlockedByReplay ? 'BLOCKED (Replay)' : mode === 'execute' ? 'OPEN' : 'Ghost Mode'}
             </span>
           </div>
           <div className="flex items-center justify-between">

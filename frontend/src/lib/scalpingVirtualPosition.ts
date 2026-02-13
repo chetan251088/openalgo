@@ -189,7 +189,7 @@ interface BuildVirtualPositionParams {
   tpPoints: number
   slPoints: number
   createdAt?: number
-  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost'
+  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost' | 'flow'
   autoEntryScore?: number
   autoEntryReason?: string
 }

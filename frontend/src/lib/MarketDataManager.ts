@@ -14,6 +14,9 @@
  * - Automatically switches back to WebSocket when connection is restored
  */
 
+import { getUnifiedWsConfig, proxyV1ByRole } from '@/api/multi-broker'
+import { useMultiBrokerStore, type DataFeedMode } from '@/stores/multiBrokerStore'
+
 export interface DepthLevel {
   price: number
   quantity: number
@@ -130,6 +133,10 @@ export class MarketDataManager {
   private apiKey: string | null = null
   private consecutiveFailures: number = 0
   private maxConsecutiveFailures: number = 3 // Switch to fallback after 3 consecutive connection failures
+  private feedMode: DataFeedMode = 'auto'
+  private customWsTargets: string[] = []
+  private customWsTargetApiKeys: string[] = []
+  private customWsTargetIndex: number = 0
 
   private constructor() {
     // Private constructor for singleton pattern
@@ -318,6 +325,104 @@ export class MarketDataManager {
   }
 
   /**
+   * Configure unified feed source for multi-broker scalping page.
+   * 'auto' means Zerodha primary with Dhan fallback.
+   */
+  setUnifiedFeedMode(feedMode: DataFeedMode): void {
+    if (this.feedMode === feedMode) return
+    this.feedMode = feedMode
+    this.customWsTargets = []
+    this.customWsTargetApiKeys = []
+    this.customWsTargetIndex = 0
+  }
+
+  private async resolveSocketBootstrap(
+    abortSignal: AbortSignal
+  ): Promise<{ wsUrl: string; apiKey: string }> {
+    const state = useMultiBrokerStore.getState()
+    const inUnifiedMode = state.unifiedMode
+
+    if (inUnifiedMode) {
+      if (!this.customWsTargets.length) {
+        const response = await getUnifiedWsConfig(this.feedMode)
+        if (response.status !== 'success' || !Array.isArray(response.targets) || response.targets.length === 0) {
+          throw new Error(response.message || 'Failed to fetch unified WebSocket targets')
+        }
+        this.customWsTargets = []
+        this.customWsTargetApiKeys = []
+        for (const target of response.targets) {
+          const wsUrl = String(target.websocket_url || '').trim()
+          const targetApiKey = String(target.api_key || response.api_key || '').trim()
+          if (!wsUrl || !targetApiKey) continue
+          this.customWsTargets.push(wsUrl)
+          this.customWsTargetApiKeys.push(targetApiKey)
+        }
+        if (!this.customWsTargets.length) {
+          throw new Error('Unified WebSocket bootstrap is empty')
+        }
+        this.customWsTargetIndex = Math.max(0, Math.min(this.customWsTargetIndex, this.customWsTargets.length - 1))
+      }
+
+      if (!this.customWsTargets.length) {
+        throw new Error('Unified WebSocket bootstrap is empty')
+      }
+
+      const wsUrl = this.customWsTargets[this.customWsTargetIndex]
+      const apiKey = this.customWsTargetApiKeys[this.customWsTargetIndex]
+      if (!apiKey) {
+        throw new Error('No API key available for selected unified feed target')
+      }
+      return { wsUrl, apiKey }
+    }
+
+    const csrfToken = await fetchCSRFToken()
+    const configResponse = await fetch('/api/websocket/config', {
+      headers: { 'X-CSRFToken': csrfToken },
+      credentials: 'include',
+      signal: abortSignal,
+    })
+    const configData = await configResponse.json()
+    if (configData.status !== 'success' || !configData.websocket_url) {
+      throw new Error('Failed to get WebSocket configuration')
+    }
+
+    const authCsrfToken = await fetchCSRFToken()
+    const apiKeyResponse = await fetch('/api/websocket/apikey', {
+      headers: { 'X-CSRFToken': authCsrfToken },
+      credentials: 'include',
+      signal: abortSignal,
+    })
+    const apiKeyData = await apiKeyResponse.json()
+    if (apiKeyData.status !== 'success' || !apiKeyData.api_key) {
+      throw new Error('No API key found - please generate one at /apikey')
+    }
+
+    return { wsUrl: configData.websocket_url as string, apiKey: apiKeyData.api_key as string }
+  }
+
+  private tryFailoverTarget(): boolean {
+    if (!useMultiBrokerStore.getState().unifiedMode) return false
+    if (!this.customWsTargets.length) return false
+    if (this.customWsTargetIndex >= this.customWsTargets.length - 1) return false
+
+    this.customWsTargetIndex += 1
+    const nextApiKey = this.customWsTargetApiKeys[this.customWsTargetIndex]
+    if (nextApiKey) this.apiKey = nextApiKey
+    this.reconnectAttempts = 0
+    this.consecutiveFailures = 0
+    this.setError('Primary data feed unavailable, switched to fallback feed')
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
+    this.reconnectTimeout = setTimeout(() => {
+      void this.connect()
+    }, 200)
+    return true
+  }
+
+  /**
    * Connect to WebSocket server
    */
   async connect(): Promise<void> {
@@ -345,7 +450,11 @@ export class MarketDataManager {
     this.error = null
 
     try {
-      const csrfToken = await fetchCSRFToken()
+      // Keep runtime feed mode in sync with store selection.
+      const selectedFeed = useMultiBrokerStore.getState().dataFeed
+      if (selectedFeed !== this.feedMode) {
+        this.setUnifiedFeedMode(selectedFeed)
+      }
 
       // Check if disconnect was called during async operation
       if (this.userDisconnected || abortSignal.aborted) {
@@ -353,26 +462,16 @@ export class MarketDataManager {
         return
       }
 
-      // Get WebSocket config
-      const configResponse = await fetch('/api/websocket/config', {
-        headers: { 'X-CSRFToken': csrfToken },
-        credentials: 'include',
-        signal: abortSignal,
-      })
-      const configData = await configResponse.json()
+      const bootstrap = await this.resolveSocketBootstrap(abortSignal)
+      this.apiKey = bootstrap.apiKey
 
-      if (configData.status !== 'success') {
-        throw new Error('Failed to get WebSocket configuration')
-      }
-
-      // Check again after config fetch
+      // Check again after bootstrap fetch
       if (this.userDisconnected || abortSignal.aborted) {
         this.setConnectionState('disconnected')
         return
       }
 
-      const wsUrl = configData.websocket_url
-      const socket = new WebSocket(wsUrl)
+      const socket = new WebSocket(bootstrap.wsUrl)
 
       socket.onopen = async () => {
         // Check if disconnect was called before socket opened
@@ -385,30 +484,15 @@ export class MarketDataManager {
         this.reconnectAttempts = 0
 
         try {
-          // Get API key for authentication
-          const authCsrfToken = await fetchCSRFToken()
-
-          // Check again after async operation
+          // Check again before authentication
           if (this.userDisconnected) {
             socket.close(1000, 'User disconnect during authentication')
             return
           }
 
-          const apiKeyResponse = await fetch('/api/websocket/apikey', {
-            headers: { 'X-CSRFToken': authCsrfToken },
-            credentials: 'include',
-          })
-          const apiKeyData = await apiKeyResponse.json()
-
-          // Check again after API key fetch
-          if (this.userDisconnected) {
-            socket.close(1000, 'User disconnect during authentication')
-            return
-          }
-
-          if (apiKeyData.status === 'success' && apiKeyData.api_key) {
+          if (bootstrap.apiKey) {
             this.setConnectionState('authenticating')
-            socket.send(JSON.stringify({ action: 'authenticate', api_key: apiKeyData.api_key }))
+            socket.send(JSON.stringify({ action: 'authenticate', api_key: bootstrap.apiKey }))
           } else {
             this.setError('No API key found - please generate one at /apikey')
           }
@@ -427,6 +511,15 @@ export class MarketDataManager {
         // Track consecutive failures for fallback trigger
         if (!event.wasClean) {
           this.consecutiveFailures++
+        }
+
+        if (
+          this.autoReconnect &&
+          !event.wasClean &&
+          this.connectionState !== 'paused' &&
+          this.tryFailoverTarget()
+        ) {
+          return
         }
 
         // Auto-reconnect if not clean close and not paused
@@ -460,6 +553,10 @@ export class MarketDataManager {
       this.consecutiveFailures++
       this.setError(`Connection failed: ${err}`)
       this.setConnectionState('disconnected')
+
+      if (this.tryFailoverTarget()) {
+        return
+      }
 
       // Check if we should switch to fallback mode
       if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
@@ -712,6 +809,33 @@ export class MarketDataManager {
    */
   private async fetchApiKeyForFallback(): Promise<void> {
     try {
+      const { unifiedMode } = useMultiBrokerStore.getState()
+      if (unifiedMode) {
+        const selectedKey = this.customWsTargetApiKeys[this.customWsTargetIndex]
+        if (selectedKey) {
+          this.apiKey = selectedKey
+          return
+        }
+
+        const response = await getUnifiedWsConfig(this.feedMode)
+        if (response.status === 'success' && Array.isArray(response.targets) && response.targets.length > 0) {
+          this.customWsTargets = []
+          this.customWsTargetApiKeys = []
+          for (const target of response.targets) {
+            const wsUrl = String(target.websocket_url || '').trim()
+            const targetApiKey = String(target.api_key || response.api_key || '').trim()
+            if (!wsUrl || !targetApiKey) continue
+            this.customWsTargets.push(wsUrl)
+            this.customWsTargetApiKeys.push(targetApiKey)
+          }
+          const fallbackKey = this.customWsTargetApiKeys[this.customWsTargetIndex]
+          if (fallbackKey) {
+            this.apiKey = fallbackKey
+          }
+        }
+        return
+      }
+
       const csrfToken = await fetchCSRFToken()
       const response = await fetch('/api/websocket/apikey', {
         headers: { 'X-CSRFToken': csrfToken },
@@ -773,20 +897,27 @@ export class MarketDataManager {
       const symbolsArray = Array.from(uniqueSymbols.values())
       if (symbolsArray.length === 0) return
 
-      // Call multiquotes API
-      const response = await fetch('/api/v1/multiquotes', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
+      let data: MultiQuotesApiResponse
+      if (useMultiBrokerStore.getState().unifiedMode) {
+        data = await proxyV1ByRole<MultiQuotesApiResponse>('feed', 'multiquotes', {
           apikey: this.apiKey,
           symbols: symbolsArray,
-        }),
-      })
-
-      const data = await response.json() as MultiQuotesApiResponse
+        })
+      } else {
+        // Call multiquotes API
+        const response = await fetch('/api/v1/multiquotes', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            apikey: this.apiKey,
+            symbols: symbolsArray,
+          }),
+        })
+        data = (await response.json()) as MultiQuotesApiResponse
+      }
 
       if (data.status === 'success' && data.results) {
         // Process each result and update cache + notify subscribers

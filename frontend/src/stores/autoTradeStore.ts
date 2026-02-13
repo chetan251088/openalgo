@@ -17,6 +17,57 @@ function initSideMap(initial = 0): SideNumberMap {
   }, {} as SideNumberMap)
 }
 
+const TRUTHY_VALUES = new Set(['1', 'true', 'yes', 'on', 'enabled'])
+const FALSY_VALUES = new Set(['0', 'false', 'no', 'off', 'disabled'])
+
+function parseBooleanLike(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value !== 0 : null
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (TRUTHY_VALUES.has(normalized)) return true
+    if (FALSY_VALUES.has(normalized)) return false
+  }
+  return null
+}
+
+function sanitizeConfigPatch(
+  patch: Partial<Record<keyof AutoTradeConfigFields, unknown>> | null | undefined
+): Partial<AutoTradeConfigFields> {
+  if (!patch || typeof patch !== 'object') return {}
+
+  const source = patch as Record<string, unknown>
+  const normalized: Partial<AutoTradeConfigFields> = {}
+
+  for (const key of Object.keys(DEFAULT_CONFIG) as Array<keyof AutoTradeConfigFields>) {
+    if (!(key in source)) continue
+    const defaultValue = DEFAULT_CONFIG[key]
+    const raw = source[key]
+
+    if (typeof defaultValue === 'boolean') {
+      const parsed = parseBooleanLike(raw)
+      if (parsed != null) {
+        ;(normalized as Record<string, boolean | number>)[key] = parsed
+      }
+      continue
+    }
+
+    if (typeof defaultValue === 'number') {
+      const numeric =
+        typeof raw === 'number'
+          ? raw
+          : typeof raw === 'string'
+            ? Number(raw)
+            : Number.NaN
+      if (Number.isFinite(numeric)) {
+        ;(normalized as Record<string, boolean | number>)[key] = numeric
+      }
+    }
+  }
+
+  return normalized
+}
+
 export interface AutoTradeDecisionCheck {
   id: string
   label: string
@@ -160,14 +211,14 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
 
       updateConfig: (partial) =>
         set((s) => ({
-          config: { ...s.config, ...partial },
+          config: { ...s.config, ...sanitizeConfigPatch(partial) },
         })),
 
       applyPreset: (presetId) => {
         const preset = PRESETS.find((p) => p.id === presetId)
         if (!preset) return
         set({
-          config: { ...DEFAULT_CONFIG, ...preset.config },
+          config: { ...DEFAULT_CONFIG, ...sanitizeConfigPatch(preset.config) },
           activePresetId: presetId,
         })
       },
@@ -347,7 +398,9 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           ...persisted,
           config: {
             ...DEFAULT_CONFIG,
-            ...(persisted.config ?? {}),
+            ...sanitizeConfigPatch(
+              (persisted.config ?? {}) as Partial<Record<keyof AutoTradeConfigFields, unknown>>
+            ),
           },
           activePresetId: persisted.activePresetId ?? currentState.activePresetId,
         }

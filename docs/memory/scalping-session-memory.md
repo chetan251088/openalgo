@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-02-11
+Last updated: 2026-02-13
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -182,6 +182,129 @@ Major implemented behavior (high level):
    - `ArrowDown` now places PE `BUY` as forced `MARKET`
    - both shortcuts use the same post-fill virtual TP/SL attach pipeline as regular hotkey buys
    - bottom-bar and hotkey-help labels updated to reflect new mappings
+28. Dhan index exchange normalization hardening:
+   - Dhan WS adapter now normalizes known index symbols to the correct index exchange before token lookup
+   - `SENSEX` / `BANKEX` / `SENSEX50` are auto-routed to `BSE_INDEX` if a caller accidentally sends `NSE_INDEX`
+   - unsubscribe path applies the same normalization for parity with subscribe
+29. Auto execute transparency hardening:
+   - auto engine now fetches API key on-demand before live auto-entry (same pattern as manual hotkeys)
+   - missing API key no longer fails silently; execution sample records `Missing API key` and a throttled toast is shown
+   - Auto tab status now shows `SIM (REPLAY)` when execute is selected but replay mode blocks live order placement
+   - Execution panel now displays an explicit execution gate state (`OPEN`, `BLOCKED (Replay)`, or `Ghost Mode`)
+30. Scalping lot-size parity hardening for SENSEX:
+   - SENSEX fallback lot size in scalping store/types updated from `10` to `20`
+   - option-chain lot-size hydration now scans chain rows for first valid positive `lotsize` instead of trusting only row 0
+   - avoids stale/wrong lot sizing when first row is missing/incomplete and improves Dhan/Kotak parity on underlying switch
+31. Refresh-rehydrate underlying parity fix:
+   - on persisted scalping state rehydrate, derived fields are now recomputed from restored underlying (`optionExchange`, `indexExchange`, `lotSize`)
+   - fixes refresh case where underlying restored as `SENSEX` but exchange stayed at default `NFO`, causing empty/failed expiry + option-chain fetch until manual toggle
+32. Unified multi-broker scalping route introduced (non-breaking):
+   - new React route `/scalping-unified` wraps existing scalping dashboard without changing `/scalping`
+   - UI adds feed/execution selectors in top bar when unified mode is active:
+     - feed: `Auto (Zerodha -> Dhan)`, `Zerodha`, `Dhan`
+     - execution: `Kotak`, `Dhan`, `Zerodha`
+   - unified mode is enabled only on `/scalping-unified` mount and disabled on unmount
+33. Multi-broker feed/execute routing bridge added:
+   - backend proxy blueprint `/api/multibroker` routes selected `/api/v1/*` requests to chosen broker instance
+   - frontend unified routing sends:
+     - option-chain + chart/market-data calls to feed broker role
+     - order placement/modify/cancel + positions/orders/trades/funds/holdings to execution broker role
+   - WebSocket feed bootstrap supports Auto failover sequence `Zerodha -> Dhan`
+   - MarketDataManager REST fallback now also respects unified feed role (no hardcoded local `/api/v1/multiquotes` path in unified mode)
+   - scalping position/P&L path in unified mode is execution-broker sourced from execution positionbook polling (without feed-side WS quote overlay)
+34. Cross-broker OpenAlgo API-key handling in unified mode:
+   - proxy now auto-resolves target broker OpenAlgo API key per request (instead of reusing the current instance key)
+   - `/api/multibroker/v1` rewrites `payload.apikey` to the selected target broker key before forwarding
+   - `/api/multibroker/ws-config` now returns per-target WS `api_key` for feed failover targets
+   - requirement: user must be logged in on each target broker instance once and API key must exist on that instance (`/apikey`)
+35. Re-entry toggle/state hardening:
+   - auto-trade config persistence now sanitizes config types against defaults (boolean and number coercion)
+   - fixes stale persisted boolean-like strings making toggles appear stuck (including Re-Entry)
+   - Re-entry gate now reports explicit `ON/OFF` decision check and enforces `OFF => first entry only` deterministically
+36. TOMIC runtime bootstrap is now live in app startup:
+   - `app.py` registers `tomic_bp` and constructs `TomicRuntime()` in `setup_environment()`
+   - runtime is attached once per instance (`app.extensions["tomic_runtime"]`) with graceful stop on process exit
+   - React routes are live for:
+     - `/tomic/dashboard`
+     - `/tomic/agents`
+     - `/tomic/risk`
+37. TOMIC live signal pipeline is wired end-to-end:
+   - WS tick flow: `WSDataManager -> TomicMarketBridge -> Regime/Sniper/Volatility`
+   - routed decisions: `ConflictRouter -> RiskAgent.enqueue_signal()` with dedupe cooldown
+   - observability endpoints include:
+     - `/tomic/status` (includes `signal_loop` + `market_bridge` status)
+     - `/tomic/signals/quality` (scans + top candidates + decision breakdown)
+38. TOMIC operational alerts are now active:
+   - alert conditions: feed disconnect/stale, repeated rejects, dead-letter growth, kill-switch transitions
+   - alerts publish via `AlertEvent`; risk/critical alerts optionally broadcast to Telegram
+   - key env controls:
+     - `TOMIC_SIGNAL_LOOP_ENABLED`
+     - `TOMIC_SIGNAL_LOOP_INTERVAL_S`
+     - `TOMIC_SIGNAL_ENQUEUE_COOLDOWN_S`
+     - `TOMIC_SIGNAL_REJECT_ALERT_THRESHOLD`
+     - `TOMIC_FEED_STALE_ALERT_AFTER_S`
+     - `TOMIC_ALERT_COOLDOWN_S`
+     - `TOMIC_TELEGRAM_ALERTS`
+39. `.env.*` broker files now include TOMIC endpoint config:
+   - feed endpoints:
+     - `TOMIC_FEED_PRIMARY_WS`
+     - `TOMIC_FEED_FALLBACK_WS`
+     - `TOMIC_FEED_PRIMARY_API_KEY`
+     - `TOMIC_FEED_FALLBACK_API_KEY`
+   - execution/analytics endpoints:
+     - `TOMIC_EXECUTION_REST`
+     - `TOMIC_EXECUTION_API_KEY`
+     - `TOMIC_ANALYTICS_REST`
+40. Unified route behavior is now explicit and stable:
+   - chart ticks use feed WS targets from `/api/multibroker/ws-config`
+   - option chain/expiry/history/multiquotes use feed broker via `/api/multibroker/v1`
+   - order placement/modify/cancel + positions/P&L use execution broker via `/api/multibroker/v1`
+   - no cross-broker quote pre-check is required before market order fire
+41. Cross-broker API-key flow clarification:
+   - each broker instance must have valid login session + generated `/apikey`
+   - proxy rewrites per-target `apikey` server-side for forwarded `/api/v1/*` calls
+42. Control-instance recommendation for TOMIC:
+   - run TOMIC loop on exactly one instance (recommended: Zerodha `:5002`)
+   - set non-control instances to `TOMIC_SIGNAL_LOOP_ENABLED='false'` to avoid duplicate autonomous loops
+43. TOMIC observability upgrade for real-time decision introspection:
+   - `/tomic/signals/quality` now includes:
+     - router decision trace with per-instrument action + reason
+     - aggregated no-action reasons (feed auth, zero signals, router blocks, risk outcomes)
+     - risk-agent evaluation telemetry (blocked/sizing reject/enqueued/duplicate)
+     - sniper/volatility readiness snapshots (bars, IV/HV/IV-rank state)
+   - WS status now exposes auth/error diagnostics (`last_auth_message`, `last_error`, message/error ages)
+   - TOMIC UI pages (`/tomic/dashboard`, `/tomic/agents`, `/tomic/risk`) render these diagnostics live
+44. TOMIC volatility strategy expansion (regime-matched):
+   - added `JADE_LIZARD`, `SHORT_STRANGLE`, `SHORT_STRADDLE` strategy types
+   - volatility agent emits these only when volatility/regime criteria are satisfied
+45. TOMIC risk gating for new premium-selling strategies:
+   - `JADE_LIZARD`/`SHORT_STRANGLE`/`SHORT_STRADDLE` are allowed only in `CONGESTION`
+   - blocked when VIX flags indicate `PREMIUMS_TOO_LOW`, `DEFINED_RISK_ONLY`, or `HALT_SHORT_VEGA`
+   - enforced as `SELL`-only signals
+46. TOMIC execution routing parity for legged options:
+   - new legged strategies are routed via `/api/v1/optionsmultiorder` (same legged execution path as spread strategies)
+   - validation now requires legs for these strategies before execution
+47. New TOMIC env toggles for advanced premium strategies:
+   - `TOMIC_ENABLE_JADE_LIZARD`
+   - `TOMIC_ENABLE_SHORT_STRANGLE`
+   - `TOMIC_ENABLE_SHORT_STRADDLE`
+   - `TOMIC_ALLOW_NAKED_PREMIUM`
+   - `TOMIC_SHORT_PREMIUM_IV_RANK_MIN`
+   - `TOMIC_SHORT_PREMIUM_IV_HV_MIN`
+48. Flow + TOMIC visual automation bridge is now available:
+   - new Flow nodes: `tomicSnapshot`, `tomicControl`, `tomicSignal`
+   - `tomicSignal` supports `autoSelect=true` using `snapshotVariable` context and `fallbackStrategy`
+   - ready templates:
+     - `docs/flow/templates/tomic-observability-flow.json`
+     - `docs/flow/templates/tomic-signal-routing-flow.json`
+     - `docs/flow/templates/tomic-options-selling-regime-routing-flow.json`
+   - runbook: `docs/flow/README.md`
+49. Flow -> scalping virtual TP/SL bridge is now wired:
+   - new API namespace: `/api/v1/scalpingbridge` (`enqueue`, `pending`, `ack`)
+   - backend in-memory queue service: `services/scalping_flow_bridge_service.py`
+   - frontend consumer hook: `frontend/src/hooks/useFlowVirtualBridge.ts`
+   - shared dashboard integration means both `/scalping` and `/scalping-unified` consume bridge events
+   - new template: `docs/flow/templates/scalping-ws-virtual-tpsl-bridge-flow.json`
 
 ## 7) Still Important Gaps / Follow-ups
 
@@ -241,4 +364,50 @@ Run this after scalping changes:
 
 Use this in a new session to bootstrap context quickly:
 
-`Read docs/skills/scalping-autotrade-copilot/SKILL.md and docs/memory/scalping-session-memory.md, then continue from the latest scalping/autotrade state.`
+`Read docs/skills/scalping-autotrade-copilot/SKILL.md, docs/memory/scalping-session-memory.md, docs/memory/scalping-next-session-handover.md, and docs/design/tomic-unified-architecture.md, then continue from the latest unified scalping + TOMIC control-instance state.`
+
+## 12) Unified Route Ops (Day-To-Day)
+
+Use this model for `/scalping-unified`:
+
+1. Keep all target broker instances running in background:
+   - Kotak `:5000`
+   - Dhan `:5001`
+   - Zerodha `:5002`
+2. Open `/scalping-unified` from any one instance.
+3. Use `Feed` selector for chart/option-chain market data source.
+4. Use `Exec` selector for order placement + positions + P&L source.
+5. Ensure each target instance has:
+   - active login session
+   - API key generated on `/apikey`
+
+Quick sanity checks:
+
+1. `/api/multibroker/config` should return `401` when not logged in and `200` when logged in.
+2. Feed switch should update option chain and chart stream without page reload.
+3. Exec switch should move order destination and P&L/positions source.
+
+Reference checklist:
+
+1. `docs/design/scalping-unified-ops-checklist.md`
+2. `docs/design/tomic-unified-architecture.md`
+3. `docs/flow/README.md`
+
+## 13) Unified + TOMIC Runtime (Recommended Daily Model)
+
+Use this model to avoid duplicate loops and routing ambiguity:
+
+1. Keep all broker instances running in background if they are needed as selectable execution targets.
+2. Use one control instance for TOMIC dashboards and loop control (recommended Zerodha `:5002`).
+3. Set env for control/worker roles:
+   - control instance: `TOMIC_SIGNAL_LOOP_ENABLED='true'`
+   - non-control instances: `TOMIC_SIGNAL_LOOP_ENABLED='false'`
+4. On every running instance, login once and generate `/apikey`.
+5. Open `/scalping-unified` from any instance for manual/auto scalping feed-exec split.
+6. Open `/tomic/dashboard` only on control instance for agent/loop operations.
+
+If unified orders fail with `Invalid openalgo apikey`:
+
+1. Verify target execution broker session is active.
+2. Re-generate `/apikey` on that target broker instance.
+3. Retry order from `/scalping-unified`.

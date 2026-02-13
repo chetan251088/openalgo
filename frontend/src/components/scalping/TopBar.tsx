@@ -12,10 +12,21 @@ import { optionChainApi } from '@/api/option-chain'
 import { useAuthStore } from '@/stores/authStore'
 import { useScalpingStore } from '@/stores/scalpingStore'
 import type { Underlying } from '@/types/scalping'
+import { useMultiBrokerStore, type DataFeedMode, type UnifiedBroker } from '@/stores/multiBrokerStore'
 
 const UNDERLYINGS: Underlying[] = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY']
 const STRIKE_COUNTS = [10, 15, 20, 25, 30]
 const EXPIRY_PLACEHOLDER_VALUE = '__none__'
+const DATA_FEED_OPTIONS: Array<{ value: DataFeedMode; label: string }> = [
+  { value: 'auto', label: 'Auto (Z->D)' },
+  { value: 'zerodha', label: 'Zerodha' },
+  { value: 'dhan', label: 'Dhan' },
+]
+const EXECUTION_BROKERS: Array<{ value: UnifiedBroker; label: string }> = [
+  { value: 'kotak', label: 'Kotak' },
+  { value: 'dhan', label: 'Dhan' },
+  { value: 'zerodha', label: 'Zerodha' },
+]
 
 function areStringListsEqual(a: string[], b: string[]) {
   return a.length === b.length && a.every((value, idx) => value === b[idx])
@@ -29,6 +40,11 @@ interface TopBarProps {
 export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
   const apiKey = useAuthStore((s) => s.apiKey)
   const broker = useAuthStore((s) => s.user?.broker)
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
+  const dataFeed = useMultiBrokerStore((s) => s.dataFeed)
+  const executionBroker = useMultiBrokerStore((s) => s.executionBroker)
+  const setDataFeed = useMultiBrokerStore((s) => s.setDataFeed)
+  const setExecutionBroker = useMultiBrokerStore((s) => s.setExecutionBroker)
 
   const underlying = useScalpingStore((s) => s.underlying)
   const optionExchange = useScalpingStore((s) => s.optionExchange)
@@ -159,6 +175,49 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
 
       <div className="flex-1" />
 
+      {unifiedMode && (
+        <>
+          <div className="w-px h-5 bg-border" />
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Feed</span>
+            <Select value={dataFeed} onValueChange={(value) => setDataFeed(value as DataFeedMode)}>
+              <SelectTrigger className="h-7 w-[118px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DATA_FEED_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-px h-5 bg-border" />
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Exec</span>
+            <Select
+              value={executionBroker}
+              onValueChange={(value) => setExecutionBroker(value as UnifiedBroker)}
+            >
+              <SelectTrigger className="h-7 w-[96px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EXECUTION_BROKERS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </>
+      )}
+
       {/* Paper/Live toggle */}
       <div className="flex items-center gap-1.5">
         <div className="inline-flex rounded-md border border-border/60 bg-muted/30 p-0.5">
@@ -186,10 +245,16 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
       <div className="w-px h-5 bg-border" />
 
       {/* Broker badge */}
-      {broker && (
+      {unifiedMode ? (
         <Badge variant="outline" className="text-xs h-6">
-          {broker}
+          EXEC: {executionBroker.toUpperCase()}
         </Badge>
+      ) : (
+        broker && (
+          <Badge variant="outline" className="text-xs h-6">
+            {broker}
+          </Badge>
+        )
       )}
 
       <div className="w-px h-5 bg-border" />

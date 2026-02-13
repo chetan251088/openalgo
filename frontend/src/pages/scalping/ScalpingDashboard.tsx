@@ -15,6 +15,7 @@ import { useMarketData } from '@/hooks/useMarketData'
 import { useVirtualTPSL } from '@/hooks/useVirtualTPSL'
 import { useTrailingMonitor } from '@/hooks/useTrailingMonitor'
 import { useScalpingPositions } from '@/hooks/useScalpingPositions'
+import { useFlowVirtualBridge } from '@/hooks/useFlowVirtualBridge'
 import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
@@ -224,6 +225,9 @@ export default function ScalpingDashboard() {
     totalPnl: liveOpenPnl,
     isLive: isLivePnl,
   } = useScalpingPositions()
+
+  // Flow bridge: attach virtual TP/SL lines for flow-triggered entries.
+  useFlowVirtualBridge()
 
   useEffect(() => {
     updateRiskState(liveOpenPnl)

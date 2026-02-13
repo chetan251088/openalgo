@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "name": "TOMIC Live Observability",
+  "description": "Reads runtime state, signal quality, and router diagnostics in one run.",
+  "exported_at": "2026-02-13T12:00:00Z",
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "start",
+      "position": { "x": 120, "y": 120 },
+      "data": {
+        "scheduleType": "daily",
+        "time": "09:15",
+        "marketHoursOnly": true
+      }
+    },
+    {
+      "id": "snap_status",
+      "type": "tomicSnapshot",
+      "position": { "x": 380, "y": 60 },
+      "data": {
+        "source": "status",
+        "outputVariable": "tomicStatus"
+      }
+    },
+    {
+      "id": "snap_signals",
+      "type": "tomicSnapshot",
+      "position": { "x": 380, "y": 180 },
+      "data": {
+        "source": "signals",
+        "runScan": true,
+        "outputVariable": "tomicSignals"
+      }
+    },
+    {
+      "id": "snap_router",
+      "type": "tomicSnapshot",
+      "position": { "x": 380, "y": 300 },
+      "data": {
+        "source": "router",
+        "limit": 20,
+        "outputVariable": "tomicRouter"
+      }
+    },
+    {
+      "id": "log_1",
+      "type": "log",
+      "position": { "x": 700, "y": 170 },
+      "data": {
+        "level": "info",
+        "message": "Runtime={{tomicStatus.data.runtime}} | Routed={{tomicSignals.data.signals.routed_count}} | Enqueued={{tomicSignals.data.signals.enqueued_count}}",
+        "label": "Pipeline summary"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_status",
+      "source": "start_1",
+      "target": "snap_status"
+    },
+    {
+      "id": "e_status_signals",
+      "source": "snap_status",
+      "target": "snap_signals"
+    },
+    {
+      "id": "e_signals_router",
+      "source": "snap_signals",
+      "target": "snap_router"
+    },
+    {
+      "id": "e_router_log",
+      "source": "snap_router",
+      "target": "log_1"
+    }
+  ]
+}
+

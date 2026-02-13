@@ -116,6 +116,33 @@ class WebSocketHandshakeFilter(logging.Filter):
 class SensitiveDataFilter(logging.Filter):
     """Filter to redact sensitive information from log messages."""
 
+    @classmethod
+    def _sanitize_value(cls, value):
+        """Redact sensitive content while preserving value types for log formatting."""
+        try:
+            if isinstance(value, str):
+                sanitized = value
+                for pattern, replacement in SENSITIVE_PATTERNS:
+                    sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+                return sanitized
+
+            if isinstance(value, dict):
+                return {k: cls._sanitize_value(v) for k, v in value.items()}
+
+            if isinstance(value, list):
+                return [cls._sanitize_value(v) for v in value]
+
+            if isinstance(value, tuple):
+                return tuple(cls._sanitize_value(v) for v in value)
+
+            if isinstance(value, set):
+                return {cls._sanitize_value(v) for v in value}
+
+            # Keep numerics/bools/None and other non-string scalars unchanged.
+            return value
+        except Exception:
+            return value
+
     def filter(self, record):
         try:
             # Filter the main message
@@ -124,15 +151,7 @@ class SensitiveDataFilter(logging.Filter):
 
             # Filter args if present
             if hasattr(record, "args") and record.args:
-                filtered_args = []
-                for arg in record.args:
-                    filtered_arg = str(arg)
-                    for pattern, replacement in SENSITIVE_PATTERNS:
-                        filtered_arg = re.sub(
-                            pattern, replacement, filtered_arg, flags=re.IGNORECASE
-                        )
-                    filtered_args.append(filtered_arg)
-                record.args = tuple(filtered_args)
+                record.args = tuple(self._sanitize_value(arg) for arg in record.args)
         except Exception:
             # If filtering fails, don't block the log message
             pass

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useScalpingStore } from '@/stores/scalpingStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
@@ -138,6 +138,7 @@ export function useAutoTradeEngine(
   const OPTIONS_CONTEXT_STALE_MS = 20_000
 
   const apiKey = useAuthStore((s) => s.apiKey)
+  const setApiKey = useAuthStore((s) => s.setApiKey)
 
   const underlying = useScalpingStore((s) => s.underlying)
   const indexExchange = useScalpingStore((s) => s.indexExchange)
@@ -196,6 +197,22 @@ export function useAutoTradeEngine(
     CE: { at: 0, sig: '' },
     PE: { at: 0, sig: '' },
   })
+  const lastMissingApiKeyWarnAtRef = useRef(0)
+
+  const ensureApiKey = useCallback(async (): Promise<string | null> => {
+    if (apiKey) return apiKey
+    try {
+      const resp = await fetch('/api/websocket/apikey', { credentials: 'include' })
+      const data = await resp.json()
+      if (data.status === 'success' && data.api_key) {
+        setApiKey(data.api_key)
+        return data.api_key as string
+      }
+    } catch (err) {
+      console.error('[AutoTrade] Failed to fetch API key:', err)
+    }
+    return null
+  }, [apiKey, setApiKey])
 
   // Process ticks - runs every ~100ms via effect dependencies
   useEffect(() => {
@@ -389,13 +406,29 @@ export function useAutoTradeEngine(
               return
             }
 
-            if (!paperMode && !apiKey) return
+            const executionApiKey = paperMode ? null : await ensureApiKey()
+            if (!paperMode && !executionApiKey) {
+              pushExecutionSample({
+                timestamp: Date.now(),
+                side,
+                symbol,
+                spread: decision.spread,
+                expectedSlippage: decision.expectedSlippage,
+                status: 'rejected',
+                reason: 'Missing API key',
+              })
+              if (Date.now() - lastMissingApiKeyWarnAtRef.current > 5000) {
+                lastMissingApiKeyWarnAtRef.current = Date.now()
+                toast.error('Auto execute blocked: API key missing')
+              }
+              return
+            }
 
             let brokerOrderId: string | null = null
 
-            if (!paperMode && apiKey) {
+            if (!paperMode && executionApiKey) {
               const order: PlaceOrderRequest = {
-                apikey: apiKey,
+                apikey: executionApiKey,
                 strategy: 'Scalping-Auto',
                 exchange: optionExchange,
                 symbol,
@@ -454,7 +487,7 @@ export function useAutoTradeEngine(
                   exchange: optionExchange,
                   orderId: brokerOrderId,
                   preferredPrice: ltp,
-                  apiKey,
+                  apiKey: executionApiKey,
                 })
             if (entryPrice > 0) {
               setVirtualTPSL(
@@ -532,7 +565,7 @@ export function useAutoTradeEngine(
     optionsContext, regime, consecutiveLosses, tradesCount, realizedPnl,
     lastTradeTime, tradesThisMinute, lastLossTime, lastTradePnl,
     sideEntryCount, sideLastExitAt, replayMode, killSwitch, lockProfitTriggered,
-    apiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
+    ensureApiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
     selectedStrike, addGhostSignal, recordTrade, recordAutoEntry, pushDecision, pushExecutionSample, setRegime,
     virtualTPSL, setVirtualTPSL,
     underlying, indexExchange,

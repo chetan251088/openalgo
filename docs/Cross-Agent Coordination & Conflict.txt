@@ -1,0 +1,101 @@
+Cross-Agent Coordination & Conflict Resolution
+1. Signal Conflicts (Regime vs. Sniper):
+• Resolution Logic: Implementing Elder’s Triple Screen methodology and Minervini’s Trend Template, the Regime Agent is the Master Filter.
+    ◦ Rule: If Regime Agent = Bearish (-10 or -20), the Sniper Agent’s Bullish signals are hard-blocked. No consensus; strict hierarchy. The Sniper Agent is only permitted to scan for Short setups or stand aside.
+    ◦ Exception: If Regime = Congestion/Neutral, the Volatility Agent (Credit Spreads/Iron Condors) takes priority over the Sniper Agent (Directional).
+2. Multiple Simultaneous Signals (Ranking):
+• Priority Logic: Use Carver’s Subsystem Allocation combined with Minervini’s RS ranking.
+    ◦ Step 1: Filter by Portfolio Heat. If only 2 slots remain, select the 2 instruments with the highest Relative Strength (RS) score over the last 50 days (Minervini).
+    ◦ Step 2: If RS is equal, prioritize the signal with the lowest Implied Volatility (IV) for Debit trades (cheaper options) or highest IV for Credit trades (richer premium).
+3. Regime Transitions Mid-Position:
+• Scenario: Holding Bull Put Spread, Regime flips Bull → Bear.
+• Action: (c) Hold until original exit criteria are met, unless the Impulse System (Elder) triggers a specific exit signal (e.g., Red Bar on Weekly).
+    ◦ Reasoning: Chen & Sebastian (TOMIC) advise treating the trade as an insurance policy written; you don't cancel the policy just because the weather changes, unless the specific "Claims" limit (Stop Loss) is hit. Panic exiting ruins the statistical expectancy of the credit spread.
+
+--------------------------------------------------------------------------------
+📐 Options Strategy Construction — Exact Rules
+1. Congestion Regime Strategies:
+• Strategy: Iron Condor or Short Strangle (if account size > $100k and Portfolio Margin enabled).
+• Strikes: Sell 20 Delta Puts and Calls.
+• Wings: For Iron Condors on NIFTY, buy wings 200 points away to define margin; on BANKNIFTY, 500 points away. This balances premium collection vs. catastrophic protection.
+2. Expiry & DTE Selection:
+• Credit Spreads (Income): Target 30–45 DTE (Days to Expiry).
+    ◦ Source: Natenberg and Chen agree that the theta decay curve accelerates optimally here without the extreme gamma risk of weekly options.
+• Gamma Scalping/Momentum: Target Weekly Options (5–10 DTE).
+    ◦ Source: Profiting from Weekly Options confirms weeklies offer faster compounding for directional moves, but require active management.
+3. Strike Selection Precision:
+• Rule: If exact 20-delta doesn't align with a strike, round to the nearest OTM (Out-of-the-Money) strike. It is safer to be slightly further away (lower delta) than closer (higher delta/risk).
+
+--------------------------------------------------------------------------------
+📊 Position Management — The Missing Lifecycle
+1. Profit-Taking Rules:
+• Credit Spreads/Condors: Close at 50% of Max Profit.
+    ◦ Logic: As per Chen, the risk/reward profile worsens significantly after capturing 50% of the premium (you are risking the same capital to make the remaining pennies).
+• Directional DITM Calls: Trail stop using Elder’s SafeZone or exit when price closes below the 20-day Moving Average.
+2. Loss Management:
+• Credit Spreads: Close if the option premium doubles (200% of credit received).
+    ◦ Example: Sold for 1.00. Stop loss at 2.00.
+• Rolling: Only roll if the trade can be rolled for a Net Credit (Chen). Do not roll for a debit just to extend a losing trade; take the loss.
+3. Maximum Positions:
+• Total Open: Cap at 10-12 positions to maintain manageable span of control.
+• Per Underlying: Max 1 core position per underlying direction. You may layer a hedge, but do not stack multiple Bull Put spreads on the same expiry/strike.
+4. Duration Limits:
+• Time Stop: If a directional trade (Sniper) has not moved in favor within 5 bars (days/hours depending on timeframe), close it. This avoids "dead money".
+
+--------------------------------------------------------------------------------
+🧮 Volatility Agent — Calculation Details
+1. IV Rank:
+• Formula: (Current IV - 52wk Low) / (52wk High - 52wk Low).
+• Level: Calculate at the Underlying level (India VIX for NIFTY, stock IV for equities).
+2. Skew Rules:
+• Risk Reversal Trigger: Implement if 25-Delta Put IV is > 1.5x 25-Delta Call IV (Steep Skew).
+    ◦ Action: Sell the expensive Put, Buy the cheap Call (Net Credit or Zero Cost).
+3. VIX Integration:
+• High VIX (>25): Stop selling naked Puts. Switch to Defined Risk (Iron Condors/Spreads) only.
+• Extreme VIX (>40): Halt all new "Short Vega" (premium selling) trades. Market is irrational. Switch to Long Straddles or stay cash.
+
+--------------------------------------------------------------------------------
+🔗 Event Bus — Technical Design
+1. Message Schema:
+• Confirmed: The proposed JSON structure is robust.
+2. Event Ordering:
+• Conflict: If Regime flips +20 → -10 while Sniper fires Bullish:
+    ◦ Logic: The Risk Agent acts as the final gatekeeper. It checks the current state of the Regime Agent variable in memory before approving any Sniper order. It does not rely solely on the event stream sequence but on the current state snapshot.
+3. Heartbeat:
+• Watchdog: Implement a Supervisor process. If any Agent fails to send a {status: "OK"} heartbeat every 60 seconds, the Supervisor triggers the "Disaster Plan" (cancel open orders, alert admin).
+
+--------------------------------------------------------------------------------
+💾 Data Pipeline & Greeks Engine
+1. Options Chain Refresh:
+• Frequency: 1-minute snapshots are sufficient for Decision Agents. Real-time (tick) is required only for the Execution Agent managing active limit orders.
+2. Greeks Calculation:
+• Model: Black-Scholes for NIFTY/BANKNIFTY (European Style). Bjerksund-Stensland for Indian Stock Options (American Style - exercise anytime).
+• Interest Rate: Hardcode 6.5% (approx RBI risk-free rate) or fetch dynamic T-Bill yield.
+• Dividend: Essential for stocks. Estimate using Last FY Dividend / Current Price.
+3. Data Storage:
+• Persistence: Store all generated signals and trade logs in PostgreSQL. Store high-frequency tick data in InfluxDB or TimescaleDB (time-series optimized).
+
+--------------------------------------------------------------------------------
+🔒 Risk — Edge Cases
+1. Margin Management:
+• Check: Risk Agent must query GET /margin from OpenAlgo before placing order.
+• Reserve: Keep 20-30% Cash Free at all times to handle VIX expansion (margin expansion) during drawdowns.
+2. Instrument Diversification Multiplier (IDM):
+• Formula: Use Carver’s Handcrafted Method.
+    ◦ If trading NIFTY + BANKNIFTY: Multiplier = 0.7 (High Correlation).
+    ◦ If NIFTY + USDINR (Uncorrelated): Multiplier = 1.0.
+• Threshold: Correlation > 0.7 triggers size reduction.
+3. Black Swan Hedge:
+• Implementation: Buy 5-Delta Puts (Wings) on NIFTY monthly.
+• Budget: Allocating 1-2% of monthly expectancy (expected profit), not capital, to fund this "insurance premium".
+
+--------------------------------------------------------------------------------
+🧪 Backtesting & Go-Live
+1. Paper Trading:
+• Duration: Minimum 30 trading days or 50 signals.
+• Success Metric: System must demonstrate Positive Expectancy (Avg Win * Win Rate > Avg Loss * Loss Rate) and Max Drawdown < 10% during the test phase.
+2. Gradual Scaling:
+• Ramp-up:
+    ◦ Month 1: 25% Capital.
+    ◦ Month 2 (if profitable): 50% Capital.
+    ◦ Month 3 (if profitable): 100% Capital.

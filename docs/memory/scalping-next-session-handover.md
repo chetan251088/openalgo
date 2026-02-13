@@ -1,6 +1,6 @@
 # Scalping Next-Session Handover
 
-Date: 2026-02-11
+Date: 2026-02-13
 Commit baseline: `63f5d091` on `main`
 
 ## Current State
@@ -32,6 +32,88 @@ Commit baseline: `63f5d091` on `main`
    - auto score gate no longer explodes to impossible min-score values in low-sensitivity windows
    - timing is now explicitly gated when hot-zone sensitivity is zero
    - Expiry preset now uses expiry-zone sensitivity schedule for decision scaling
+11. Unified multi-broker route is available at `/scalping-unified`:
+   - feed selector controls chart/option-chain source
+   - exec selector controls order destination + positions/P&L source
+   - cross-broker API-key mismatch is handled by proxy-side target-key resolution
+12. TOMIC runtime is now bootstrapped in app startup (per instance):
+   - `TomicRuntime` is created in `app.py` startup path and injected into `tomic_bp`
+   - `/tomic/status`, `/tomic/metrics`, `/tomic/signals/quality` are live
+13. TOMIC frontend routes are active:
+   - `/tomic/dashboard`
+   - `/tomic/agents`
+   - `/tomic/risk`
+14. TOMIC live signal loop and alerts are wired:
+   - market bridge feeds Regime/Sniper/Volatility agents from WS ticks
+   - Conflict Router routed signals enqueue into Risk agent with dedupe cooldown
+   - operational alerts cover feed disconnect/stale, repeated rejects, dead letters, kill-switch changes
+15. TOMIC volatility strategy set expanded and wired end-to-end:
+   - new strategy types: `JADE_LIZARD`, `SHORT_STRANGLE`, `SHORT_STRADDLE`
+   - these are emitted by Volatility Agent only when regime/volatility filters pass
+   - Risk Agent enforces congestion-only + sell-only + VIX flag safety for these strategies
+16. Legged execution path now explicitly includes the new strategies:
+   - legged orders for `JADE_LIZARD`/`SHORT_STRANGLE`/`SHORT_STRADDLE` route via `/api/v1/optionsmultiorder`
+   - order payload validation requires `legs` for these strategies before execution
+17. Flow + TOMIC orchestration nodes and templates are now live:
+   - nodes in Flow editor: `tomicSnapshot`, `tomicControl`, `tomicSignal`
+   - `tomicSignal` supports auto options-selling strategy selection (`autoSelect`)
+   - templates:
+     - `docs/flow/templates/tomic-observability-flow.json`
+     - `docs/flow/templates/tomic-signal-routing-flow.json`
+     - `docs/flow/templates/tomic-options-selling-regime-routing-flow.json`
+     - `docs/flow/templates/scalping-ws-virtual-tpsl-bridge-flow.json`
+   - usage runbook:
+     - `docs/flow/README.md`
+
+Flow -> scalping virtual TP/SL bridge details:
+
+1. API endpoints:
+   - `POST /api/v1/scalpingbridge`
+   - `POST /api/v1/scalpingbridge/pending`
+   - `POST /api/v1/scalpingbridge/ack`
+2. Queue service:
+   - `services/scalping_flow_bridge_service.py`
+3. Frontend consumer (shared for both scalping routes):
+   - `frontend/src/hooks/useFlowVirtualBridge.ts`
+
+## Unified Ops Runbook
+
+1. Keep all brokers you want selectable running in background.
+2. Login once and generate `/apikey` on each target broker instance.
+3. Open `/scalping-unified` on any instance and choose feed/exec selectors.
+4. Use this checklist for operations and broker additions:
+   - `docs/design/scalping-unified-ops-checklist.md`
+5. Architecture reference:
+   - `docs/design/tomic-unified-architecture.md`
+6. Flow orchestration runbook:
+   - `docs/flow/README.md`
+
+## TOMIC Control-Instance Runbook
+
+Use this to avoid duplicate autonomous signal loops:
+
+1. Pick one control instance (recommended Zerodha `http://127.0.0.1:5002`).
+2. Set `.env` toggles:
+   - control instance: `TOMIC_SIGNAL_LOOP_ENABLED='true'`
+   - other instances: `TOMIC_SIGNAL_LOOP_ENABLED='false'`
+3. Keep all broker instances running if they are needed as execution targets.
+4. Ensure every target broker has active login + generated `/apikey`.
+5. Use `/tomic/*` pages from control instance for runtime start/pause/resume/monitoring.
+6. Use `/scalping-unified` from any instance for feed/exec split trading.
+
+Required TOMIC env keys in `.env.*`:
+
+1. `TOMIC_FEED_PRIMARY_WS`, `TOMIC_FEED_FALLBACK_WS`
+2. `TOMIC_FEED_PRIMARY_API_KEY`, `TOMIC_FEED_FALLBACK_API_KEY`
+3. `TOMIC_EXECUTION_REST`, `TOMIC_EXECUTION_API_KEY`, `TOMIC_ANALYTICS_REST`
+4. `TOMIC_SIGNAL_LOOP_ENABLED` and related loop/alert knobs
+5. Advanced premium strategy toggles:
+   - `TOMIC_ENABLE_JADE_LIZARD`
+   - `TOMIC_ENABLE_SHORT_STRANGLE`
+   - `TOMIC_ENABLE_SHORT_STRADDLE`
+   - `TOMIC_ALLOW_NAKED_PREMIUM`
+   - `TOMIC_SHORT_PREMIUM_IV_RANK_MIN`
+   - `TOMIC_SHORT_PREMIUM_IV_HV_MIN`
 
 ## Safe Upstream Merge Setup (Already Prepared)
 
@@ -105,4 +187,4 @@ Why this matters:
 
 ## Fast Resume Prompt (Copy/Paste)
 
-`Read docs/skills/scalping-autotrade-copilot/SKILL.md, docs/memory/scalping-session-memory.md, and docs/memory/scalping-next-session-handover.md. Then continue with live-market broker parity testing for scalping (Kotak/Dhan/Zerodha), prioritizing candles, live P&L, and mode behavior (ghost vs execute).`
+`Read docs/skills/scalping-autotrade-copilot/SKILL.md, docs/memory/scalping-session-memory.md, docs/memory/scalping-next-session-handover.md, and docs/design/tomic-unified-architecture.md. Then continue from unified feed/exec + TOMIC control-instance runtime state, validating live broker parity and signal-loop health.`

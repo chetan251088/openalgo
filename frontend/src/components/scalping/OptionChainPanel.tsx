@@ -5,6 +5,10 @@ import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { ScalpingChainRow } from './ScalpingChainRow'
 import { Badge } from '@/components/ui/badge'
 
+function normalizeExpiry(value: string | null | undefined): string {
+  return (value ?? '').replace(/-/g, '').toUpperCase()
+}
+
 export function OptionChainPanel() {
   const apiKey = useAuthStore((s) => s.apiKey)
 
@@ -57,11 +61,26 @@ export function OptionChainPanel() {
   // Extract lot size from chain data (once per expiry change)
   useEffect(() => {
     if (!chainData?.chain?.length) return
+    // Ignore stale snapshots from previous underlying/expiry while switch is in progress.
+    if ((chainData.underlying ?? '').toUpperCase() !== underlying.toUpperCase()) return
+    if (expiry && normalizeExpiry(chainData.expiry_date) !== normalizeExpiry(expiry)) return
     if (lotSizeUpdated.current) return
 
-    const firstRow = chainData.chain[0]
-    const apiLotSize = firstRow.ce?.lotsize ?? firstRow.pe?.lotsize
-    if (apiLotSize && apiLotSize > 0) {
+    let apiLotSize: number | null = null
+    for (const row of chainData.chain) {
+      const ceLot = Number(row.ce?.lotsize)
+      if (Number.isFinite(ceLot) && ceLot > 0) {
+        apiLotSize = ceLot
+        break
+      }
+      const peLot = Number(row.pe?.lotsize)
+      if (Number.isFinite(peLot) && peLot > 0) {
+        apiLotSize = peLot
+        break
+      }
+    }
+
+    if (apiLotSize !== null) {
       setLotSize(apiLotSize)
       lotSizeUpdated.current = true
     }

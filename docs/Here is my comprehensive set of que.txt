@@ -1,0 +1,73 @@
+Here is my comprehensive set of questions, organized by agent/domain, designed to extract every piece of information needed to actually build this system:
+
+🏗️ Overall Architecture & OpenAlgo Integration
+What is the current state of your OpenAlgo codebase? — Is it a fresh install, or do you already have custom strategies, webhooks, or modules running? What broker API(s) are you connected to (Zerodha, Angel, Dhan, etc.)?
+What data feeds do you currently have access to? — Real-time tick data? 1-min candles? Full options chain with Greeks (Delta, Gamma, Theta, Vega)? Or do Greeks need to be calculated from raw IV?
+Which instruments are in scope? — NIFTY/BANKNIFTY options only? Individual stock options? Futures? Equities? All of the above?
+How should the 6 agents communicate? — Should they run as separate Python processes/threads, or as sequential functions in a single loop? Do you envision an event-bus/pub-sub pattern, or a simple pipeline (Regime → Sniper → Volatility → Risk → Execution → Journal)?
+What is your target execution frequency? — Scan every minute? Every 5 minutes? Only at specific times (e.g., 9:20 AM entry, 3:15 PM exit)?
+Should this system run fully autonomously (no human approval) or semi-automated (signals → human confirms → execute)?
+🔭 Agent 1: Regime Agent (Big Picture)
+Ichimoku timeframe: Which timeframe for the Kumo Cloud? Daily only, or multi-timeframe (e.g., Weekly for bias + Daily for confirmation)?
+Ichimoku parameters: Standard (9, 26, 52) or custom? Sadekar sometimes uses modified settings for Indian markets—do you have a preference?
+Impulse System (Elder): The doc says 13-EMA + MACD Histogram. What MACD parameters? Standard (12, 26, 9)? And should Impulse be on the same timeframe as Ichimoku or a different one?
+"Congestion" detection: How do you define horizontal movement quantitatively? A specific ATR range? Bollinger Band width below a threshold? Kumo flat? How many candles must it persist to qualify?
+"Blowoff" detection: "> 45 degrees" — how should we translate angle to a quantitative metric? Rate of change > X%? Price moving > 2 ATR in a single bar?
+Regime output format: Should the Regime Agent output a simple enum (BULLISH / BEARISH / NEUTRAL / CONGESTION / BLOWOFF), or a scaled score (e.g., -10 to +10)?
+🎯 Agent 2: Sniper Agent (Entry)
+VCP (Volatility Contraction Pattern): How many contractions (T1, T2, T3…) must occur before it's valid? What is the minimum percentage tightness between successive contractions?
+"Ants" (volume drying up): What quantitative threshold defines this? Volume < 50% of 20-day average? Or a specific ratio?
+Supply/Demand Zones: How do you define a "base" quantitatively? Minimum number of candles? Maximum range of the base relative to ATR?
+"Fresh Zone" vs. "Tested Zone": A zone is fresh if price hasn't returned to it. After one touch, is it "tested" (still valid but weaker) or completely invalidated?
+"Great Imbalance" (gap): What gap percentage qualifies as "great"? Is this a body-to-body gap, or wick-to-wick?
+3-C (Cup Completion Cheat): What timeframe? How do you define the cup depth and handle criteria programmatically? Is this for equities only, or also for NIFTY/BANKNIFTY?
+Sniper Agent universe: How many stocks/instruments should this agent scan simultaneously? Do you have a pre-filtered watchlist, or should it scan the entire NIFTY 500?
+📊 Agent 3: Volatility Agent (Options Pricer)
+IV calculation: Are you getting IV directly from the broker/exchange, or should we calculate it using Black-Scholes/binomial? For Indian markets, which model do you prefer?
+HV calculation: What lookback period for Historical Volatility? 10-day, 20-day, 30-day? Close-to-close, or Parkinson/Yang-Zhang?
+"Significantly higher" IV vs HV: What is the threshold? IV > 1.2× HV? IV Rank > 50? IV Percentile > 70%?
+Skew Analysis: How do you define "historically expensive" puts? Compare current 25-delta put IV vs. 25-delta call IV? What percentile lookback?
+Term Structure Inversion: Compare which two expiries? Current week vs. next month? What percentage inversion triggers the signal?
+Credit Spread construction: When IV is high, what specific spread do you want? Bull Put Spread? Iron Condor? What delta for the short strike (e.g., 16-delta, 30-delta)? How many points wide?
+Calendar/Diagonal construction: When term structure is inverted, what are the specific rules? Sell front-month ATM, buy back-month ATM? Or OTM diagonals?
+🛡️ Agent 4: Risk Agent (The Actuary)
+Capital base: What is the starting capital for position sizing? Is this the total account equity, or a designated "trading capital" subset?
+Target volatility: What annual target volatility %? Carver suggests 12-25% for most retail traders—what's your preference?
+"Daily Instrument Volatility" calculation: ATR-based? Standard deviation of daily returns × price? What lookback?
+Half-Kelly: To calculate Kelly, we need win rate and win/loss ratio. Should these come from backtested data, or live journal data, or hardcoded initial estimates?
+Portfolio Heat / Sector limits: How do you define "sectors" for Indian markets? NSE sector classification? And is the 20% limit on margin consumed, notional exposure, or VaR?
+2% Rule: 2% of total equity or 2% of trading capital? And does this mean max loss per trade (stop-loss distance × quantity ≤ 2%), or max margin allocated?
+Correlation risk: Should the Risk Agent also check correlation between positions (e.g., don't sell NIFTY puts AND BANKNIFTY puts simultaneously if correlation > 0.9)?
+Black Swan protection: Any tail-risk hedges? Always hold a far-OTM put as portfolio insurance? What % of capital allocated to hedges?
+⚡ Agent 5: Execution Agent (Floor Trader)
+DITM Calls — Delta > 0.90: Which expiry? Current month? Next month? How do you handle liquidity issues with DITM options in India (wide bid-ask spreads)?
+"Value Zone" limit orders: Between which EMAs? 8 and 21? 13 and 34? How long should the limit order remain active before being cancelled or adjusted?
+Gamma Scalping: What Delta deviation triggers a hedge? ±0.10? ±0.20? What is the hedge instrument—futures or spot? What is the re-hedge frequency (continuous, or at fixed intervals)?
+Order slicing: For large orders, should we slice into how many parts? Time-weighted (TWAP) or volume-weighted (VWAP)?
+Slippage tolerance: What maximum slippage (in ticks or %) is acceptable before the order is abandoned?
+Entry timing: Any time-of-day rules? Avoid first 15 minutes? Only enter after 9:30 AM? Close all positions by 3:20 PM?
+📓 Agent 6: Journaling Agent (Feedback Loop)
+Storage: Where should trade logs be stored? SQLite database? PostgreSQL? CSV files? Should it integrate with an existing journaling tool?
+Expectancy calculation: Over what rolling window? Last 30 trades? Last 90 days? Both?
+Forecast Weight rebalancing: How often should capital allocation between agents be adjusted? Weekly? Monthly? What is the minimum sample size before rebalancing (e.g., at least 50 trades)?
+What metrics should the dashboard display? P&L curve, Sharpe ratio, max drawdown, win rate by agent, Greeks exposure, sector exposure?
+Alerts: Should the system send alerts (Telegram, email, webhook) for specific events like drawdown > 5%, margin utilization > 80%, or a regime change?
+🔄 Strategy-Specific Clarifications
+Congestion → Non-directional strategies: When Regime = Congestion, which specific strategies? Iron Condors? Short Strangles? Iron Butterflies? What wing width and delta rules?
+Bullish + High IV → Sell Put Spreads: What delta for the short put? How far OTM for the long put (protection leg)? Which expiry—weekly or monthly?
+Bullish + Low IV → Buy DITM Calls: What defines "Low IV"? IV Rank < 30? IV Percentile < 30%?
+Bearish forecast → Short Futures: Why futures instead of bear call spreads? Is this a deliberate choice, or should we also consider options strategies for bearish views?
+Rolling/Adjustment rules: When should a position be rolled (e.g., short put approaching strike at 21 DTE)? Roll up/down/out? At what loss multiple (e.g., 2× credit received)?
+Profit-taking rules: Close at 50% of max profit? 75%? Time-based (close at X DTE regardless)?
+Earnings/Events: Should the system avoid or specifically target earnings events? Any blackout periods?
+🧪 Backtesting & Validation
+Historical data source: Where will backtesting data come from? NSE Bhavcopy? A paid vendor (e.g., TrueData, Global Datafeeds)? How far back?
+Options chain historical data: Do you have historical options chain snapshots (strikes, OI, IV, Greeks) for backtesting, or only spot/futures data?
+Walk-forward optimization: Should we implement walk-forward analysis (train on 6 months, test on 2 months, roll forward)?
+Benchmark: What is the performance benchmark? NIFTY buy-and-hold? A fixed deposit rate? A specific CAGR target?
+🚀 Deployment & Operations
+Hosting: Where will this run? Local machine? Cloud VPS (AWS/GCP)? What uptime requirements?
+Failover: What happens if the system crashes mid-trade? Auto-reconnect and reconcile positions? Flatten everything?
+Manual override: Can you manually intervene (pause the system, close a position, change regime) without breaking the automation?
+Regulatory: Any compliance constraints? SEBI margin rules? Maximum lot limits? API rate limits from your broker?
+These 60 questions cover every ambiguity and implementation gap I can identify. Your answers will let me produce exact, code-ready specifications for each agent — with precise parameter values, indicator formulas, decision trees, and OpenAlgo API calls.

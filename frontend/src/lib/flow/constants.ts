@@ -233,6 +233,18 @@ export const NODE_DEFINITIONS = {
   // Action Nodes
   ACTIONS: [
     {
+      type: 'tomicControl',
+      label: 'TOMIC Control',
+      description: 'Start/pause/resume/stop runtime',
+      category: 'action' as const,
+    },
+    {
+      type: 'tomicSignal',
+      label: 'TOMIC Signal',
+      description: 'Enqueue signal to risk pipeline',
+      category: 'action' as const,
+    },
+    {
       type: 'placeOrder',
       label: 'Place Order',
       description: 'Place a trading order',
@@ -349,6 +361,12 @@ export const NODE_DEFINITIONS = {
   // Data Nodes
   DATA: [
     {
+      type: 'tomicSnapshot',
+      label: 'TOMIC Snapshot',
+      description: 'Read live runtime diagnostics',
+      category: 'data' as const,
+    },
+    {
       type: 'getQuote',
       label: 'Get Quote',
       description: 'Fetch real-time quote',
@@ -450,6 +468,39 @@ export const NODE_DEFINITIONS = {
 // =============================================================================
 
 export const DEFAULT_NODE_DATA = {
+  tomicControl: {
+    action: 'start' as const,
+    reason: 'Flow pause',
+    outputVariable: '',
+  },
+  tomicSignal: {
+    instrument: 'NIFTY',
+    strategyType: 'DITM_CALL',
+    autoSelect: false,
+    snapshotVariable: 'tomicSignals',
+    fallbackStrategy: 'IRON_CONDOR' as const,
+    direction: 'BUY' as const,
+    exchange: 'NSE_INDEX',
+    product: 'MIS' as const,
+    source: 'FLOW',
+    confidence: 60,
+    lotSize: 75,
+    entryPrice: 0,
+    stopPrice: 0,
+    instrumentVol: 0.25,
+    winRate: 0.55,
+    rrRatio: 2.0,
+    correlation: 0,
+    sectorMarginPct: 0,
+    legsJson: '',
+    outputVariable: '',
+  },
+  tomicSnapshot: {
+    source: 'status' as const,
+    runScan: true,
+    limit: 25,
+    outputVariable: '',
+  },
   start: {
     scheduleType: 'daily' as const,
     time: '09:15',

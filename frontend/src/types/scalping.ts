@@ -19,7 +19,7 @@ export interface UnderlyingConfig {
 
 export const UNDERLYING_MAP: Record<Underlying, UnderlyingConfig> = {
   NIFTY: { symbol: 'NIFTY', indexExchange: 'NSE_INDEX', optionExchange: 'NFO', lotSize: 65 },
-  SENSEX: { symbol: 'SENSEX', indexExchange: 'BSE_INDEX', optionExchange: 'BFO', lotSize: 10 },
+  SENSEX: { symbol: 'SENSEX', indexExchange: 'BSE_INDEX', optionExchange: 'BFO', lotSize: 20 },
   BANKNIFTY: { symbol: 'BANKNIFTY', indexExchange: 'NSE_INDEX', optionExchange: 'NFO', lotSize: 30 },
   FINNIFTY: { symbol: 'FINNIFTY', indexExchange: 'NSE_INDEX', optionExchange: 'NFO', lotSize: 25 },
 }
@@ -61,7 +61,7 @@ export interface VirtualTPSL {
   tpPoints: number
   slPoints: number
   createdAt: number
-  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost'
+  managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost' | 'flow'
   autoEntryScore?: number
   autoEntryReason?: string
 }

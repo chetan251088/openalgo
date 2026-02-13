@@ -39,6 +39,9 @@ import {
   WifiOff,
   Shield,
   Sigma,
+  Activity,
+  Power,
+  Workflow,
 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -111,6 +114,20 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
   ]
 
   const actions = [
+    {
+      type: 'tomicControl',
+      label: 'TOMIC Control',
+      description: 'Runtime start/stop',
+      icon: <Power className="h-3.5 w-3.5 text-emerald-500" />,
+      color: 'bg-emerald-500/10',
+    },
+    {
+      type: 'tomicSignal',
+      label: 'TOMIC Signal',
+      description: 'Queue to risk',
+      icon: <Workflow className="h-3.5 w-3.5 text-emerald-500" />,
+      color: 'bg-emerald-500/10',
+    },
     {
       type: 'placeOrder',
       label: 'Place Order',
@@ -243,6 +260,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
   ]
 
   const data = [
+    {
+      type: 'tomicSnapshot',
+      label: 'TOMIC Snapshot',
+      description: 'Runtime diagnostics',
+      icon: <Activity className="h-3.5 w-3.5 text-emerald-500" />,
+      color: 'bg-emerald-500/10',
+    },
     {
       type: 'getQuote',
       label: 'Get Quote',
