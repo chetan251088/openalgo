@@ -46,7 +46,6 @@ export default function MarketTimingsPage() {
       setTodayTimings(response.today_timings)
       setToday(response.today)
     } catch (error) {
-      console.error('Error fetching timings:', error)
       showToast.error('Failed to load market timings', 'admin')
     } finally {
       setIsLoading(false)
@@ -184,6 +183,7 @@ export default function MarketTimingsPage() {
                             value={editStartTime}
                             onChange={(e) => setEditStartTime(e.target.value)}
                             className="w-28 h-8"
+                            aria-label={`Start time for ${timing.exchange}`}
                           />
                         ) : (
                           <span className="font-mono">{timing.start_time}</span>
@@ -196,6 +196,7 @@ export default function MarketTimingsPage() {
                             value={editEndTime}
                             onChange={(e) => setEditEndTime(e.target.value)}
                             className="w-28 h-8"
+                            aria-label={`End time for ${timing.exchange}`}
                           />
                         ) : (
                           <span className="font-mono">{timing.end_time}</span>

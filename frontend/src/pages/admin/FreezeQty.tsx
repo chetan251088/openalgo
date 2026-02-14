@@ -94,7 +94,6 @@ export default function FreezeQtyPage() {
       setFreezeData(data)
       setFilteredData(data)
     } catch (error) {
-      console.error('Error fetching freeze data:', error)
       showToast.error('Failed to load freeze quantities', 'admin')
     } finally {
       setIsLoading(false)
@@ -329,6 +328,7 @@ export default function FreezeQtyPage() {
                               onChange={(e) => setEditValue(e.target.value)}
                               className="w-24 h-8"
                               min={1}
+                              aria-label={`Freeze quantity for ${entry.symbol}`}
                             />
                             <Button
                               size="icon"
