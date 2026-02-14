@@ -44,16 +44,16 @@ function Write-Step([string]$message) {
 
 function Invoke-GitCapture {
     param(
-        [string[]]$Args,
+        [string[]]$GitArgs,
         [switch]$AllowFailure
     )
 
-    Write-Host ">> git $($Args -join ' ')" -ForegroundColor DarkGray
-    $output = & git @Args 2>&1
+    Write-Host ">> git $($GitArgs -join ' ')" -ForegroundColor DarkGray
+    $output = & git @GitArgs 2>&1
     $exitCode = $LASTEXITCODE
     if (-not $AllowFailure -and $exitCode -ne 0) {
         $text = ($output | Out-String).Trim()
-        throw "Git command failed ($exitCode): git $($Args -join ' ')`n$text"
+        throw "Git command failed ($exitCode): git $($GitArgs -join ' ')`n$text"
     }
     return [pscustomobject]@{
         ExitCode = $exitCode
@@ -62,8 +62,8 @@ function Invoke-GitCapture {
 }
 
 function Invoke-Git {
-    param([string[]]$Args)
-    $result = Invoke-GitCapture -Args $Args
+    param([string[]]$GitArgs)
+    $result = Invoke-GitCapture -GitArgs $GitArgs
     return $result
 }
 
@@ -131,11 +131,11 @@ function Build-FrontendDist {
         Pop-Location
     }
 
-    Invoke-Git -Args @("add", "-A", "frontend/dist") | Out-Null
+    Invoke-Git -GitArgs @("add", "-A", "frontend/dist") | Out-Null
 
-    $distChanges = Get-Text((Invoke-Git -Args @("status", "--porcelain", "--", "frontend/dist")).Output)
+    $distChanges = Get-Text((Invoke-Git -GitArgs @("status", "--porcelain", "--", "frontend/dist")).Output)
     if ($distChanges) {
-        Invoke-Git -Args @("commit", "-m", "chore(frontend): refresh dist after upstream merge") | Out-Null
+        Invoke-Git -GitArgs @("commit", "-m", "chore(frontend): refresh dist after upstream merge") | Out-Null
         Write-Host "Committed refreshed frontend/dist bundles." -ForegroundColor Green
     } else {
         Write-Host "No frontend/dist changes after build." -ForegroundColor Gray
@@ -147,12 +147,12 @@ Write-Host " Safe Upstream Merge" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 Write-Step "Validating repository state"
-$inside = Get-Text((Invoke-Git -Args @("rev-parse", "--is-inside-work-tree")).Output)
+$inside = Get-Text((Invoke-Git -GitArgs @("rev-parse", "--is-inside-work-tree")).Output)
 if ($inside -ne "true") {
     throw "Current directory is not a git repository."
 }
 
-$gitDir = Get-Text((Invoke-Git -Args @("rev-parse", "--git-dir")).Output)
+$gitDir = Get-Text((Invoke-Git -GitArgs @("rev-parse", "--git-dir")).Output)
 if (Test-Path (Join-Path $gitDir "MERGE_HEAD")) {
     throw "A merge is already in progress. Resolve it before running this script."
 }
@@ -160,49 +160,49 @@ if ((Test-Path (Join-Path $gitDir "rebase-merge")) -or (Test-Path (Join-Path $gi
     throw "A rebase is in progress. Resolve/abort it before running this script."
 }
 
-$currentBranch = Get-Text((Invoke-Git -Args @("rev-parse", "--abbrev-ref", "HEAD")).Output)
+$currentBranch = Get-Text((Invoke-Git -GitArgs @("rev-parse", "--abbrev-ref", "HEAD")).Output)
 if ($currentBranch -ne $Branch) {
     throw "Current branch is '$currentBranch'. Checkout '$Branch' before running."
 }
 
-$dirty = Get-Text((Invoke-Git -Args @("status", "--porcelain")).Output)
+$dirty = Get-Text((Invoke-Git -GitArgs @("status", "--porcelain")).Output)
 if ($dirty) {
     throw "Working tree is not clean. Commit/stash changes first."
 }
 
 Write-Step "Ensuring remotes"
-$remoteCheck = Invoke-GitCapture -Args @("remote", "get-url", $UpstreamRemote) -AllowFailure
+$remoteCheck = Invoke-GitCapture -GitArgs @("remote", "get-url", $UpstreamRemote) -AllowFailure
 if ($remoteCheck.ExitCode -ne 0) {
-    Invoke-Git -Args @("remote", "add", $UpstreamRemote, $UpstreamUrl) | Out-Null
+    Invoke-Git -GitArgs @("remote", "add", $UpstreamRemote, $UpstreamUrl) | Out-Null
 } else {
     $existingUrl = Get-Text($remoteCheck.Output)
     if ($existingUrl -ne $UpstreamUrl) {
-        Invoke-Git -Args @("remote", "set-url", $UpstreamRemote, $UpstreamUrl) | Out-Null
+        Invoke-Git -GitArgs @("remote", "set-url", $UpstreamRemote, $UpstreamUrl) | Out-Null
     }
 }
-Invoke-Git -Args @("fetch", $OriginRemote, "--prune") | Out-Null
-Invoke-Git -Args @("fetch", $UpstreamRemote, "--prune") | Out-Null
+Invoke-Git -GitArgs @("fetch", $OriginRemote, "--prune") | Out-Null
+Invoke-Git -GitArgs @("fetch", $UpstreamRemote, "--prune") | Out-Null
 
 Write-Step "Creating backup branch"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupBranch = "backup/$Branch-pre-upstream-$timestamp"
-Invoke-Git -Args @("branch", $backupBranch) | Out-Null
-Invoke-Git -Args @("push", "-u", $OriginRemote, $backupBranch) | Out-Null
+Invoke-Git -GitArgs @("branch", $backupBranch) | Out-Null
+Invoke-Git -GitArgs @("push", "-u", $OriginRemote, $backupBranch) | Out-Null
 Write-Host "Backup branch pushed: $backupBranch" -ForegroundColor Green
 
 Write-Step "Merging $UpstreamRemote/$Branch into $Branch"
 $mergeRef = "refs/remotes/$UpstreamRemote/$Branch"
-$mergeResult = Invoke-GitCapture -Args @("merge", "--no-ff", "--no-edit", $mergeRef) -AllowFailure
+$mergeResult = Invoke-GitCapture -GitArgs @("merge", "--no-ff", "--no-edit", $mergeRef) -AllowFailure
 
 if ($mergeResult.ExitCode -ne 0) {
-    $mergeInProgress = Invoke-GitCapture -Args @("rev-parse", "-q", "--verify", "MERGE_HEAD") -AllowFailure
+    $mergeInProgress = Invoke-GitCapture -GitArgs @("rev-parse", "-q", "--verify", "MERGE_HEAD") -AllowFailure
     if ($mergeInProgress.ExitCode -ne 0) {
         $msg = Get-Text($mergeResult.Output)
         throw "Merge failed before conflict handling.`n$msg"
     }
 
     Write-Step "Auto-resolving merge conflicts"
-    $conflictOutput = Invoke-GitCapture -Args @("diff", "--name-only", "--diff-filter=U")
+    $conflictOutput = Invoke-GitCapture -GitArgs @("diff", "--name-only", "--diff-filter=U")
     $conflicts = @(
         $conflictOutput.Output |
             ForEach-Object { $_.ToString().Trim() } |
@@ -246,7 +246,7 @@ if ($mergeResult.ExitCode -ne 0) {
     }
 
     $remaining = @(
-        (Invoke-GitCapture -Args @("diff", "--name-only", "--diff-filter=U")).Output |
+        (Invoke-GitCapture -GitArgs @("diff", "--name-only", "--diff-filter=U")).Output |
             ForEach-Object { $_.ToString().Trim() } |
             Where-Object { $_ }
     )
@@ -261,7 +261,7 @@ if ($mergeResult.ExitCode -ne 0) {
     Write-Host "Auto-resolved $($resolved.Count) conflicted file(s)." -ForegroundColor Green
 
     # Merge commit may not be created yet after manual conflict resolutions.
-    Invoke-Git -Args @("commit", "--no-edit") | Out-Null
+    Invoke-Git -GitArgs @("commit", "--no-edit") | Out-Null
 }
 
 if ($BuildFrontendDist) {
@@ -270,10 +270,10 @@ if ($BuildFrontendDist) {
 
 if (-not $NoPush) {
     Write-Step "Pushing merged branch to $OriginRemote/$Branch"
-    Invoke-Git -Args @("push", $OriginRemote, $Branch) | Out-Null
+    Invoke-Git -GitArgs @("push", $OriginRemote, $Branch) | Out-Null
 }
 
-$finalStatus = Get-Text((Invoke-Git -Args @("status", "--short", "--branch")).Output)
+$finalStatus = Get-Text((Invoke-Git -GitArgs @("status", "--short", "--branch")).Output)
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -285,3 +285,4 @@ if ($NoPush) {
 }
 Write-Host ""
 Write-Host $finalStatus
+

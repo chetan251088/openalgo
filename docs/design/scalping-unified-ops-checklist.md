@@ -116,3 +116,10 @@ When adding a new broker to unified selectors, complete all steps:
    - target broker missing session or API key; login and regenerate `/apikey` on that target instance
 6. Duplicate autonomous signals/trades from TOMIC
    - multiple instances have signal loop enabled; keep one control instance active
+
+## 5) Safe Upstream Sync Reference
+
+For upstream fetch/merge requests, follow:
+
+1. `docs/design/safe-upstream-merge-runbook.md`
+2. `pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -BuildFrontendDist`

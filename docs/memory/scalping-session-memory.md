@@ -411,3 +411,19 @@ If unified orders fail with `Invalid openalgo apikey`:
 1. Verify target execution broker session is active.
 2. Re-generate `/apikey` on that target broker instance.
 3. Retry order from `/scalping-unified`.
+
+## 14) Safe Upstream Merge (Repeatable Process)
+
+When upstream sync is requested, always follow:
+
+1. `docs/design/safe-upstream-merge-runbook.md`
+
+Default command:
+
+1. `pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -BuildFrontendDist`
+
+Notes:
+
+1. Script creates and pushes backup branch before merge.
+2. Script prefers local side for generated `frontend/dist/*` conflicts.
+3. Use `-NoPush` if you want to inspect merge result before pushing.

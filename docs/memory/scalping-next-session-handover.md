@@ -117,7 +117,15 @@ Required TOMIC env keys in `.env.*`:
 
 ## Safe Upstream Merge Setup (Already Prepared)
 
-Use `scripts/safe-merge-upstream.ps1` for future upstream syncs. It was added to protect local work while merging `upstream/main`.
+Canonical runbook:
+
+1. `docs/design/safe-upstream-merge-runbook.md`
+
+Default safe command:
+
+1. `pwsh -File .\scripts\safe-merge-upstream.ps1 -Branch main -BuildFrontendDist`
+
+Use `scripts/safe-merge-upstream.ps1` for upstream syncs. It protects local work while merging `upstream/main`.
 
 What this script does:
 
