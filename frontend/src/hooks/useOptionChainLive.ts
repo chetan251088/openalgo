@@ -57,6 +57,9 @@ export function useOptionChainLive(
   strikeCount: number,
   options: UseOptionChainLiveOptions = { enabled: true, oiRefreshInterval: 30000, pauseWhenHidden: true }
 ) {
+  const optionExchangeKey = optionExchange.toUpperCase()
+  const underlyingSymbolKey = underlying.toUpperCase()
+
   const {
     enabled,
     oiRefreshInterval = 30000,
@@ -163,7 +166,7 @@ export function useOptionChainLive(
 
         // Update CE LTP from WebSocket
         if (strike.ce?.symbol) {
-          const wsKey = `${optionExchange}:${strike.ce.symbol}`
+          const wsKey = `${optionExchangeKey}:${strike.ce.symbol.toUpperCase()}`
           const wsSymbolData = currentWs.get(wsKey)
           const wsPayload = wsSymbolData?.data
           if (wsPayload?.ltp !== undefined) {
@@ -186,7 +189,7 @@ export function useOptionChainLive(
 
         // Update PE LTP from WebSocket
         if (strike.pe?.symbol) {
-          const wsKey = `${optionExchange}:${strike.pe.symbol}`
+          const wsKey = `${optionExchangeKey}:${strike.pe.symbol.toUpperCase()}`
           const wsSymbolData = currentWs.get(wsKey)
           const wsPayload = wsSymbolData?.data
           if (wsPayload?.ltp !== undefined) {
@@ -245,8 +248,8 @@ export function useOptionChainLive(
       }
 
       // Get real-time underlying spot price from WebSocket
-      const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
-      const underlyingKey = `${underlyingExch}:${underlying}`
+      const underlyingExch = getUnderlyingExchange(underlyingSymbolKey, optionExchangeKey).toUpperCase()
+      const underlyingKey = `${underlyingExch}:${underlyingSymbolKey}`
       const underlyingWsData = currentWs.get(underlyingKey)
       const underlyingLtp = underlyingWsData?.data?.ltp ?? currentPolled.underlying_ltp
 
@@ -256,7 +259,7 @@ export function useOptionChainLive(
         chain: mergedChain,
       })
     }
-  }, [optionExchange, underlying])
+  }, [optionExchangeKey, underlyingSymbolKey])
 
   // Trigger throttled merge when wsData or polledData changes
   useEffect(() => {

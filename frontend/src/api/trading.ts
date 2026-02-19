@@ -12,6 +12,8 @@ import type {
 import { apiClient, webClient } from './client'
 import { proxyV1ByRole, isMultiBrokerUnifiedMode } from './multi-broker'
 import { useAuthStore } from '@/stores/authStore'
+import { useScalpingStore } from '@/stores/scalpingStore'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 
 export interface QuotesData {
   ask: number
@@ -124,6 +126,38 @@ async function resolveRuntimeApiKey(): Promise<string | null> {
     // ignore
   }
   return null
+}
+
+function extractOrderIdFromResponse(response: ApiResponse<{ orderid: string }>): string {
+  const rootOrderId = (response as { orderid?: unknown }).orderid
+  if (typeof rootOrderId === 'string' && rootOrderId.trim().length > 0) {
+    return rootOrderId.trim()
+  }
+
+  const nestedOrderId = (response.data as { orderid?: unknown } | undefined)?.orderid
+  if (typeof nestedOrderId === 'string' && nestedOrderId.trim().length > 0) {
+    return nestedOrderId.trim()
+  }
+
+  return ''
+}
+
+function recordScalpingOrderAck(order: PlaceOrderRequest, response: ApiResponse<{ orderid: string }>): void {
+  const orderId = extractOrderIdFromResponse(response)
+  if (!orderId) return
+
+  const unified = isMultiBrokerUnifiedMode()
+  const brokerName = unified
+    ? useMultiBrokerStore.getState().executionBroker
+    : (useAuthStore.getState().user?.broker ?? 'unknown')
+
+  useScalpingStore.getState().setLastOrderAck({
+    orderId,
+    broker: String(brokerName).toUpperCase(),
+    symbol: order.symbol,
+    action: order.action,
+    timestamp: Date.now(),
+  })
 }
 
 export const tradingApi = {
@@ -324,11 +358,18 @@ export const tradingApi = {
    * Place order
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
+    let result: ApiResponse<{ orderid: string }>
     if (isMultiBrokerUnifiedMode()) {
-      return proxyV1ByRole<ApiResponse<{ orderid: string }>>('execution', 'placeorder', order)
+      result = await proxyV1ByRole<ApiResponse<{ orderid: string }>>('execution', 'placeorder', order)
+    } else {
+      const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
+      result = response.data
     }
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
-    return response.data
+
+    if (result.status === 'success') {
+      recordScalpingOrderAck(order, result)
+    }
+    return result
   },
 
   /**

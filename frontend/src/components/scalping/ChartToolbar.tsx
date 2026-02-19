@@ -17,10 +17,12 @@ interface ChartToolbarProps {
   showEma21: boolean
   showSupertrend: boolean
   showVwap: boolean
+  showOrderFlow: boolean
   onToggleEma9: () => void
   onToggleEma21: () => void
   onToggleSupertrend: () => void
   onToggleVwap: () => void
+  onToggleOrderFlow: () => void
 }
 
 export function ChartToolbar({
@@ -28,10 +30,12 @@ export function ChartToolbar({
   showEma21,
   showSupertrend,
   showVwap,
+  showOrderFlow,
   onToggleEma9,
   onToggleEma21,
   onToggleSupertrend,
   onToggleVwap,
+  onToggleOrderFlow,
 }: ChartToolbarProps) {
   const chartInterval = useScalpingStore((s) => s.chartInterval)
   const setChartInterval = useScalpingStore((s) => s.setChartInterval)
@@ -64,6 +68,8 @@ export function ChartToolbar({
       <IndicatorToggle label="EMA21" active={showEma21} color="text-violet-500" onClick={onToggleEma21} />
       <IndicatorToggle label="ST" active={showSupertrend} color="text-cyan-500" onClick={onToggleSupertrend} />
       <IndicatorToggle label="VWAP" active={showVwap} color="text-pink-500" onClick={onToggleVwap} />
+      <div className="w-px h-3 bg-border/50 mx-0.5" />
+      <IndicatorToggle label="FLOW" active={showOrderFlow} color="text-emerald-500" onClick={onToggleOrderFlow} />
     </div>
   )
 }

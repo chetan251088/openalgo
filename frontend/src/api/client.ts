@@ -31,6 +31,47 @@ function resolveApiBaseUrl(): string {
 
 const API_BASE_URL = resolveApiBaseUrl()
 
+function extractBackendMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return ''
+
+  const responseData = (error as { response?: { data?: unknown } }).response?.data
+  if (typeof responseData === 'string') {
+    return responseData.trim()
+  }
+  if (responseData && typeof responseData === 'object') {
+    const message = (responseData as { message?: unknown }).message
+    if (typeof message === 'string') return message.trim()
+    const nestedError = (responseData as { error?: unknown }).error
+    if (typeof nestedError === 'string') return nestedError.trim()
+  }
+  return ''
+}
+
+function isMultiBrokerRequest(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const url = String((error as { config?: { url?: unknown } }).config?.url ?? '')
+  return url.includes('/api/multibroker/')
+}
+
+function shouldRedirectOnUnauthorized(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const status = (error as { response?: { status?: unknown } }).response?.status
+  if (status !== 401) return false
+
+  // Unified proxy can return 401 for target-broker API key/permission issues.
+  // Redirect only when this is a true session-auth failure.
+  if (isMultiBrokerRequest(error)) {
+    const message = extractBackendMessage(error).toLowerCase()
+    return (
+      message.includes('not authenticated') ||
+      message.includes('authentication required') ||
+      message.includes('session expired')
+    )
+  }
+
+  return true
+}
+
 // Helper to fetch CSRF token
 export async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -63,7 +104,7 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (shouldRedirectOnUnauthorized(error)) {
       // Handle unauthorized - redirect to login
       window.location.href = '/login'
     }
@@ -152,7 +193,7 @@ webClient.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
-    if (status === 401) {
+    if (status === 401 && shouldRedirectOnUnauthorized(error)) {
       // Unauthorized - redirect to login
       window.location.href = '/login'
     } else if (status === 403) {

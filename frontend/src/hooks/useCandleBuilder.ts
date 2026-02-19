@@ -2,11 +2,15 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useMarketData } from './useMarketData'
 import { mergeTickIntoCandle, type Candle, type Tick } from '@/lib/candleUtils'
 import { isWithinIndiaMarketHours } from '@/lib/indiaMarketTime'
+import type { SubscriptionMode } from '@/lib/MarketDataManager'
+
+type CandleFeedMode = Extract<SubscriptionMode, 'LTP' | 'Quote'>
 
 interface UseCandleBuilderOptions {
   symbol: string
   exchange: string
   intervalSec?: number
+  mode?: CandleFeedMode
   enabled?: boolean
   useIndiaMarketHours?: boolean
   maxCandles?: number
@@ -22,6 +26,7 @@ export function useCandleBuilder({
   symbol,
   exchange,
   intervalSec = 1,
+  mode = 'LTP',
   enabled = true,
   useIndiaMarketHours = false,
   maxCandles = 500,
@@ -39,7 +44,7 @@ export function useCandleBuilder({
 
   const { data: wsData, isConnected } = useMarketData({
     symbols,
-    mode: 'LTP',
+    mode,
     enabled: enabled && !!symbol,
   })
 
@@ -47,7 +52,7 @@ export function useCandleBuilder({
   useEffect(() => {
     if (!enabled || !symbol || wsData.size === 0) return
 
-    const key = `${exchange}:${symbol}`
+    const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`
     const symbolData = wsData.get(key)
     if (!symbolData?.data?.ltp) return
 
@@ -57,12 +62,14 @@ export function useCandleBuilder({
     if (useIndiaMarketHours && !isWithinIndiaMarketHours(tickEpochSeconds)) return
 
     // Ignore stale/cached ticks being replayed on dependency changes (e.g. timeframe switch).
-    const tickKey = `${key}:${tickTimestamp}`
+    const tickLtp = symbolData.data.ltp
+    const tickVolume = symbolData.data.volume ?? ''
+    const tickKey = `${key}:${tickTimestamp}:${tickLtp}:${tickVolume}`
     if (lastProcessedTickKeyRef.current === tickKey) return
     lastProcessedTickKeyRef.current = tickKey
 
     const tick: Tick = {
-      price: symbolData.data.ltp,
+      price: tickLtp,
       volume: symbolData.data.volume,
       timestamp: tickTimestamp,
     }

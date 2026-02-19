@@ -74,6 +74,13 @@ interface ScalpingState {
   // Session P&L
   sessionPnl: number
   tradeCount: number
+  lastOrderAck: {
+    orderId: string
+    broker: string
+    symbol: string
+    action: OrderAction
+    timestamp: number
+  } | null
 }
 
 interface ScalpingActions {
@@ -130,6 +137,16 @@ interface ScalpingActions {
   setChartInterval: (sec: number) => void
   addSessionPnl: (pnl: number) => void
   incrementTradeCount: () => void
+  setLastOrderAck: (
+    ack: {
+      orderId: string
+      broker: string
+      symbol: string
+      action: OrderAction
+      timestamp?: number
+    } | null
+  ) => void
+  clearLastOrderAck: () => void
   resetSession: () => void
 }
 
@@ -191,6 +208,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       chartInterval: 60,
       sessionPnl: 0,
       tradeCount: 0,
+      lastOrderAck: null,
 
       // Actions
       setUnderlying: (u) => {
@@ -338,7 +356,30 @@ export const useScalpingStore = create<ScalpingStore>()(
         set((s) => ({ sessionPnl: s.sessionPnl + pnl })),
       incrementTradeCount: () =>
         set((s) => ({ tradeCount: s.tradeCount + 1 })),
-      resetSession: () => set({ sessionPnl: 0, tradeCount: 0 }),
+      setLastOrderAck: (ack) =>
+        set((s) => {
+          if (ack === null) {
+            return s.lastOrderAck === null ? s : { lastOrderAck: null }
+          }
+          const next = {
+            ...ack,
+            timestamp: ack.timestamp ?? Date.now(),
+          }
+          const current = s.lastOrderAck
+          if (
+            current &&
+            current.orderId === next.orderId &&
+            current.broker === next.broker &&
+            current.symbol === next.symbol &&
+            current.action === next.action
+          ) {
+            return s
+          }
+          return { lastOrderAck: next }
+        }),
+      clearLastOrderAck: () =>
+        set((s) => (s.lastOrderAck === null ? s : { lastOrderAck: null })),
+      resetSession: () => set({ sessionPnl: 0, tradeCount: 0, lastOrderAck: null }),
     }),
     {
       name: 'openalgo-scalping',
@@ -379,6 +420,7 @@ export const useScalpingStore = create<ScalpingStore>()(
           optionChainData: null,
           optionChainLastUpdate: 0,
           optionChainIsStreaming: false,
+          lastOrderAck: null,
         }
       },
     }

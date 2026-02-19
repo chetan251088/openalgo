@@ -248,7 +248,7 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
             accountPeakPnl: accountPeak,
             accountDrawdown,
             lockProfitTriggered: lockTriggered,
-            killSwitch: s.killSwitch || limitHit || lockTriggered,
+            killSwitch: s.killSwitch || limitHit,
           }
         }),
       setRegime: (regime) => set({ regime }),
@@ -305,7 +305,7 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
             autoPeakPnl: autoPeak,
             autoDrawdown,
             lockProfitTriggered: lockTriggered,
-            killSwitch: s.killSwitch || lockTriggered,
+            killSwitch: s.killSwitch,
           }
         }),
 

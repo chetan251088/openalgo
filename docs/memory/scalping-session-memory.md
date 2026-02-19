@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-02-13
+Last updated: 2026-02-19
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -305,6 +305,71 @@ Major implemented behavior (high level):
    - frontend consumer hook: `frontend/src/hooks/useFlowVirtualBridge.ts`
    - shared dashboard integration means both `/scalping` and `/scalping-unified` consume bridge events
    - new template: `docs/flow/templates/scalping-ws-virtual-tpsl-bridge-flow.json`
+50. Unified realtime chart robustness hardening:
+   - `/scalping-unified` now forces a clean MarketDataManager reconnect on first mount (and on feed switch) so chart ticks cannot stay pinned to a stale socket target
+   - candle-builder and option-chain WS merge paths now normalize lookup keys to uppercase (`EXCHANGE:SYMBOL`) before reading from shared WS cache
+   - this prevents silent live-tick misses when symbol/exchange casing differs across REST vs WS payloads
+51. New aggressive auto preset added for scalpers:
+   - `Adaptive Scalper` preset (`id: adaptive-scalper`) added in `frontend/src/lib/scalpingPresets.ts`
+   - keeps existing `Auto-Adaptive` preset unchanged for conservative/context-aware users
+   - lowers entry gate and momentum thresholds, relaxes timing/no-trade constraints, and speeds re-entry cadence
+   - intended for users who want higher auto-entry frequency in active scalping windows
+52. Adaptive-scalper execution/trailing behavior hardening:
+   - adaptive-scalper preset now disables IV-spike early-exit to prevent immediate enter->exit churn
+   - virtual TP/SL attach for auto entries now guarantees fallback TP/SL points from auto config when UI TP/SL are zero
+   - virtual options-context early-exit checks now wait `3s` after entry before triggering
+   - trailing monitor adds adaptive-scalper mode: once LTP crosses entry, SL trails continuously at `2` points from live price with monotonic updates
+53. Kill-switch + adaptive pyramiding behavior update:
+   - lock-profit trigger no longer force-sets `killSwitch`; kill-switch now remains manual/daily-loss driven
+   - adaptive-scalper can add to winning positions after trailing starts (profit + trailing stage required)
+   - add-on cap is `+2 lots` beyond configured entry lots for that side while profit persists
+   - side-open gate now shows explicit pyramiding allowance in decision checks when eligible
+54. Manual order trailing parity update:
+   - trailing monitor now includes manual/hotkey/trigger-managed virtual TP/SL orders (not only auto-managed)
+   - manual `MARKET`, filled `LIMIT`, and triggered `TRIGGER` entries now use cross-entry trailing logic
+   - once LTP crosses filled entry price, SL starts trailing continuously at `2` points with monotonic updates
+   - auto runtime trail/high store fields remain auto-only to avoid manual-trade noise in auto diagnostics
+55. Trailing TP sync enhancement:
+   - while SL trails, virtual TP now shifts by the same delta as SL (BUY: upward, SELL: downward)
+   - keeps TP and SL moving together once trailing starts, preserving TP-SL spread
+   - applies to both cross-entry trailing path and stage-based trailing path when trailing SL updates
+56. CE/PE order-flow overlay view (toggleable):
+   - chart toolbar now includes a `FLOW` toggle to turn CE/PE order-flow overlay on/off on demand
+   - option charts subscribe to quote/depth feed in flow mode and compute 30s buy/sell flow, delta, cumulative delta, spread, and depth imbalance
+   - attribution uses volume-delta + price direction when possible (`VOL`) with fallback estimation (`EST`) when exact aggressor mapping is unavailable in feed
+   - designed as a lightweight overlay so base chart/entry interactions remain unchanged
+57. Order-flow trade-bias hint added:
+   - FLOW card now derives a bias label from delta + cumulative-delta alignment and imbalance strength
+   - outputs one of: `BUY CE NOW`, `BUY PE NOW`, or `HOLD FOR NOW`
+   - low activity or weak/mixed flow automatically resolves to `HOLD FOR NOW`
+58. Candle latency parity tuning for scalping charts:
+   - `useCandleBuilder` now supports feed mode selection and chart views use `Quote` mode instead of `LTP`
+   - aligns candle feed behavior with option-chain quote feed path for faster visual parity
+   - tick de-dup key now includes timestamp + LTP + volume to avoid dropping valid same-ms price updates
+59. FLOW overlay live-update regression fix:
+   - option chart FLOW now consumes both `Quote` and `LTP` streams, then merges payload fields per symbol
+   - update cadence uses freshest tick timestamp, while preferring quote fields for volume/bid/ask/depth
+   - restores FLOW responsiveness after candle feed-mode changes without reverting chart latency tuning
+60. Manual execution visibility + failure feedback:
+   - successful `/api/v1/placeorder` now records `lastOrderAck` (order-id, broker, symbol, action, timestamp) in scalping store
+   - scalping top bar shows `ACK: <order-id>` badge in live mode, alongside execution broker badge
+   - manual tab, floating widget, and hotkey placement now surface on-screen toast errors for missing symbol/API key, order rejections, and close failures
+61. FLOW zero-value resiliency enhancement:
+   - FLOW parser now accepts alternate tick field names (`last_price`, `lp`, `bid/ask`, broker-specific size aliases) instead of only strict `ltp/volume/bid_price/ask_price`
+   - when volume delta is unavailable, FLOW infers pressure from bid/ask size consumption + replenishment and LTP drift before final 1-tick fallback
+   - flow state now tracks prior bid/ask sizes to keep 30s flow active on sparse-volume feeds where raw volume often stays flat
+62. FLOW display + flat-tick heartbeat refinement:
+   - FLOW number formatting now shows decimal values for small activity, preventing weak but real flow from rendering as `0`
+   - removed `ltq` from cumulative-volume inference to avoid false `VOL` classification on non-cumulative fields
+   - when fresh ticks arrive but price/depth/volume provide no directional signal, FLOW adds a tiny balanced heartbeat (`EST`) so overlay does not appear stalled
+63. Unified hotkey redirect hardening for SENSEX/error paths:
+   - frontend auth interceptors now treat `/api/multibroker/*` `401` responses as non-redirecting unless message indicates true session auth failure (`Not authenticated` / `Authentication required` / `Session expired`)
+   - prevents `/scalping-unified` from force-redirecting to login/dashboard on broker-target API-key/permission failures during hotkey/manual trade requests
+   - hotkey error parser now surfaces backend `message`/`error` text so unified-order failures show actionable toasts instead of generic Axios status text
+64. Kotak option FLOW depth-parity fix:
+   - option chart FLOW now subscribes to `Depth` mode in addition to `Quote` and `LTP` while FLOW is enabled
+   - FLOW parser now accepts Kotak depth totals (`totalbuyqty` / `totalsellqty`) and bid/ask aliases (`bp` / `sp`)
+   - spread fallback now uses top-of-book depth prices when quote bid/ask are absent, reducing false `No L2 quote` states on Kotak options
 
 ## 7) Still Important Gaps / Follow-ups
 
@@ -365,6 +430,10 @@ Run this after scalping changes:
 Use this in a new session to bootstrap context quickly:
 
 `Read docs/skills/scalping-autotrade-copilot/SKILL.md, docs/memory/scalping-session-memory.md, docs/memory/scalping-next-session-handover.md, and docs/design/tomic-unified-architecture.md, then continue from the latest unified scalping + TOMIC control-instance state.`
+
+Token-light alternatives:
+
+1. `docs/memory/quick-resume-prompts.md`
 
 ## 12) Unified Route Ops (Day-To-Day)
 

@@ -6,6 +6,7 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
+import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
@@ -13,6 +14,19 @@ import {
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message.trim()
+    }
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim()
+  }
+  return fallback
+}
 
 export function ManualTradeTab() {
   const apiKey = useAuthStore((s) => s.apiKey)
@@ -65,8 +79,10 @@ export function ManualTradeTab() {
       }
     } catch (err) {
       console.error('[Scalping] Failed to fetch API key:', err)
+      toast.error('Failed to fetch API key')
     }
     console.warn('[Scalping] No API key available — generate one at /apikey')
+    toast.error('API key missing. Generate one on /apikey')
     return null
   }, [apiKey, setApiKey])
 
@@ -74,6 +90,7 @@ export function ManualTradeTab() {
     async (action: 'BUY' | 'SELL') => {
       if (!activeSymbol) {
         console.warn('[Scalping] No symbol selected — click a strike first')
+        toast.error('Select a strike first')
         return
       }
 
@@ -108,6 +125,7 @@ export function ManualTradeTab() {
         pendingLimitPlacement.side === activeSide
       ) {
         console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
+        toast.error('A LIMIT order is already pending for this symbol')
         return
       }
 
@@ -222,9 +240,11 @@ export function ManualTradeTab() {
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
+          toast.error(extractErrorMessage(res, 'Order was rejected'))
         }
       } catch (err) {
         console.error('[Scalping] Order failed:', err)
+        toast.error(extractErrorMessage(err, 'Order placement failed'))
       }
     },
     [
@@ -275,9 +295,11 @@ export function ManualTradeTab() {
         clearPendingLimitPlacement()
       } else {
         console.error('[Scalping] Close rejected:', res)
+        toast.error(extractErrorMessage(res, 'Close position rejected'))
       }
     } catch (err) {
       console.error('[Scalping] Close failed:', err)
+      toast.error(extractErrorMessage(err, 'Close position failed'))
     }
   }, [
     activeSymbol,
@@ -301,14 +323,20 @@ export function ManualTradeTab() {
       return
     }
     try {
-      await tradingApi.closeAllPositions()
-      console.log('[Scalping] Closed all positions')
-      clearVirtualOrders()
-      setLimitPrice(null)
-      setPendingEntryAction(null)
-      clearPendingLimitPlacement()
+      const res = await tradingApi.closeAllPositions()
+      if (res.status === 'success') {
+        console.log('[Scalping] Closed all positions')
+        clearVirtualOrders()
+        setLimitPrice(null)
+        setPendingEntryAction(null)
+        clearPendingLimitPlacement()
+      } else {
+        console.error('[Scalping] Close all rejected:', res)
+        toast.error(extractErrorMessage(res, 'Close all rejected'))
+      }
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
+      toast.error(extractErrorMessage(err, 'Close all failed'))
     }
   }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 

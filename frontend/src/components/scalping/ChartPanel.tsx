@@ -14,11 +14,13 @@ export function ChartPanel() {
   const [showEma21, setShowEma21] = useState(true)
   const [showSupertrend, setShowSupertrend] = useState(true)
   const [showVwap, setShowVwap] = useState(true)
+  const [showOrderFlow, setShowOrderFlow] = useState(false)
 
   const toggleEma9 = useCallback(() => setShowEma9((v) => !v), [])
   const toggleEma21 = useCallback(() => setShowEma21((v) => !v), [])
   const toggleSupertrend = useCallback(() => setShowSupertrend((v) => !v), [])
   const toggleVwap = useCallback(() => setShowVwap((v) => !v), [])
+  const toggleOrderFlow = useCallback(() => setShowOrderFlow((v) => !v), [])
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
@@ -27,10 +29,12 @@ export function ChartPanel() {
         showEma21={showEma21}
         showSupertrend={showSupertrend}
         showVwap={showVwap}
+        showOrderFlow={showOrderFlow}
         onToggleEma9={toggleEma9}
         onToggleEma21={toggleEma21}
         onToggleSupertrend={toggleSupertrend}
         onToggleVwap={toggleVwap}
+        onToggleOrderFlow={toggleOrderFlow}
       />
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
@@ -58,6 +62,7 @@ export function ChartPanel() {
                     showEma21={showEma21}
                     showSupertrend={showSupertrend}
                     showVwap={showVwap}
+                    showOrderFlow={showOrderFlow}
                   />
                 </ResizablePanel>
                 <ResizableHandle withHandle />
@@ -68,6 +73,7 @@ export function ChartPanel() {
                     showEma21={showEma21}
                     showSupertrend={showSupertrend}
                     showVwap={showVwap}
+                    showOrderFlow={showOrderFlow}
                   />
                 </ResizablePanel>
               </ResizablePanelGroup>

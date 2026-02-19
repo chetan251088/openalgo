@@ -280,6 +280,8 @@ export function shouldEnterTrade(
     lastLossTime: number
     requestedLots?: number
     sideOpen?: boolean
+    openSideLots?: number
+    allowEntryWithOpenSide?: boolean
     lastExitAtForSide?: number
     reEntryCountForSide?: number
     lastTradePnl?: number | null
@@ -366,8 +368,19 @@ export function shouldEnterTrade(
     return block('Outside configured market hot-zone timing', 'hot-zone')
   }
 
-  const noOpenPositionOnSide = !runtime.sideOpen
-  addCheck('side-open', 'No open position on side', noOpenPositionOnSide)
+  const openSideLots = Math.max(0, runtime.openSideLots ?? 0)
+  const canEnterWithOpenSide = runtime.allowEntryWithOpenSide === true
+  const noOpenPositionOnSide = !runtime.sideOpen || canEnterWithOpenSide
+  addCheck(
+    'side-open',
+    'No open position on side',
+    noOpenPositionOnSide,
+    runtime.sideOpen
+      ? canEnterWithOpenSide
+        ? `Pyramid allowed (${openSideLots.toFixed(1)} lots open)`
+        : `${openSideLots.toFixed(1)} lots open`
+      : '0 lots'
+  )
   if (!noOpenPositionOnSide) {
     return block(`Position already open on ${side}`, 'side-open')
   }

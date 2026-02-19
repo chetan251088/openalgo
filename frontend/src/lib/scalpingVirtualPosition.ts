@@ -232,6 +232,7 @@ export function buildVirtualPosition({
         : null,
     tpPoints: normalizedTpPoints,
     slPoints: normalizedSlPoints,
+    trailStage: managedBy === 'auto' ? 'INITIAL' : undefined,
     createdAt,
     managedBy,
     autoEntryScore,

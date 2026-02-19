@@ -55,6 +55,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
   const paperMode = useScalpingStore((s) => s.paperMode)
   const sessionPnl = useScalpingStore((s) => s.sessionPnl)
   const tradeCount = useScalpingStore((s) => s.tradeCount)
+  const lastOrderAck = useScalpingStore((s) => s.lastOrderAck)
 
   const setUnderlying = useScalpingStore((s) => s.setUnderlying)
   const setExpiryWeek = useScalpingStore((s) => s.setExpiryWeek)
@@ -255,6 +256,16 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
             {broker}
           </Badge>
         )
+      )}
+
+      {!paperMode && lastOrderAck && (
+        <Badge
+          variant="outline"
+          className="text-xs h-6 font-mono"
+          title={`${lastOrderAck.broker} ${lastOrderAck.action} ${lastOrderAck.symbol}`}
+        >
+          ACK: {lastOrderAck.orderId}
+        </Badge>
       )}
 
       <div className="w-px h-5 bg-border" />

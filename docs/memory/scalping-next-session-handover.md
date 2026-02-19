@@ -75,6 +75,10 @@ Flow -> scalping virtual TP/SL bridge details:
    - `services/scalping_flow_bridge_service.py`
 3. Frontend consumer (shared for both scalping routes):
    - `frontend/src/hooks/useFlowVirtualBridge.ts`
+4. Unified realtime chart guard:
+   - `/scalping-unified` now forces a clean WS reconnect on first mount and on feed switch
+   - candle/chain WS cache lookups now normalize keys to uppercase `EXCHANGE:SYMBOL`
+   - prevents silent live-tick misses from casing drift between REST symbols and WS payload symbols
 
 ## Unified Ops Runbook
 
@@ -196,3 +200,7 @@ Why this matters:
 ## Fast Resume Prompt (Copy/Paste)
 
 `Read docs/skills/scalping-autotrade-copilot/SKILL.md, docs/memory/scalping-session-memory.md, docs/memory/scalping-next-session-handover.md, and docs/design/tomic-unified-architecture.md. Then continue from unified feed/exec + TOMIC control-instance runtime state, validating live broker parity and signal-loop health.`
+
+Token-light prompt pack:
+
+1. `docs/memory/quick-resume-prompts.md`

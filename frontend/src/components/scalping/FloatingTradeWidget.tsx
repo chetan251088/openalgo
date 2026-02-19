@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
 import { MarketDataManager } from '@/lib/MarketDataManager'
+import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
@@ -12,6 +13,19 @@ import {
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message.trim()
+    }
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim()
+  }
+  return fallback
+}
 
 /**
  * Single floating trade widget that follows the active side (CE or PE).
@@ -134,15 +148,20 @@ export function FloatingTradeWidget() {
       }
     } catch (err) {
       console.error('[Scalping] Failed to fetch API key:', err)
+      toast.error('Failed to fetch API key')
     }
     console.warn('[Scalping] No API key available — generate one at /apikey')
+    toast.error('API key missing. Generate one on /apikey')
     return null
   }, [apiKey, setApiKey])
 
   const placeOrder = useCallback(
     async (action: 'BUY' | 'SELL') => {
       if (!symbol || executing) {
-        if (!symbol) console.warn('[Scalping] No symbol selected — click a strike first')
+        if (!symbol) {
+          console.warn('[Scalping] No symbol selected — click a strike first')
+          toast.error('Select a strike first')
+        }
         return
       }
       setExecuting(true)
@@ -177,6 +196,7 @@ export function FloatingTradeWidget() {
         pendingLimitPlacement.side === activeSide
       ) {
         console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
+        toast.error('A LIMIT order is already pending for this symbol')
         setExecuting(false)
         return
       }
@@ -291,9 +311,11 @@ export function FloatingTradeWidget() {
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
+          toast.error(extractErrorMessage(res, 'Order was rejected'))
         }
       } catch (err) {
         console.error('[Scalping] Order failed:', err)
+        toast.error(extractErrorMessage(err, 'Order placement failed'))
       }
       setExecuting(false)
     },
@@ -354,7 +376,12 @@ export function FloatingTradeWidget() {
         trigger_price: 0,
         disclosed_quantity: 0,
       }
-      await tradingApi.placeOrder(closeOrder)
+      const closeRes = await tradingApi.placeOrder(closeOrder)
+      if (closeRes.status !== 'success') {
+        toast.error(extractErrorMessage(closeRes, 'Reversal close leg failed'))
+        setExecuting(false)
+        return
+      }
 
       const openOrder: PlaceOrderRequest = {
         apikey: key,
@@ -369,11 +396,17 @@ export function FloatingTradeWidget() {
         trigger_price: 0,
         disclosed_quantity: 0,
       }
-      await tradingApi.placeOrder(openOrder)
+      const openRes = await tradingApi.placeOrder(openOrder)
+      if (openRes.status !== 'success') {
+        toast.error(extractErrorMessage(openRes, 'Reversal open leg failed'))
+        setExecuting(false)
+        return
+      }
       console.log(`[Scalping] Reversed ${activeSide} ${symbol}`)
       incrementTradeCount()
     } catch (err) {
       console.error('[Scalping] Reversal failed:', err)
+      toast.error(extractErrorMessage(err, 'Reversal failed'))
     }
     setExecuting(false)
   }, [symbol, activeSide, quantity, lotSize, optionExchange, product, paperMode, executing, ensureApiKey, incrementTradeCount])
@@ -399,9 +432,11 @@ export function FloatingTradeWidget() {
         clearPendingLimitPlacement()
       } else {
         console.error('[Scalping] Close rejected:', res)
+        toast.error(extractErrorMessage(res, 'Close position rejected'))
       }
     } catch (err) {
       console.error('[Scalping] Close failed:', err)
+      toast.error(extractErrorMessage(err, 'Close position failed'))
     }
   }, [
     symbol,

@@ -3,6 +3,7 @@ import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { tradingApi } from '@/api/trading'
+import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
@@ -10,6 +11,33 @@ import {
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
 import type { PlaceOrderRequest } from '@/types/trading'
+
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const responseData = (error as { response?: { data?: unknown } }).response?.data
+    if (responseData && typeof responseData === 'object') {
+      const responseMessage = (responseData as { message?: unknown }).message
+      if (typeof responseMessage === 'string' && responseMessage.trim().length > 0) {
+        return responseMessage.trim()
+      }
+      const responseError = (responseData as { error?: unknown }).error
+      if (typeof responseError === 'string' && responseError.trim().length > 0) {
+        return responseError.trim()
+      }
+    } else if (typeof responseData === 'string' && responseData.trim().length > 0) {
+      return responseData.trim()
+    }
+
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message.trim()
+    }
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim()
+  }
+  return fallback
+}
 
 interface UseScalpingHotkeysOptions {
   onBuy?: (side: 'CE' | 'PE', symbol: string) => void
@@ -79,8 +107,10 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       }
     } catch (err) {
       console.error('[Scalping] Failed to fetch API key:', err)
+      toast.error('Failed to fetch API key')
     }
     console.warn('[Scalping] No API key available — generate one at /apikey')
+    toast.error('API key missing. Generate one on /apikey')
     return null
   }, [apiKey, setApiKey])
 
@@ -95,6 +125,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       const effectiveOrderType = forceMarket ? 'MARKET' : orderType
       if (!symbol) {
         console.warn('[Scalping] No symbol selected — click a strike first')
+        toast.error('Select a strike first')
         return
       }
 
@@ -126,6 +157,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         pendingLimitPlacement.side === side
       ) {
         console.warn('[Scalping] LIMIT already pending for this symbol. Wait for fill/cancel before placing another.')
+        toast.error('A LIMIT order is already pending for this symbol')
         return
       }
 
@@ -234,9 +266,11 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
+          toast.error(extractErrorMessage(res, 'Order was rejected'))
         }
       } catch (err) {
         console.error('[Scalping] Order failed:', err)
+        toast.error(extractErrorMessage(err, 'Order placement failed'))
       }
     },
     [

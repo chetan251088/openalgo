@@ -27,7 +27,9 @@ export default function ScalpingUnifiedDashboard() {
     const manager = MarketDataManager.getInstance()
     const previousFeed = lastFeedRef.current
     manager.setUnifiedFeedMode(dataFeed)
-    if (previousFeed && previousFeed !== dataFeed) {
+    // Force a clean reconnect on first mount and on feed changes so the socket
+    // never remains pinned to a stale/non-unified endpoint.
+    if (previousFeed === null || previousFeed !== dataFeed) {
       manager.disconnect()
     }
     lastFeedRef.current = dataFeed

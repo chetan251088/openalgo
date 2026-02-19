@@ -14,6 +14,8 @@ import { optionsEarlyExitCheck } from '@/lib/autoTradeEngine'
 import type { PlaceOrderRequest } from '@/types/trading'
 import type { MarketData } from '@/lib/MarketDataManager'
 
+const AUTO_OPTIONS_EARLY_EXIT_GRACE_MS = 3000
+
 /**
  * Monitors live ticks and fires MARKET close orders when
  * virtual TP/SL or trigger prices are hit.
@@ -31,6 +33,7 @@ export function useVirtualTPSL(
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
   const autoConfig = useAutoTradeStore((s) => s.config)
+  const activePresetId = useAutoTradeStore((s) => s.activePresetId)
   const optionsContext = useAutoTradeStore((s) => s.optionsContext)
   const recordAutoExit = useAutoTradeStore((s) => s.recordAutoExit)
   const recordTradeOutcome = useAutoTradeStore((s) => s.recordTradeOutcome)
@@ -227,10 +230,17 @@ export function useVirtualTPSL(
           continue
         }
 
-        const earlyExit = optionsEarlyExitCheck(order.side, optionsContext, autoConfig)
-        if (earlyExit.exit) {
-          closeVirtualOrder(order, ltp, `Options early-exit: ${earlyExit.reason}`)
-          continue
+        const orderAgeMs = Math.max(0, Date.now() - (order.createdAt || 0))
+        if (orderAgeMs >= AUTO_OPTIONS_EARLY_EXIT_GRACE_MS) {
+          const effectiveAutoConfig =
+            activePresetId === 'adaptive-scalper'
+              ? { ...autoConfig, ivSpikeExitEnabled: false }
+              : autoConfig
+          const earlyExit = optionsEarlyExitCheck(order.side, optionsContext, effectiveAutoConfig)
+          if (earlyExit.exit) {
+            closeVirtualOrder(order, ltp, `Options early-exit: ${earlyExit.reason}`)
+            continue
+          }
         }
       }
 
@@ -322,6 +332,7 @@ export function useVirtualTPSL(
     addSessionPnl,
     incrementTradeCount,
     autoConfig,
+    activePresetId,
     optionsContext,
     recordAutoExit,
     recordTradeOutcome,

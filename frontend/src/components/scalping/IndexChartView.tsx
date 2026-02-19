@@ -406,6 +406,7 @@ export function IndexChartView({
     symbol: underlying,
     exchange: indexExchange,
     intervalSec: chartInterval,
+    mode: 'Quote',
     enabled: !!underlying,
     useIndiaMarketHours: true,
     onCandleUpdate: handleCandleUpdate,

@@ -39,6 +39,8 @@ interface VolumeSignalSnapshot {
   sideDominanceRatio: number | null
 }
 
+const ADAPTIVE_SCALPER_MAX_EXTRA_LOTS = 2
+
 function calculateEMAValue(prices: number[], period: number): number | null {
   if (prices.length < period) return null
   const k = 2 / (period + 1)
@@ -125,6 +127,10 @@ function computeVolumeFlow(cumulativeVolumes: number[], lookbackTicks: number): 
   }
 }
 
+function isTrailingActiveStage(stage: unknown): boolean {
+  return stage === 'TRAIL' || stage === 'TIGHT' || stage === 'ACCELERATED'
+}
+
 /**
  * Auto-trade engine hook.
  * - Execute mode: processes ticks, fires orders when conditions met
@@ -170,7 +176,6 @@ export function useAutoTradeEngine(
   const sideLastExitAt = useAutoTradeStore((s) => s.sideLastExitAt)
   const replayMode = useAutoTradeStore((s) => s.replayMode)
   const killSwitch = useAutoTradeStore((s) => s.killSwitch)
-  const lockProfitTriggered = useAutoTradeStore((s) => s.lockProfitTriggered)
 
   const setRegime = useAutoTradeStore((s) => s.setRegime)
   const addGhostSignal = useAutoTradeStore((s) => s.addGhostSignal)
@@ -269,7 +274,12 @@ export function useAutoTradeEngine(
       const symbol = side === 'CE' ? ceSymbol : peSymbol
       const ltp = side === 'CE' ? ceLtp : peLtp
       const ticks = side === 'CE' ? ceTicksRef.current : peTicksRef.current
-      const sideOpen = Object.values(virtualTPSL).some((order) => order.side === side)
+      const sideOrders = Object.values(virtualTPSL).filter((order) => order.side === side)
+      const sideAutoOrders = sideOrders.filter((order) => order.managedBy === 'auto')
+      const sideOpen = sideOrders.length > 0
+      const openSideQty = sideOrders.reduce((sum, order) => sum + Math.max(0, order.quantity || 0), 0)
+      const openSideLotsRaw = lotSize > 0 ? openSideQty / lotSize : 0
+      const openSideLots = Number.isFinite(openSideLotsRaw) ? openSideLotsRaw : 0
       const sideVolumeFlow = side === 'CE' ? ceVolumeFlow : peVolumeFlow
       const oppositeVolumeFlow = side === 'CE' ? peVolumeFlow : ceVolumeFlow
       const sideDominanceRatio =
@@ -286,6 +296,31 @@ export function useAutoTradeEngine(
       }
 
       if (!symbol || !ltp || ticks.length < 5) continue
+
+      let sideUnrealizedPnl = 0
+      for (const order of sideOrders) {
+        const orderKey = `${order.exchange}:${order.symbol}`
+        const orderLtp = tickData.get(orderKey)?.data?.ltp ?? (order.symbol === symbol ? ltp : undefined)
+        if (!orderLtp || orderLtp <= 0) continue
+        sideUnrealizedPnl +=
+          order.action === 'BUY'
+            ? (orderLtp - order.entryPrice) * order.quantity
+            : (order.entryPrice - orderLtp) * order.quantity
+      }
+
+      const trailingStarted = sideAutoOrders.some((order) => isTrailingActiveStage(order.trailStage))
+      const pyramidLotsCap = quantity + ADAPTIVE_SCALPER_MAX_EXTRA_LOTS
+      const pyramidRemainingLots = Math.max(0, Math.floor(pyramidLotsCap - openSideLots + 1e-6))
+      const canPyramidOnProfit =
+        activePresetId === 'adaptive-scalper' &&
+        sideOpen &&
+        sideAutoOrders.length > 0 &&
+        trailingStarted &&
+        sideUnrealizedPnl > 0 &&
+        pyramidRemainingLots > 0
+      const entryLots = canPyramidOnProfit
+        ? Math.max(1, Math.min(quantity, pyramidRemainingLots))
+        : quantity
 
       // Calculate momentum
       const momentum = calculateMomentum(ticks, config)
@@ -320,12 +355,14 @@ export function useAutoTradeEngine(
         lastTradeTime,
         tradesThisMinute,
         lastLossTime,
-        requestedLots: quantity,
+        requestedLots: canPyramidOnProfit ? openSideLots + entryLots : quantity,
         sideOpen,
+        openSideLots,
+        allowEntryWithOpenSide: canPyramidOnProfit,
         lastExitAtForSide: sideLastExitAt[side],
         reEntryCountForSide: sideEntryCount[side],
         lastTradePnl,
-        killSwitch: killSwitch || lockProfitTriggered,
+        killSwitch,
       }
       const decision = shouldEnterTrade(
         side, ltp, config, runtime, momentum, indicators,
@@ -380,7 +417,7 @@ export function useAutoTradeEngine(
         // Execute mode: fire order
         executingRef.current = true
         const action: 'BUY' = 'BUY'
-        const qty = quantity * lotSize
+        const qty = entryLots * lotSize
         const placeAutoEntry = async () => {
           const isExecutionAllowed = () => {
             const runtimeState = useAutoTradeStore.getState()
@@ -388,7 +425,7 @@ export function useAutoTradeEngine(
               runtimeState.enabled &&
               runtimeState.mode === 'execute' &&
               !runtimeState.replayMode &&
-              !(runtimeState.killSwitch || runtimeState.lockProfitTriggered)
+              !runtimeState.killSwitch
             )
           }
 
@@ -489,6 +526,11 @@ export function useAutoTradeEngine(
                   preferredPrice: ltp,
                   apiKey: executionApiKey,
                 })
+            const fallbackTpPoints = Math.max(2, Number(config.trailLockTrigger) || 8)
+            const fallbackSlPoints = Math.max(2, Number(config.trailInitialSL) || 5)
+            const resolvedTpPoints = tpPoints > 0 ? tpPoints : fallbackTpPoints
+            const resolvedSlPoints = slPoints > 0 ? slPoints : fallbackSlPoints
+
             if (entryPrice > 0) {
               setVirtualTPSL(
                 buildVirtualPosition({
@@ -498,8 +540,8 @@ export function useAutoTradeEngine(
                   action,
                   entryPrice,
                   quantity: qty,
-                  tpPoints,
-                  slPoints,
+                  tpPoints: resolvedTpPoints,
+                  slPoints: resolvedSlPoints,
                   managedBy: 'auto',
                   autoEntryScore: decision.score,
                   autoEntryReason: decision.reason,
@@ -564,7 +606,7 @@ export function useAutoTradeEngine(
     enabled, tickData, mode, config, activePresetId, selectedCESymbol, selectedPESymbol,
     optionsContext, regime, consecutiveLosses, tradesCount, realizedPnl,
     lastTradeTime, tradesThisMinute, lastLossTime, lastTradePnl,
-    sideEntryCount, sideLastExitAt, replayMode, killSwitch, lockProfitTriggered,
+    sideEntryCount, sideLastExitAt, replayMode, killSwitch,
     ensureApiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
     selectedStrike, addGhostSignal, recordTrade, recordAutoEntry, pushDecision, pushExecutionSample, setRegime,
     virtualTPSL, setVirtualTPSL,

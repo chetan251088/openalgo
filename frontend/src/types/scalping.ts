@@ -60,6 +60,7 @@ export interface VirtualTPSL {
   slPrice: number | null
   tpPoints: number
   slPoints: number
+  trailStage?: TrailingStage
   createdAt: number
   managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost' | 'flow'
   autoEntryScore?: number
