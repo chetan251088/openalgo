@@ -111,6 +111,25 @@ function normalizeProduct(product?: string): TradeProduct {
   return 'MIS'
 }
 
+function normalizeText(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase()
+}
+
+function parseSignedQuantity(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim())
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+function isResponseSuccess(status: ApiResponse<unknown>['status'] | undefined): boolean {
+  return status === 'success' || status === 'info'
+}
+
 async function resolveRuntimeApiKey(): Promise<string | null> {
   const existing = useAuthStore.getState().apiKey
   if (existing) return existing
@@ -454,45 +473,71 @@ export const tradingApi = {
       }
 
       const positionsResponse = await tradingApi.getPositions(apiKey)
+      if (!isResponseSuccess(positionsResponse.status)) {
+        return {
+          status: 'error',
+          message: positionsResponse.message ?? 'Failed to fetch positions before close',
+        }
+      }
+
       const list = Array.isArray(positionsResponse.data) ? positionsResponse.data : []
-      const target = list.find((p) => {
-        const qty = Number(p.quantity) || 0
-        return (
-          p.symbol === symbol &&
-          p.exchange === exchange &&
-          p.product === product &&
-          qty !== 0
-        )
-      })
+      const openPositions = list.filter((p) => parseSignedQuantity(p.quantity) !== 0)
+      const wantedSymbol = normalizeText(symbol)
+      const wantedExchange = normalizeText(exchange)
+      const wantedProduct = normalizeProduct(product)
 
-      if (!target) {
+      const symbolMatches = openPositions.filter((p) => normalizeText(p.symbol) === wantedSymbol)
+      const exchangeMatches = symbolMatches.filter((p) => normalizeText(p.exchange) === wantedExchange)
+      const exactMatches = exchangeMatches.filter(
+        (p) => normalizeProduct((p as { product?: string }).product) === wantedProduct
+      )
+
+      const targets =
+        exactMatches.length > 0
+          ? exactMatches
+          : exchangeMatches.length > 0
+            ? exchangeMatches
+            : symbolMatches
+
+      if (!targets.length) {
         return { status: 'success', message: 'No open position to close' }
       }
 
-      const signedQty = Number(target.quantity) || 0
-      const closeQty = Math.abs(signedQty)
-      if (closeQty <= 0) {
-        return { status: 'success', message: 'No open position to close' }
+      const closeResults = await Promise.allSettled(
+        targets.map((target) => {
+          const signedQty = parseSignedQuantity(target.quantity)
+          const closeQty = Math.abs(signedQty)
+          const closeAction = signedQty > 0 ? 'SELL' : 'BUY'
+          return tradingApi.placeOrder({
+            apikey: apiKey,
+            strategy: 'Scalping',
+            exchange: target.exchange || exchange,
+            symbol: target.symbol || symbol,
+            action: closeAction,
+            quantity: closeQty,
+            pricetype: 'MARKET',
+            product: normalizeProduct((target as { product?: string }).product ?? product),
+            price: 0,
+            trigger_price: 0,
+            disclosed_quantity: 0,
+          })
+        })
+      )
+
+      let failed = 0
+      for (const result of closeResults) {
+        if (result.status !== 'fulfilled' || !isResponseSuccess(result.value.status)) {
+          failed += 1
+        }
       }
 
-      const closeAction = signedQty > 0 ? 'SELL' : 'BUY'
-      const closeRes = await tradingApi.placeOrder({
-        apikey: apiKey,
-        strategy: 'Scalping',
-        exchange,
-        symbol,
-        action: closeAction,
-        quantity: closeQty,
-        pricetype: 'MARKET',
-        product: normalizeProduct(product),
-        price: 0,
-        trigger_price: 0,
-        disclosed_quantity: 0,
-      })
-      return {
-        status: closeRes.status,
-        message: closeRes.message,
+      if (failed > 0) {
+        return {
+          status: 'error',
+          message: `Failed to close ${failed} position leg(s)`,
+        }
       }
+      return { status: 'success', message: 'Position closed' }
     }
 
     // Uses the web route which handles session-based auth with CSRF
@@ -514,45 +559,97 @@ export const tradingApi = {
         return { status: 'error', message: 'Missing API key' }
       }
 
-      const positionsResponse = await tradingApi.getPositions(apiKey)
-      const list = Array.isArray(positionsResponse.data) ? positionsResponse.data : []
-      const openPositions = list.filter((p) => (Number(p.quantity) || 0) !== 0)
-      if (!openPositions.length) {
-        return { status: 'success', message: 'No open positions to close' }
+      const closeRemainingByMarket = async (): Promise<ApiResponse<void>> => {
+        const positionsResponse = await tradingApi.getPositions(apiKey)
+        if (!isResponseSuccess(positionsResponse.status)) {
+          return {
+            status: 'error',
+            message: positionsResponse.message ?? 'Failed to fetch positions before close-all',
+          }
+        }
+
+        const list = Array.isArray(positionsResponse.data) ? positionsResponse.data : []
+        const openPositions = list.filter((p) => parseSignedQuantity(p.quantity) !== 0)
+        if (!openPositions.length) {
+          return { status: 'success', message: 'No open positions to close' }
+        }
+
+        const closeResults = await Promise.allSettled(
+          openPositions.map((position) => {
+            const signedQty = parseSignedQuantity(position.quantity)
+            const closeQty = Math.abs(signedQty)
+            const action = signedQty > 0 ? 'SELL' : 'BUY'
+            return tradingApi.placeOrder({
+              apikey: apiKey,
+              strategy: 'Scalping',
+              exchange: position.exchange,
+              symbol: position.symbol,
+              action,
+              quantity: closeQty,
+              pricetype: 'MARKET',
+              product: normalizeProduct((position as { product?: string }).product),
+              price: 0,
+              trigger_price: 0,
+              disclosed_quantity: 0,
+            })
+          })
+        )
+
+        let failed = 0
+        for (const result of closeResults) {
+          if (result.status !== 'fulfilled' || !isResponseSuccess(result.value.status)) {
+            failed += 1
+          }
+        }
+
+        if (failed > 0) {
+          return {
+            status: 'error',
+            message: `Failed to close ${failed} position(s)`,
+          }
+        }
+        return { status: 'success', message: 'All positions closed' }
       }
 
-      let failed = 0
-      for (const p of openPositions) {
-        const signedQty = Number(p.quantity) || 0
-        const qty = Math.abs(signedQty)
-        if (qty <= 0) continue
-
-        const action = signedQty > 0 ? 'SELL' : 'BUY'
-        const result = await tradingApi.placeOrder({
+      let brokerCloseMessage = ''
+      try {
+        const closeResponse = await proxyV1ByRole<ApiResponse<void>>('execution', 'closeposition', {
           apikey: apiKey,
           strategy: 'Scalping',
-          exchange: p.exchange,
-          symbol: p.symbol,
-          action,
-          quantity: qty,
-          pricetype: 'MARKET',
-          product: normalizeProduct(p.product),
-          price: 0,
-          trigger_price: 0,
-          disclosed_quantity: 0,
         })
-        if (result.status !== 'success') {
-          failed += 1
+
+        if (isResponseSuccess(closeResponse.status)) {
+          await new Promise((resolve) => setTimeout(resolve, 120))
+          const verifyResponse = await closeRemainingByMarket()
+          if (isResponseSuccess(verifyResponse.status)) {
+            return {
+              status: 'success',
+              message: closeResponse.message ?? verifyResponse.message ?? 'All positions closed',
+            }
+          }
+          return verifyResponse
+        }
+
+        brokerCloseMessage = String(closeResponse.message ?? '').trim()
+      } catch (error) {
+        if (error instanceof Error) {
+          brokerCloseMessage = error.message
         }
       }
 
-      if (failed > 0) {
+      const fallbackResponse = await closeRemainingByMarket()
+      if (isResponseSuccess(fallbackResponse.status)) {
+        return fallbackResponse
+      }
+
+      if (brokerCloseMessage && fallbackResponse.message) {
         return {
           status: 'error',
-          message: `Failed to close ${failed} position(s)`,
+          message: `${brokerCloseMessage}. ${fallbackResponse.message}`,
         }
       }
-      return { status: 'success', message: 'All positions closed' }
+
+      return fallbackResponse
     }
 
     const response = await webClient.post<ApiResponse<void>>('/close_all_positions', {})

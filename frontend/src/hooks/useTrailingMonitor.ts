@@ -5,7 +5,7 @@ import { calculateTrailingStop } from '@/lib/autoTradeEngine'
 import { MarketDataManager } from '@/lib/MarketDataManager'
 import type { TrailingStage, VirtualTPSL } from '@/types/scalping'
 
-const ADAPTIVE_SCALPER_TRAIL_DISTANCE = 2
+const DEFAULT_TRAIL_DISTANCE_POINTS = 2
 const OPTION_TICK_SIZE = 0.05
 
 function roundToOptionTick(price: number): number {
@@ -146,9 +146,13 @@ export function useTrailingMonitor() {
               updateVirtualTPSL(order.id, { trailStage: 'TRAIL' })
             }
 
+            const trailDistance =
+              (typeof liveOrder.trailDistancePoints === 'number' && liveOrder.trailDistancePoints > 0)
+                ? liveOrder.trailDistancePoints
+                : DEFAULT_TRAIL_DISTANCE_POINTS
             const rawSL = isBuy
-              ? ltp - ADAPTIVE_SCALPER_TRAIL_DISTANCE
-              : ltp + ADAPTIVE_SCALPER_TRAIL_DISTANCE
+              ? ltp - trailDistance
+              : ltp + trailDistance
             const roundedSL = roundToOptionTick(rawSL)
             const storeSL = liveOrder.slPrice
             const prevSL = prevSLByOrderRef.current[order.id]

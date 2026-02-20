@@ -6,7 +6,7 @@ import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 import type { Position } from '@/types/trading'
 import type { ActiveSide, ScalpingPosition } from '@/types/scalping'
 
-const POSITION_POLL_MS = 2500
+const POSITION_POLL_MS = 1000
 
 function parseNumber(value: unknown): number | null {
   if (typeof value === 'number') {

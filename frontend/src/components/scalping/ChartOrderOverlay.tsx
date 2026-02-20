@@ -73,6 +73,7 @@ export function ChartOrderOverlay({
   const orderType = useScalpingStore((s) => s.orderType)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingEntryAction = useScalpingStore((s) => s.pendingEntryAction)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
@@ -486,6 +487,7 @@ export function ChartOrderOverlay({
               quantity: quantity * lotSize,
               tpPoints,
               slPoints,
+              trailDistancePoints,
               managedBy: 'manual',
             })
           )
@@ -531,6 +533,7 @@ export function ChartOrderOverlay({
           entryPrice,
           tpPoints,
           slPoints,
+          trailDistancePoints,
         })
         setPendingEntryAction(null)
         setLimitPrice(entryPrice)
@@ -551,6 +554,7 @@ export function ChartOrderOverlay({
       lotSize,
       tpPoints,
       slPoints,
+      trailDistancePoints,
       product,
       ensureApiKey,
       setVirtualTPSL,
@@ -669,6 +673,7 @@ export function ChartOrderOverlay({
             quantity: quantity * lotSize,
             tpPoints,
             slPoints,
+            trailDistancePoints,
             createdAt: Date.now(),
           })
         }
@@ -713,6 +718,7 @@ export function ChartOrderOverlay({
     lotSize,
     tpPoints,
     slPoints,
+    trailDistancePoints,
     optionExchange,
     side,
     addTriggerOrder,

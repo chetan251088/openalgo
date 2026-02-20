@@ -47,6 +47,7 @@ export function FloatingTradeWidget() {
   const product = useScalpingStore((s) => s.product)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const orderType = useScalpingStore((s) => s.orderType)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
@@ -68,6 +69,7 @@ export function FloatingTradeWidget() {
   const decrementQuantity = useScalpingStore((s) => s.decrementQuantity)
   const setTpPoints = useScalpingStore((s) => s.setTpPoints)
   const setSlPoints = useScalpingStore((s) => s.setSlPoints)
+  const setTrailDistancePoints = useScalpingStore((s) => s.setTrailDistancePoints)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
   const symbol = activeSide === 'CE' ? selectedCESymbol : selectedPESymbol
@@ -220,6 +222,7 @@ export function FloatingTradeWidget() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
+                trailDistancePoints,
                 managedBy: 'manual',
               })
             )
@@ -276,6 +279,7 @@ export function FloatingTradeWidget() {
               entryPrice: pendingEntryPrice,
               tpPoints,
               slPoints,
+              trailDistancePoints,
             })
             if (pendingEntryPrice > 0) setLimitPrice(pendingEntryPrice)
             setExecuting(false)
@@ -286,11 +290,17 @@ export function FloatingTradeWidget() {
           incrementTradeCount()
 
           if (pricetype === 'MARKET') {
+            const marketPriceHint = await resolveEntryPrice({
+              symbol,
+              exchange: optionExchange,
+              preferredPrice: ltp ?? undefined,
+              apiKey: null,
+            })
             const entryPrice = await resolveFilledOrderPrice({
               symbol,
               exchange: optionExchange,
               orderId: brokerOrderId,
-              preferredPrice: ltp ?? undefined,
+              preferredPrice: marketPriceHint > 0 ? marketPriceHint : (ltp ?? undefined),
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -304,6 +314,7 @@ export function FloatingTradeWidget() {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  trailDistancePoints,
                   managedBy: 'manual',
                 })
               )
@@ -331,6 +342,7 @@ export function FloatingTradeWidget() {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
+      trailDistancePoints,
       paperMode,
       clearVirtualForSymbol,
       triggerOrders,
@@ -583,6 +595,15 @@ export function FloatingTradeWidget() {
           type="number"
           value={slPoints}
           onChange={(e) => setSlPoints(Number.parseFloat(e.target.value) || 0)}
+          className="w-10 h-5 text-[10px] text-center bg-transparent border rounded px-0.5"
+        />
+        <span className="text-[10px] text-amber-400">TR:</span>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={trailDistancePoints}
+          onChange={(e) => setTrailDistancePoints(Number.parseFloat(e.target.value) || 0)}
           className="w-10 h-5 text-[10px] text-center bg-transparent border rounded px-0.5"
         />
       </div>

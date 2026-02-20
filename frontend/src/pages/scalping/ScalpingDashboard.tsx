@@ -22,15 +22,31 @@ import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
 import { buildVirtualPosition, resolveFilledOrderPrice } from '@/lib/scalpingVirtualPosition'
+import { toast } from 'sonner'
 
 const VIRTUAL_POSITION_SYNC_GRACE_MS = 15000
 
+function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message.trim()
+    }
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim()
+  }
+  return fallback
+}
+
 export default function ScalpingDashboard() {
   const [showHelp, setShowHelp] = useState(false)
+  const [chartFocusMode, setChartFocusMode] = useState(false)
   const pendingLimitAttachRef = useRef(false)
 
   const toggleHelp = useCallback(() => setShowHelp((v) => !v), [])
   const closeHelp = useCallback(() => setShowHelp(false), [])
+  const toggleChartFocusMode = useCallback(() => setChartFocusMode((v) => !v), [])
 
   const paperMode = useScalpingStore((s) => s.paperMode)
   const underlying = useScalpingStore((s) => s.underlying)
@@ -89,7 +105,12 @@ export default function ScalpingDashboard() {
         return
       }
       try {
-        await tradingApi.closePosition(symbol, optionExchange, product)
+        const response = await tradingApi.closePosition(symbol, optionExchange, product)
+        if (response.status !== 'success' && response.status !== 'info') {
+          console.error('[Scalping] Close rejected:', response)
+          toast.error(extractErrorMessage(response, 'Close position rejected'))
+          return
+        }
         console.log(`[Scalping] Closed ${side} ${symbol}`)
         clearVirtualForSymbol(symbol)
         setLimitPrice(null)
@@ -97,6 +118,7 @@ export default function ScalpingDashboard() {
         clearPendingLimitPlacement()
       } catch (err) {
         console.error('[Scalping] Close failed:', err)
+        toast.error(extractErrorMessage(err, 'Close position failed'))
       }
     },
     [
@@ -120,8 +142,26 @@ export default function ScalpingDashboard() {
       clearPendingLimitPlacement()
       return
     }
+
+    const cancelAllPromise = tradingApi.cancelAllOrders().catch((error) => {
+      console.warn('[Scalping] Cancel all orders failed:', error)
+      return { status: 'error', message: extractErrorMessage(error, 'Cancel all orders failed') }
+    })
+
     try {
-      await tradingApi.closeAllPositions()
+      const response = await tradingApi.closeAllPositions()
+      const cancelAllResponse = await cancelAllPromise
+
+      if (response.status !== 'success' && response.status !== 'info') {
+        console.error('[Scalping] Close all rejected:', response)
+        toast.error(extractErrorMessage(response, 'Close all positions rejected'))
+        return
+      }
+
+      if (cancelAllResponse.status === 'error') {
+        console.warn('[Scalping] Close-all completed but cancel-all-orders failed:', cancelAllResponse)
+      }
+
       console.log('[Scalping] Closed all positions')
       clearVirtualOrders()
       setLimitPrice(null)
@@ -129,6 +169,7 @@ export default function ScalpingDashboard() {
       clearPendingLimitPlacement()
     } catch (err) {
       console.error('[Scalping] Close all failed:', err)
+      toast.error(extractErrorMessage(err, 'Close all positions failed'))
     }
   }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 
@@ -143,11 +184,16 @@ export default function ScalpingDashboard() {
 
       try {
         // Close existing position first
-        await tradingApi.closePosition(symbol, optionExchange, product)
+        const closeRes = await tradingApi.closePosition(symbol, optionExchange, product)
+        if (closeRes.status !== 'success' && closeRes.status !== 'info') {
+          console.error('[Scalping] Reversal close rejected:', closeRes)
+          toast.error(extractErrorMessage(closeRes, 'Reversal close failed'))
+          return
+        }
 
         // Enter opposite direction (if you were long, sell; if short, buy)
         // For scalping reversal, we sell to reverse a long
-        await tradingApi.placeOrder({
+        const openRes = await tradingApi.placeOrder({
           apikey: apiKey,
           strategy: 'Scalping',
           exchange: optionExchange,
@@ -160,9 +206,17 @@ export default function ScalpingDashboard() {
           trigger_price: 0,
           disclosed_quantity: 0,
         })
+
+        if (openRes.status !== 'success') {
+          console.error('[Scalping] Reversal open rejected:', openRes)
+          toast.error(extractErrorMessage(openRes, 'Reversal open failed'))
+          return
+        }
+
         console.log(`[Scalping] Reversed ${side} ${symbol}`)
       } catch (err) {
         console.error('[Scalping] Reversal failed:', err)
+        toast.error(extractErrorMessage(err, 'Reversal failed'))
       }
     },
     [paperMode, apiKey, optionExchange, product, quantity, lotSize]
@@ -320,6 +374,7 @@ export default function ScalpingDashboard() {
             quantity: pendingLimitPlacement.quantity,
             tpPoints: pendingLimitPlacement.tpPoints,
             slPoints: pendingLimitPlacement.slPoints,
+            trailDistancePoints: pendingLimitPlacement.trailDistancePoints,
             managedBy: 'manual',
           })
         )
@@ -357,29 +412,40 @@ export default function ScalpingDashboard() {
 
   return (
     <div className="flex flex-col h-full">
-      <TopBar liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
+      <TopBar
+        liveOpenPnl={liveOpenPnl}
+        isLivePnl={isLivePnl}
+        chartFocusMode={chartFocusMode}
+        onToggleChartFocusMode={toggleChartFocusMode}
+      />
 
       <div className="flex-1 min-h-0 min-w-0">
-        <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
-          {/* Left: Option Chain */}
-          <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
-            <OptionChainPanel />
-          </ResizablePanel>
-
-          <ResizableHandle withHandle className="bg-border/70" />
-
-          {/* Center: Charts */}
-          <ResizablePanel defaultSize="50%" minSize="30%">
+        {chartFocusMode ? (
+          <div className="h-full w-full min-w-0">
             <ChartPanel />
-          </ResizablePanel>
+          </div>
+        ) : (
+          <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
+            {/* Left: Option Chain */}
+            <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
+              <OptionChainPanel />
+            </ResizablePanel>
 
-          <ResizableHandle withHandle className="bg-border/70" />
+            <ResizableHandle withHandle className="bg-border/70" />
 
-          {/* Right: Control Panel */}
-          <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
-            <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+            {/* Center: Charts */}
+            <ResizablePanel defaultSize="50%" minSize="30%">
+              <ChartPanel />
+            </ResizablePanel>
+
+            <ResizableHandle withHandle className="bg-border/70" />
+
+            {/* Right: Control Panel */}
+            <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
+              <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        )}
       </div>
 
       <BottomBar positions={livePositions} totalPnl={liveOpenPnl} isLivePnl={isLivePnl} />

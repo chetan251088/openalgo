@@ -41,6 +41,7 @@ interface ScalpingState {
   product: ProductType
   tpPoints: number
   slPoints: number
+  trailDistancePoints: number
   limitPrice: number | null // price for LIMIT/TRIGGER orders (set by chart click)
   pendingEntryAction: OrderAction | null // BUY/SELL arm state for chart placement
   pendingLimitPlacement: {
@@ -52,6 +53,7 @@ interface ScalpingState {
     entryPrice: number
     tpPoints: number
     slPoints: number
+    trailDistancePoints: number
     createdAt: number
   } | null
   paperMode: boolean
@@ -106,6 +108,7 @@ interface ScalpingActions {
   setProduct: (p: ProductType) => void
   setTpPoints: (pts: number) => void
   setSlPoints: (pts: number) => void
+  setTrailDistancePoints: (pts: number) => void
   setLimitPrice: (price: number | null) => void
   setPendingEntryAction: (action: OrderAction | null) => void
   setPendingLimitPlacement: (
@@ -118,6 +121,7 @@ interface ScalpingActions {
       entryPrice: number
       tpPoints: number
       slPoints: number
+      trailDistancePoints: number
       createdAt?: number
     } | null
   ) => void
@@ -193,6 +197,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       product: 'MIS',
       tpPoints: 8,
       slPoints: 5,
+      trailDistancePoints: 2,
       limitPrice: null,
       pendingEntryAction: null,
       pendingLimitPlacement: null,
@@ -304,6 +309,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       setProduct: (p) => set({ product: p }),
       setTpPoints: (pts) => set({ tpPoints: Math.max(0, pts) }),
       setSlPoints: (pts) => set({ slPoints: Math.max(0, pts) }),
+      setTrailDistancePoints: (pts) => set({ trailDistancePoints: Math.max(0, pts) }),
       setLimitPrice: (price) =>
         set((s) => (s.limitPrice === price ? s : { limitPrice: price })),
       setPendingEntryAction: (action) =>
@@ -315,6 +321,7 @@ export const useScalpingStore = create<ScalpingStore>()(
           }
           const next = {
             ...placement,
+            trailDistancePoints: Math.max(0, Number(placement.trailDistancePoints) || 0),
             createdAt: placement.createdAt ?? Date.now(),
           }
           const current = s.pendingLimitPlacement
@@ -327,7 +334,8 @@ export const useScalpingStore = create<ScalpingStore>()(
             current.quantity === next.quantity &&
             current.entryPrice === next.entryPrice &&
             current.tpPoints === next.tpPoints &&
-            current.slPoints === next.slPoints
+            current.slPoints === next.slPoints &&
+            current.trailDistancePoints === next.trailDistancePoints
           ) {
             return s
           }
@@ -392,6 +400,7 @@ export const useScalpingStore = create<ScalpingStore>()(
         product: state.product,
         tpPoints: state.tpPoints,
         slPoints: state.slPoints,
+        trailDistancePoints: state.trailDistancePoints,
         paperMode: state.paperMode,
         hotkeysEnabled: state.hotkeysEnabled,
         showFloatingWidget: state.showFloatingWidget,

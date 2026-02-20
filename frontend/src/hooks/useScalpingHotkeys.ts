@@ -71,6 +71,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
   const paperMode = useScalpingStore((s) => s.paperMode)
 
@@ -180,6 +181,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
+                trailDistancePoints,
                 managedBy: 'hotkey',
               })
               )
@@ -233,6 +235,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
               entryPrice: limitPrice ?? 0,
               tpPoints,
               slPoints,
+              trailDistancePoints,
             })
             if (limitPrice != null) setLimitPrice(limitPrice)
             return
@@ -241,11 +244,16 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
           clearPendingLimitPlacement()
 
           if (pricetype === 'MARKET') {
+            const marketPriceHint = await resolveEntryPrice({
+              symbol,
+              exchange: optionExchange,
+              apiKey: null,
+            })
             const entryPrice = await resolveFilledOrderPrice({
               symbol,
               exchange: optionExchange,
               orderId: brokerOrderId,
-              preferredPrice: undefined,
+              preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -259,6 +267,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  trailDistancePoints,
                   managedBy: 'hotkey',
                 })
               )
@@ -285,6 +294,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
+      trailDistancePoints,
       paperMode,
       triggerOrders,
       ensureApiKey,

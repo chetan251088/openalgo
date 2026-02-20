@@ -3,6 +3,8 @@ import { MarketDataManager } from '@/lib/MarketDataManager'
 import type { ActiveSide, OrderAction, VirtualTPSL } from '@/types/scalping'
 
 const TICK_SIZE = 0.05
+const DEFAULT_TRAIL_DISTANCE_POINTS = 2
+const SUPER_FAST_SCALPING_MODE = true
 
 function roundToTick(price: number): number {
   return Math.round(price / TICK_SIZE) * TICK_SIZE
@@ -103,6 +105,30 @@ function wait(ms: number): Promise<void> {
   })
 }
 
+function resolveFastPriceWithoutBroker({
+  symbol,
+  exchange,
+  preferredPrice,
+  fallbackPrice,
+}: {
+  symbol: string
+  exchange: string
+  preferredPrice: number | null
+  fallbackPrice: number | null
+}): number {
+  const preferred = normalizePrice(preferredPrice)
+  if (preferred != null) return preferred
+
+  const mdm = MarketDataManager.getInstance()
+  const cachedLtp = normalizePrice(mdm.getCachedData(symbol, exchange)?.data?.ltp)
+  if (cachedLtp != null) return cachedLtp
+
+  const fallback = normalizePrice(fallbackPrice)
+  if (fallback != null) return fallback
+
+  return 0
+}
+
 interface ResolveFilledOrderPriceParams {
   symbol: string
   exchange: string
@@ -131,6 +157,15 @@ export async function resolveFilledOrderPrice({
   maxAttempts = 5,
   retryDelayMs = 250,
 }: ResolveFilledOrderPriceParams): Promise<number> {
+  if (SUPER_FAST_SCALPING_MODE) {
+    return resolveFastPriceWithoutBroker({
+      symbol,
+      exchange,
+      preferredPrice,
+      fallbackPrice,
+    })
+  }
+
   const normalizedOrderId = normalizeOrderId(orderId)
   if (apiKey && normalizedOrderId) {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -188,6 +223,7 @@ interface BuildVirtualPositionParams {
   quantity: number
   tpPoints: number
   slPoints: number
+  trailDistancePoints?: number
   createdAt?: number
   managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost' | 'flow'
   autoEntryScore?: number
@@ -204,6 +240,7 @@ export function buildVirtualPosition({
   quantity,
   tpPoints,
   slPoints,
+  trailDistancePoints,
   createdAt = Date.now(),
   managedBy = 'manual',
   autoEntryScore,
@@ -212,6 +249,9 @@ export function buildVirtualPosition({
   const entry = roundToTick(entryPrice)
   const normalizedTpPoints = Number(Math.max(0, tpPoints || 0).toFixed(2))
   const normalizedSlPoints = Number(Math.max(0, slPoints || 0).toFixed(2))
+  const normalizedTrailDistancePoints = Number(
+    Math.max(0, trailDistancePoints ?? DEFAULT_TRAIL_DISTANCE_POINTS).toFixed(2)
+  )
   const isBuy = action === 'BUY'
 
   return {
@@ -232,6 +272,7 @@ export function buildVirtualPosition({
         : null,
     tpPoints: normalizedTpPoints,
     slPoints: normalizedSlPoints,
+    trailDistancePoints: normalizedTrailDistancePoints,
     trailStage: managedBy === 'auto' ? 'INITIAL' : undefined,
     createdAt,
     managedBy,
@@ -280,6 +321,7 @@ export function mergeVirtualPosition(
     return {
       ...incoming,
       id: existing.id,
+      trailDistancePoints: incoming.trailDistancePoints ?? existing.trailDistancePoints,
     }
   }
 
@@ -316,6 +358,7 @@ export function mergeVirtualPosition(
       slPoints > 0
         ? roundToTick(weightedEntry + (isBuy ? -slPoints : slPoints))
         : null,
+    trailDistancePoints: incoming.trailDistancePoints ?? existing.trailDistancePoints,
     managedBy: incoming.managedBy ?? existing.managedBy,
     autoEntryScore: incoming.autoEntryScore ?? existing.autoEntryScore,
     autoEntryReason: incoming.autoEntryReason ?? existing.autoEntryReason,

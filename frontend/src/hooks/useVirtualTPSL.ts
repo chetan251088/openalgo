@@ -29,6 +29,7 @@ export function useVirtualTPSL(
   const setApiKey = useAuthStore((s) => s.setApiKey)
   const paperMode = useScalpingStore((s) => s.paperMode)
   const product = useScalpingStore((s) => s.product)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const addSessionPnl = useScalpingStore((s) => s.addSessionPnl)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
@@ -307,6 +308,7 @@ export function useVirtualTPSL(
                         quantity: trigger.quantity,
                         tpPoints: trigger.tpPoints,
                         slPoints: trigger.slPoints,
+                        trailDistancePoints: trigger.trailDistancePoints ?? trailDistancePoints,
                         managedBy: 'trigger',
                       })
                     )
@@ -331,6 +333,7 @@ export function useVirtualTPSL(
     removeVirtualTPSL,
     addSessionPnl,
     incrementTradeCount,
+    trailDistancePoints,
     autoConfig,
     activePresetId,
     optionsContext,

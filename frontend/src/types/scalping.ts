@@ -60,6 +60,7 @@ export interface VirtualTPSL {
   slPrice: number | null
   tpPoints: number
   slPoints: number
+  trailDistancePoints?: number
   trailStage?: TrailingStage
   createdAt: number
   managedBy?: 'manual' | 'auto' | 'trigger' | 'hotkey' | 'ghost' | 'flow'
@@ -79,6 +80,7 @@ export interface TriggerOrder {
   quantity: number
   tpPoints: number
   slPoints: number
+  trailDistancePoints?: number
   createdAt: number
 }
 

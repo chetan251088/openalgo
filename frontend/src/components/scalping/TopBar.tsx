@@ -32,12 +32,25 @@ function areStringListsEqual(a: string[], b: string[]) {
   return a.length === b.length && a.every((value, idx) => value === b[idx])
 }
 
+function formatOrderIdCompact(orderId: string): string {
+  const value = orderId.trim()
+  if (value.length <= 10) return value
+  return `${value.slice(0, 4)}...${value.slice(-4)}`
+}
+
 interface TopBarProps {
   liveOpenPnl?: number
   isLivePnl?: boolean
+  chartFocusMode?: boolean
+  onToggleChartFocusMode?: () => void
 }
 
-export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
+export function TopBar({
+  liveOpenPnl,
+  isLivePnl = false,
+  chartFocusMode = false,
+  onToggleChartFocusMode,
+}: TopBarProps) {
   const apiKey = useAuthStore((s) => s.apiKey)
   const broker = useAuthStore((s) => s.user?.broker)
   const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
@@ -108,12 +121,12 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
   }
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-card shrink-0">
+    <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b bg-card shrink-0 min-w-0 overflow-hidden">
       {/* Index selector */}
       <div className="flex items-center gap-1.5">
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Index</span>
         <Select value={underlying} onValueChange={(value) => setUnderlying(value as Underlying)}>
-          <SelectTrigger className="h-7 w-[128px] text-xs font-semibold">
+          <SelectTrigger className="h-7 w-[104px] lg:w-[116px] xl:w-[128px] text-xs font-semibold">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -136,7 +149,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
           onValueChange={handleExpiryChange}
           disabled={expiries.length === 0}
         >
-          <SelectTrigger className="h-7 w-[122px] text-xs font-mono">
+          <SelectTrigger className="h-7 w-[108px] lg:w-[114px] xl:w-[122px] text-xs font-mono">
             <SelectValue placeholder="Select expiry" />
           </SelectTrigger>
           <SelectContent>
@@ -161,7 +174,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
           value={String(chainStrikeCount)}
           onValueChange={(value) => setChainStrikeCount(Number(value))}
         >
-          <SelectTrigger className="h-7 w-[94px] text-xs">
+          <SelectTrigger className="h-7 w-[82px] lg:w-[88px] xl:w-[94px] text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -174,7 +187,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
         </Select>
       </div>
 
-      <div className="flex-1" />
+      <div className="flex-1 min-w-[12px]" />
 
       {unifiedMode && (
         <>
@@ -183,7 +196,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Feed</span>
             <Select value={dataFeed} onValueChange={(value) => setDataFeed(value as DataFeedMode)}>
-              <SelectTrigger className="h-7 w-[118px] text-xs">
+              <SelectTrigger className="h-7 w-[98px] lg:w-[108px] xl:w-[118px] text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -204,7 +217,7 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
               value={executionBroker}
               onValueChange={(value) => setExecutionBroker(value as UnifiedBroker)}
             >
-              <SelectTrigger className="h-7 w-[96px] text-xs">
+              <SelectTrigger className="h-7 w-[84px] lg:w-[90px] xl:w-[96px] text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -218,6 +231,22 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
           </div>
         </>
       )}
+
+      <div className="w-px h-5 bg-border" />
+
+      {/* Chart focus mode toggle */}
+      <button
+        type="button"
+        onClick={onToggleChartFocusMode}
+        className={`h-7 px-2 rounded-md border text-xs transition-colors shrink-0 whitespace-nowrap ${
+          chartFocusMode
+            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-400'
+            : 'border-border/60 bg-muted/20 text-muted-foreground hover:text-foreground'
+        }`}
+        title={chartFocusMode ? 'Show side panels' : 'Hide side panels'}
+      >
+        {chartFocusMode ? 'Panels' : 'Focus'}
+      </button>
 
       {/* Paper/Live toggle */}
       <div className="flex items-center gap-1.5">
@@ -247,12 +276,12 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
 
       {/* Broker badge */}
       {unifiedMode ? (
-        <Badge variant="outline" className="text-xs h-6">
+        <Badge variant="outline" className="text-xs h-6 shrink-0 whitespace-nowrap">
           EXEC: {executionBroker.toUpperCase()}
         </Badge>
       ) : (
         broker && (
-          <Badge variant="outline" className="text-xs h-6">
+          <Badge variant="outline" className="text-xs h-6 shrink-0 whitespace-nowrap">
             {broker}
           </Badge>
         )
@@ -261,17 +290,17 @@ export function TopBar({ liveOpenPnl, isLivePnl = false }: TopBarProps) {
       {!paperMode && lastOrderAck && (
         <Badge
           variant="outline"
-          className="text-xs h-6 font-mono"
+          className="text-xs h-6 font-mono shrink-0 whitespace-nowrap"
           title={`${lastOrderAck.broker} ${lastOrderAck.action} ${lastOrderAck.symbol}`}
         >
-          ACK: {lastOrderAck.orderId}
+          ACK: {formatOrderIdCompact(lastOrderAck.orderId)}
         </Badge>
       )}
 
       <div className="w-px h-5 bg-border" />
 
       {/* Session P&L */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
         <span className="text-xs text-muted-foreground">P&L:</span>
         <span
           className={`text-sm font-bold tabular-nums ${

@@ -370,6 +370,26 @@ Major implemented behavior (high level):
    - option chart FLOW now subscribes to `Depth` mode in addition to `Quote` and `LTP` while FLOW is enabled
    - FLOW parser now accepts Kotak depth totals (`totalbuyqty` / `totalsellqty`) and bid/ask aliases (`bp` / `sp`)
    - spread fallback now uses top-of-book depth prices when quote bid/ask are absent, reducing false `No L2 quote` states on Kotak options
+65. Chart-focus mode for bigger chart workspace:
+   - top bar now has a `Chart Focus` toggle that hides both left Option Chain and right Control Panel
+   - when enabled, center `ChartPanel` expands to full dashboard width; toggle changes to `Show Panels`
+   - implemented in shared `ScalpingDashboard`, so it works in both `/scalping` and `/scalping-unified`
+66. Unified close-all reliability hardening for fast scalping exits:
+   - unified `tradingApi.closeAllPositions()` now calls execution-broker `/api/v1/closeposition` first (broker-native flatten path)
+   - after broker close-all, a short verification sweep checks remaining open positions and force-closes leftovers with parallel MARKET reverse orders
+   - unified `tradingApi.closePosition()` now resolves targets with resilient symbol/exchange/product matching (fallback to symbol-level) and closes all matched legs in parallel
+   - hotkey/dashboard and manual-tab `Close All` now run `cancelAllOrders` alongside close-all and only clear virtual lines after confirmed close response
+   - dashboard hotkey close/close-all/reversal handlers now validate API status and show error toasts instead of silently treating non-success responses as success
+67. Manual trailing distance is now configurable from scalping UI:
+   - new persisted store field `trailDistancePoints` (default `2`) added to scalping state
+   - Manual tab now shows `Trail SL` input next to TP/SL, and floating trade widget also exposes compact `TR` input
+   - new manual/hotkey/trigger virtual entries carry `trailDistancePoints` snapshot per position
+   - pending LIMIT attach path also preserves the snapshot so post-fill virtual lines trail with the intended distance
+   - trailing monitor now uses per-position `trailDistancePoints` for manual/hotkey/trigger cross-entry trailing instead of fixed 2-point distance
+68. Super-fast scalping mode hardwired for lightning response:
+   - fill-resolution now bypasses broker orderbook lookups in fast mode and anchors from preferred/cache/fallback local price immediately
+   - manual, hotkey, and floating widget MARKET entry paths now feed local market-price hints into virtual-line attach
+   - scalping positionbook poll interval reduced from `2500ms` to `1000ms` for quicker post-trade and post-close reconciliation
 
 ## 7) Still Important Gaps / Follow-ups
 

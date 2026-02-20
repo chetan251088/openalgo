@@ -42,6 +42,7 @@ export function ManualTradeTab() {
   const orderType = useScalpingStore((s) => s.orderType)
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
@@ -63,6 +64,7 @@ export function ManualTradeTab() {
   const setProduct = useScalpingStore((s) => s.setProduct)
   const setTpPoints = useScalpingStore((s) => s.setTpPoints)
   const setSlPoints = useScalpingStore((s) => s.setSlPoints)
+  const setTrailDistancePoints = useScalpingStore((s) => s.setTrailDistancePoints)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
   const activeSymbol = activeSide === 'CE' ? selectedCESymbol : selectedPESymbol
@@ -150,6 +152,7 @@ export function ManualTradeTab() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
+                trailDistancePoints,
                 managedBy: 'manual',
               })
             )
@@ -206,6 +209,7 @@ export function ManualTradeTab() {
               entryPrice: limitPrice ?? 0,
               tpPoints,
               slPoints,
+              trailDistancePoints,
             })
             if (limitPrice != null) setLimitPrice(limitPrice)
             return
@@ -215,11 +219,16 @@ export function ManualTradeTab() {
           incrementTradeCount()
 
           if (pricetype === 'MARKET') {
+            const marketPriceHint = await resolveEntryPrice({
+              symbol: activeSymbol,
+              exchange: optionExchange,
+              apiKey: null,
+            })
             const entryPrice = await resolveFilledOrderPrice({
               symbol: activeSymbol,
               exchange: optionExchange,
               orderId: brokerOrderId,
-              preferredPrice: undefined,
+              preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
               apiKey: key,
             })
             if (entryPrice > 0) {
@@ -233,6 +242,7 @@ export function ManualTradeTab() {
                   quantity: quantity * lotSize,
                   tpPoints,
                   slPoints,
+                  trailDistancePoints,
                   managedBy: 'manual',
                 })
               )
@@ -259,6 +269,7 @@ export function ManualTradeTab() {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
+      trailDistancePoints,
       paperMode,
       clearVirtualForSymbol,
       triggerOrders,
@@ -322,9 +333,20 @@ export function ManualTradeTab() {
       clearPendingLimitPlacement()
       return
     }
+
+    const cancelAllPromise = tradingApi.cancelAllOrders().catch((error) => {
+      console.warn('[Scalping] Cancel all orders failed:', error)
+      return { status: 'error', message: extractErrorMessage(error, 'Cancel all orders failed') }
+    })
+
     try {
       const res = await tradingApi.closeAllPositions()
-      if (res.status === 'success') {
+      const cancelAllRes = await cancelAllPromise
+
+      if (res.status === 'success' || res.status === 'info') {
+        if (cancelAllRes.status === 'error') {
+          console.warn('[Scalping] Close-all completed but cancel-all-orders failed:', cancelAllRes)
+        }
         console.log('[Scalping] Closed all positions')
         clearVirtualOrders()
         setLimitPrice(null)
@@ -439,8 +461,8 @@ export function ManualTradeTab() {
         </div>
       </div>
 
-      {/* TP / SL points */}
-      <div className="grid grid-cols-2 gap-2">
+      {/* TP / SL / Trail points */}
+      <div className="grid grid-cols-3 gap-2">
         <div className="space-y-1">
           <Label className="text-xs text-green-500">TP Points</Label>
           <Input
@@ -460,6 +482,17 @@ export function ManualTradeTab() {
             step={5}
             value={slPoints}
             onChange={(e) => setSlPoints(Number.parseFloat(e.target.value) || 0)}
+            className="h-7 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-amber-400">Trail SL</Label>
+          <Input
+            type="number"
+            min={0}
+            step={0.5}
+            value={trailDistancePoints}
+            onChange={(e) => setTrailDistancePoints(Number.parseFloat(e.target.value) || 0)}
             className="h-7 text-sm"
           />
         </div>
