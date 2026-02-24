@@ -1,1 +1,5 @@
+<<<<<<<< HEAD:frontend/dist/assets/label-D9185EuP.js
 import{j as a}from"./vendor-react-BsSNOS8Q.js";import{a as o}from"./vendor-radix-DB8xhlcH.js";import{c as r}from"./index-C51tMR0S.js";function d({className:e,...t}){return a.jsx(o,{"data-slot":"label",className:r("flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",e),...t})}export{d as L};
+========
+import{j as o}from"./vendor-react-CCyQGCED.js";import{s as a}from"./vendor-radix-CYVJEJRR.js";import{c as r}from"./index-lxQU7X8J.js";function d({className:e,...t}){return o.jsx(a,{"data-slot":"label",className:r("flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",e),...t})}export{d as L};
+>>>>>>>> upstream/main:frontend/dist/assets/label-Bq8Boaoc.js
