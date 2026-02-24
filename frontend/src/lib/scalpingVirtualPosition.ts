@@ -287,6 +287,104 @@ function normalizeOrderId(value: unknown): string | null {
   return text.length > 0 ? text : null
 }
 
+export interface ParsedSplitLeg {
+  orderId: string
+  quantity: number
+}
+
+function parsePositiveNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim())
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+  return null
+}
+
+function readOrderIdFromObject(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  return normalizeOrderId(record.orderid ?? record.order_id ?? record.orderId)
+}
+
+function extractSplitLegsFromResults(value: unknown): ParsedSplitLeg[] {
+  if (!Array.isArray(value)) return []
+  const legs: ParsedSplitLeg[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const status = String(record.status ?? '').trim().toUpperCase()
+    if (status && status !== 'SUCCESS') continue
+
+    const orderId = readOrderIdFromObject(record)
+    if (!orderId) continue
+    const quantity = parsePositiveNumber(record.quantity) ?? 0
+    legs.push({ orderId, quantity })
+  }
+  return legs
+}
+
+/**
+ * Extract all broker order ids from regular and split-order responses.
+ */
+export function extractOrderIds(response: unknown): string[] {
+  if (!response || typeof response !== 'object') return []
+  const root = response as Record<string, unknown>
+  const ids: string[] = []
+  const seen = new Set<string>()
+
+  const pushId = (value: unknown) => {
+    const normalized = normalizeOrderId(value)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    ids.push(normalized)
+  }
+
+  pushId(root.orderid ?? root.order_id ?? root.orderId)
+  pushId((root.data as Record<string, unknown> | undefined)?.orderid)
+
+  const rootOrderIds = root.orderids
+  if (Array.isArray(rootOrderIds)) {
+    for (const value of rootOrderIds) pushId(value)
+  }
+
+  const dataOrderIds = (root.data as Record<string, unknown> | undefined)?.orderids
+  if (Array.isArray(dataOrderIds)) {
+    for (const value of dataOrderIds) pushId(value)
+  }
+
+  const splitLegs = extractSplitLegsFromResults(root.split_legs)
+  for (const leg of splitLegs) pushId(leg.orderId)
+
+  const splitResults = extractSplitLegsFromResults(root.results)
+  for (const leg of splitResults) pushId(leg.orderId)
+
+  return ids
+}
+
+/**
+ * Extract split child legs (`orderId`, `quantity`) from order response.
+ */
+export function extractOrderLegs(response: unknown): ParsedSplitLeg[] {
+  if (!response || typeof response !== 'object') return []
+  const root = response as Record<string, unknown>
+
+  const fromSplitLegs = extractSplitLegsFromResults(root.split_legs)
+  if (fromSplitLegs.length > 0) return fromSplitLegs
+
+  const fromResults = extractSplitLegsFromResults(root.results)
+  if (fromResults.length > 0) return fromResults
+
+  const primaryOrderId = readOrderIdFromObject(root)
+  const quantity = parsePositiveNumber(root.quantity)
+  if (primaryOrderId && quantity != null) {
+    return [{ orderId: primaryOrderId, quantity }]
+  }
+  return []
+}
+
 /**
  * Broker responses can expose order ids in different shapes:
  * - { status, data: { orderid } }
@@ -294,14 +392,8 @@ function normalizeOrderId(value: unknown): string | null {
  * - snake_case variants with order_id
  */
 export function extractOrderId(response: unknown): string | null {
-  if (!response || typeof response !== 'object') return null
-  const root = response as Record<string, unknown>
-  const rootId = normalizeOrderId(root.orderid ?? root.order_id)
-  const data = root.data
-  if (!data || typeof data !== 'object') return rootId
-  const dataRecord = data as Record<string, unknown>
-  const dataId = normalizeOrderId(dataRecord.orderid ?? dataRecord.order_id)
-  return dataId ?? rootId
+  const ids = extractOrderIds(response)
+  return ids.length > 0 ? ids[0] : null
 }
 
 /**

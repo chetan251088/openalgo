@@ -9,6 +9,8 @@ import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
+  extractOrderIds,
+  extractOrderLegs,
   resolveFilledOrderPrice,
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
@@ -270,11 +272,15 @@ export function FloatingTradeWidget() {
             if (pendingEntryPrice <= 0) {
               console.warn('[Scalping] LIMIT order acknowledged without a usable entry price; keeping existing line state.')
             }
+            const brokerOrderIds = extractOrderIds(res)
+            const splitLegs = extractOrderLegs(res)
             setPendingLimitPlacement({
               symbol,
               side: activeSide,
               action,
               orderId: brokerOrderId,
+              orderIds: brokerOrderIds.length > 0 ? brokerOrderIds : undefined,
+              splitLegs: splitLegs.length > 0 ? splitLegs : undefined,
               quantity: quantity * lotSize,
               entryPrice: pendingEntryPrice,
               tpPoints,

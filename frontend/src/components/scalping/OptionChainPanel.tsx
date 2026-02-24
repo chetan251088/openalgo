@@ -47,7 +47,9 @@ export function OptionChainPanel() {
     chainStrikeCount,
     {
       enabled: !!apiKey && !!expiry,
-      oiRefreshInterval: 0,
+      // Keep WS-first updates, but refresh snapshots periodically so near-ATM rows
+      // recover quickly when a subset of symbol ticks temporarily stalls.
+      oiRefreshInterval: 15000,
       wsMode: 'Quote',
     }
   )

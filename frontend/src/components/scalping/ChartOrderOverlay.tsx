@@ -14,6 +14,8 @@ import { MarketDataManager } from '@/lib/MarketDataManager'
 import {
   buildVirtualPosition,
   extractOrderId,
+  extractOrderIds,
+  extractOrderLegs,
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
 import { cn } from '@/lib/utils'
@@ -122,10 +124,9 @@ export function ChartOrderOverlay({
   const limitModifyLastSentAtRef = useRef(0)
   const limitModifyTimerRef = useRef<number | null>(null)
   const limitModifyQueuedRef = useRef<{
-    orderId: string
+    legs: Array<{ orderId: string; quantity: number }>
     symbol: string
     action: OrderAction
-    quantity: number
     price: number
     force: boolean
   } | null>(null)
@@ -376,6 +377,43 @@ export function ChartOrderOverlay({
     return null
   }, [apiKey, setApiKey])
 
+  const getPendingLimitLegs = useCallback(
+    (placement: {
+      orderId: string | null
+      orderIds?: string[]
+      splitLegs?: Array<{ orderId: string; quantity: number }>
+      quantity: number
+    }) => {
+      if (Array.isArray(placement.splitLegs) && placement.splitLegs.length > 0) {
+        return placement.splitLegs
+          .map((leg) => ({
+            orderId: String(leg.orderId ?? '').trim(),
+            quantity: Math.max(0, Number(leg.quantity) || 0),
+          }))
+          .filter((leg) => leg.orderId.length > 0 && leg.quantity > 0)
+      }
+
+      if (Array.isArray(placement.orderIds) && placement.orderIds.length > 0) {
+        const uniqueOrderIds = Array.from(
+          new Set(
+            placement.orderIds
+              .map((value) => String(value ?? '').trim())
+              .filter((value) => value.length > 0)
+          )
+        )
+        if (uniqueOrderIds.length > 0) {
+          const avgQty = Math.max(1, Math.floor(Math.max(1, placement.quantity) / uniqueOrderIds.length))
+          return uniqueOrderIds.map((orderId) => ({ orderId, quantity: avgQty }))
+        }
+      }
+
+      const orderId = String(placement.orderId ?? '').trim()
+      if (!orderId) return []
+      return [{ orderId, quantity: Math.max(1, placement.quantity) }]
+    },
+    []
+  )
+
   const flushPendingLimitModify = useCallback(async () => {
     if (limitModifyInFlightRef.current) return
     const queued = limitModifyQueuedRef.current
@@ -399,17 +437,19 @@ export function ChartOrderOverlay({
     try {
       const key = await ensureApiKey()
       if (!key) return
-      await tradingApi.modifyOrder(queued.orderId, {
-        symbol: queued.symbol,
-        exchange: optionExchange,
-        action: queued.action,
-        product,
-        pricetype: 'LIMIT',
-        price: queued.price,
-        quantity: queued.quantity,
-        trigger_price: 0,
-        disclosed_quantity: 0,
-      })
+      for (const leg of queued.legs) {
+        await tradingApi.modifyOrder(leg.orderId, {
+          symbol: queued.symbol,
+          exchange: optionExchange,
+          action: queued.action,
+          product,
+          pricetype: 'LIMIT',
+          price: queued.price,
+          quantity: leg.quantity,
+          trigger_price: 0,
+          disclosed_quantity: 0,
+        })
+      }
     } catch (err) {
       console.error('[Scalping] Failed to modify pending LIMIT order:', err)
     } finally {
@@ -424,6 +464,8 @@ export function ChartOrderOverlay({
     (
       placement: {
         orderId: string | null
+        orderIds?: string[]
+        splitLegs?: Array<{ orderId: string; quantity: number }>
         symbol: string
         action: OrderAction
         quantity: number
@@ -431,15 +473,16 @@ export function ChartOrderOverlay({
       nextPrice: number,
       force = false
     ) => {
-      if (paperMode || !placement.orderId) return
+      if (paperMode) return
+      const legs = getPendingLimitLegs(placement)
+      if (legs.length === 0) return
 
       const normalized = roundToTick(nextPrice)
       const prev = limitModifyQueuedRef.current
       limitModifyQueuedRef.current = {
-        orderId: placement.orderId,
+        legs,
         symbol: placement.symbol,
         action: placement.action,
-        quantity: placement.quantity,
         price: normalized,
         force: force || !!prev?.force,
       }
@@ -450,7 +493,7 @@ export function ChartOrderOverlay({
       }
       void flushPendingLimitModify()
     },
-    [paperMode, flushPendingLimitModify]
+    [paperMode, flushPendingLimitModify, getPendingLimitLegs]
   )
 
   useEffect(
@@ -521,6 +564,8 @@ export function ChartOrderOverlay({
           return false
         }
         const brokerOrderId = extractOrderId(res)
+        const brokerOrderIds = extractOrderIds(res)
+        const splitLegs = extractOrderLegs(res)
 
         // Live LIMIT: keep it pending on chart and attach virtual TP/SL only after broker fill
         // is observed in positionbook reconciliation.
@@ -529,6 +574,8 @@ export function ChartOrderOverlay({
           side,
           action,
           orderId: brokerOrderId,
+          orderIds: brokerOrderIds.length > 0 ? brokerOrderIds : undefined,
+          splitLegs: splitLegs.length > 0 ? splitLegs : undefined,
           quantity: quantity * lotSize,
           entryPrice,
           tpPoints,
@@ -1171,6 +1218,8 @@ export function ChartOrderOverlay({
                 queuePendingLimitModify(
                   {
                     orderId: nextPlacement.orderId,
+                    orderIds: nextPlacement.orderIds,
+                    splitLegs: nextPlacement.splitLegs,
                     symbol: nextPlacement.symbol,
                     action: nextPlacement.action,
                     quantity: nextPlacement.quantity,
@@ -1230,16 +1279,21 @@ export function ChartOrderOverlay({
   )
 
   const handleRemoveEntry = useCallback(async () => {
-    if (
-      hasPlacedLimitForSymbol &&
-      pendingLimitPlacement?.orderId &&
-      !paperMode
-    ) {
+    if (hasPlacedLimitForSymbol && pendingLimitPlacement && !paperMode) {
       try {
-        const cancelRes = await tradingApi.cancelOrder(pendingLimitPlacement.orderId)
-        if (cancelRes.status !== 'success') {
-          console.error('[Scalping] Failed to cancel LIMIT order:', cancelRes)
-          return
+        const pendingLegs = getPendingLimitLegs(pendingLimitPlacement)
+        if (pendingLegs.length > 0) {
+          const cancelResults = await Promise.allSettled(
+            pendingLegs.map((leg) => tradingApi.cancelOrder(leg.orderId))
+          )
+          const failed = cancelResults.find(
+            (result) =>
+              result.status !== 'fulfilled' || result.value.status !== 'success'
+          )
+          if (failed) {
+            console.error('[Scalping] Failed to cancel one or more LIMIT slice orders:', failed)
+            return
+          }
         }
       } catch (err) {
         console.error('[Scalping] Failed to cancel LIMIT order:', err)
@@ -1262,8 +1316,9 @@ export function ChartOrderOverlay({
     }
 
     if (hasPlacedLimitForSymbol) {
-      if (!pendingLimitPlacement?.orderId && !paperMode) {
-        console.warn('[Scalping] Pending LIMIT has no broker orderId; cleared local lines only.')
+      const pendingLegs = pendingLimitPlacement ? getPendingLimitLegs(pendingLimitPlacement) : []
+      if (pendingLegs.length === 0 && !paperMode) {
+        console.warn('[Scalping] Pending LIMIT has no broker order ids; cleared local lines only.')
       }
     }
     clearPendingLimitPlacement()
@@ -1275,6 +1330,7 @@ export function ChartOrderOverlay({
     hasPlacedLimitForSymbol,
     pendingLimitPlacement,
     paperMode,
+    getPendingLimitLegs,
     removeLine,
     clearVirtualForSymbol,
     removeTriggerOrder,

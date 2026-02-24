@@ -101,7 +101,44 @@ export interface ScalpingBridgePendingData {
   count: number
 }
 
+export interface SplitOrderLeg {
+  orderId: string
+  quantity: number
+}
+
+export type PlaceOrderResponse = ApiResponse<{ orderid: string }> & {
+  orderid?: string
+  orderids?: string[]
+  split?: boolean
+  split_size?: number
+  split_legs?: SplitOrderLeg[]
+  total_quantity?: number
+}
+
+interface SymbolInfoData {
+  symbol: string
+  exchange: string
+  name?: string
+  lotsize?: number
+  freeze_qty?: number
+}
+
+type SymbolInfoResponse = ApiResponse<SymbolInfoData>
+
 type TradeProduct = NonNullable<PlaceOrderRequest['product']>
+const MIN_AUTO_SLICE_FREEZE_QTY = 2
+const FALLBACK_AUTO_SLICE_LOTS = 10
+const freezeQtyCache = new Map<string, number>()
+const INDEX_PREFIXES = [
+  'NIFTY',
+  'BANKNIFTY',
+  'FINNIFTY',
+  'MIDCPNIFTY',
+  'NIFTYNXT50',
+  'SENSEX',
+  'BANKEX',
+  'SENSEX50',
+]
 
 function normalizeProduct(product?: string): TradeProduct {
   const normalized = String(product ?? '').toUpperCase()
@@ -126,6 +163,265 @@ function parseSignedQuantity(value: unknown): number {
   return 0
 }
 
+function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null
+    const parsed = Math.floor(value)
+    return parsed > 0 ? parsed : null
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim())
+    if (!Number.isFinite(parsed)) return null
+    const intValue = Math.floor(parsed)
+    return intValue > 0 ? intValue : null
+  }
+  return null
+}
+
+function getFreezeCacheKey(symbol: string, exchange: string): string {
+  return `${normalizeText(exchange)}:${normalizeText(symbol)}`
+}
+
+function isKnownIndexSymbol(symbol: unknown): boolean {
+  const normalized = normalizeText(symbol)
+  if (!normalized) return false
+  return INDEX_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+}
+
+function deriveFallbackSliceSize(
+  order: PlaceOrderRequest,
+  symbolInfo: SymbolInfoData | undefined
+): number | null {
+  const lotSize = parsePositiveInteger(symbolInfo?.lotsize)
+  if (lotSize == null || lotSize < MIN_AUTO_SLICE_FREEZE_QTY) return null
+
+  const isIndexLike =
+    isKnownIndexSymbol(order.symbol) ||
+    isKnownIndexSymbol(symbolInfo?.symbol) ||
+    isKnownIndexSymbol(symbolInfo?.name)
+  if (!isIndexLike) return null
+
+  const fallbackSliceSize = lotSize * FALLBACK_AUTO_SLICE_LOTS
+  return fallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY ? fallbackSliceSize : null
+}
+
+function deriveStoreFallbackSliceSize(order: PlaceOrderRequest): number | null {
+  const state = useScalpingStore.getState()
+  const lotSize = parsePositiveInteger(state.lotSize)
+  if (lotSize == null || lotSize < MIN_AUTO_SLICE_FREEZE_QTY) return null
+
+  const isIndexLike =
+    isKnownIndexSymbol(order.symbol) ||
+    isKnownIndexSymbol(state.underlying)
+  if (!isIndexLike) return null
+
+  const fallbackSliceSize = lotSize * FALLBACK_AUTO_SLICE_LOTS
+  return fallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY ? fallbackSliceSize : null
+}
+
+function resolveLotSizeForSlice(
+  order: PlaceOrderRequest,
+  symbolInfo?: SymbolInfoData
+): number | null {
+  const symbolLot = parsePositiveInteger(symbolInfo?.lotsize)
+  if (symbolLot != null && symbolLot > 0) return symbolLot
+
+  const stateLot = parsePositiveInteger(useScalpingStore.getState().lotSize)
+  if (stateLot != null && stateLot > 0 && isKnownIndexSymbol(order.symbol)) {
+    return stateLot
+  }
+
+  return null
+}
+
+function normalizeSliceSizeToLot(
+  order: PlaceOrderRequest,
+  sliceSize: number,
+  symbolInfo?: SymbolInfoData
+): number {
+  const lotSize = resolveLotSizeForSlice(order, symbolInfo)
+  if (lotSize == null || lotSize <= 1) return sliceSize
+
+  const normalized = Math.floor(sliceSize / lotSize) * lotSize
+  if (normalized >= lotSize) return normalized
+  return lotSize
+}
+
+function parseSplitLeg(raw: unknown): SplitOrderLeg | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  const status = normalizeText(record.status)
+  if (status && status !== 'SUCCESS') return null
+
+  const orderId = String(record.orderid ?? '').trim()
+  if (!orderId) return null
+
+  const quantity = parsePositiveInteger(record.quantity) ?? 0
+  return { orderId, quantity }
+}
+
+function parseSplitOrderLegs(response: unknown): SplitOrderLeg[] {
+  if (!response || typeof response !== 'object') return []
+  const record = response as Record<string, unknown>
+  const results = record.results
+  if (!Array.isArray(results)) return []
+
+  const legs: SplitOrderLeg[] = []
+  for (const item of results) {
+    const leg = parseSplitLeg(item)
+    if (leg) legs.push(leg)
+  }
+  return legs
+}
+
+function parseSplitOrderErrors(response: unknown): string[] {
+  if (!response || typeof response !== 'object') return []
+  const record = response as Record<string, unknown>
+  const results = record.results
+  if (!Array.isArray(results)) return []
+
+  const errors: string[] = []
+  for (const item of results) {
+    if (!item || typeof item !== 'object') continue
+    const leg = item as Record<string, unknown>
+    const status = normalizeText(leg.status)
+    if (status === 'SUCCESS') continue
+    const message = String(leg.message ?? '').trim()
+    if (message) errors.push(message)
+  }
+  return errors
+}
+
+function normalizeSplitOrderResponse(
+  response: unknown,
+  splitSize: number,
+  totalQuantity: number
+): PlaceOrderResponse {
+  if (!response || typeof response !== 'object') {
+    return { status: 'error', message: 'Invalid splitorder response' }
+  }
+
+  const root = response as Record<string, unknown>
+  const rawStatus = String(root.status ?? '').trim().toLowerCase()
+  if (rawStatus === 'error') {
+    return {
+      status: 'error',
+      message: String(root.message ?? 'Split order failed'),
+    }
+  }
+
+  const legs = parseSplitOrderLegs(response)
+  if (legs.length === 0) {
+    const errors = parseSplitOrderErrors(response)
+    const detail = errors.length > 0 ? `: ${errors[0]}` : ''
+    return {
+      status: 'error',
+      message: String(root.message ?? `Split order returned no successful child orders${detail}`),
+    }
+  }
+
+  const orderIds = legs.map((leg) => leg.orderId)
+  const primaryOrderId = orderIds[0]
+
+  return {
+    status: 'success',
+    message: String(
+      root.message ?? `Split order placed (${legs.length} slices of ${splitSize})`
+    ),
+    data: { orderid: primaryOrderId },
+    orderid: primaryOrderId,
+    orderids: orderIds,
+    split: true,
+    split_size: splitSize,
+    split_legs: legs,
+    total_quantity: totalQuantity,
+  }
+}
+
+function isScalpingStrategy(strategy: string): boolean {
+  return normalizeText(strategy).startsWith('SCALPING')
+}
+
+function shouldAttemptAutoSlice(order: PlaceOrderRequest): boolean {
+  if (!isScalpingStrategy(order.strategy)) return false
+  const qty = Number(order.quantity)
+  if (!Number.isFinite(qty) || qty <= 1) return false
+  const cachedThreshold = freezeQtyCache.get(getFreezeCacheKey(order.symbol, order.exchange))
+  if (cachedThreshold != null && qty <= cachedThreshold) {
+    return false
+  }
+
+  const storeFallbackSliceSize = deriveStoreFallbackSliceSize(order)
+  if (storeFallbackSliceSize != null) {
+    const normalizedStoreFallbackSliceSize = normalizeSliceSizeToLot(order, storeFallbackSliceSize)
+    if (normalizedStoreFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY && qty <= normalizedStoreFallbackSliceSize) {
+      return false
+    }
+  }
+
+  return true
+}
+
+async function getFreezeQtyForOrder(order: PlaceOrderRequest): Promise<number | null> {
+  const cacheKey = getFreezeCacheKey(order.symbol, order.exchange)
+  if (freezeQtyCache.has(cacheKey)) {
+    return freezeQtyCache.get(cacheKey) ?? null
+  }
+  const storeFallbackSliceSize = deriveStoreFallbackSliceSize(order)
+
+  try {
+    const payload = {
+      apikey: order.apikey,
+      symbol: order.symbol,
+      exchange: order.exchange,
+    }
+    let response: SymbolInfoResponse
+    if (isMultiBrokerUnifiedMode()) {
+      response = await proxyV1ByRole<SymbolInfoResponse>('execution', 'symbol', payload)
+    } else {
+      const result = await apiClient.post<SymbolInfoResponse>('/symbol', payload)
+      response = result.data
+    }
+    const freezeQty = parsePositiveInteger(response.data?.freeze_qty)
+    if (freezeQty != null && freezeQty >= MIN_AUTO_SLICE_FREEZE_QTY) {
+      const normalizedFreezeQty = normalizeSliceSizeToLot(order, freezeQty, response.data)
+      if (normalizedFreezeQty >= MIN_AUTO_SLICE_FREEZE_QTY) {
+        freezeQtyCache.set(cacheKey, normalizedFreezeQty)
+        return normalizedFreezeQty
+      }
+    }
+
+    const fallbackSliceSize = deriveFallbackSliceSize(order, response.data)
+    if (fallbackSliceSize != null) {
+      const normalizedFallbackSliceSize = normalizeSliceSizeToLot(
+        order,
+        fallbackSliceSize,
+        response.data
+      )
+      if (normalizedFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY) {
+        freezeQtyCache.set(cacheKey, normalizedFallbackSliceSize)
+        return normalizedFallbackSliceSize
+      }
+    }
+  } catch (error) {
+    console.warn('[Scalping] Auto-slice freeze lookup failed; using local fallback if available.', {
+      symbol: order.symbol,
+      exchange: order.exchange,
+      error,
+    })
+  }
+
+  if (storeFallbackSliceSize != null) {
+    const normalizedStoreFallbackSliceSize = normalizeSliceSizeToLot(order, storeFallbackSliceSize)
+    if (normalizedStoreFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY) {
+      freezeQtyCache.set(cacheKey, normalizedStoreFallbackSliceSize)
+      return normalizedStoreFallbackSliceSize
+    }
+  }
+
+  return null
+}
+
 function isResponseSuccess(status: ApiResponse<unknown>['status'] | undefined): boolean {
   return status === 'success' || status === 'info'
 }
@@ -147,10 +443,26 @@ async function resolveRuntimeApiKey(): Promise<string | null> {
   return null
 }
 
-function extractOrderIdFromResponse(response: ApiResponse<{ orderid: string }>): string {
+function extractOrderIdFromResponse(response: PlaceOrderResponse): string {
   const rootOrderId = (response as { orderid?: unknown }).orderid
   if (typeof rootOrderId === 'string' && rootOrderId.trim().length > 0) {
     return rootOrderId.trim()
+  }
+
+  const rootOrderIds = (response as { orderids?: unknown }).orderids
+  if (Array.isArray(rootOrderIds)) {
+    const first = rootOrderIds.find((value) => typeof value === 'string' && value.trim().length > 0)
+    if (typeof first === 'string') return first.trim()
+  }
+
+  const rootSplitLegs = (response as { split_legs?: unknown }).split_legs
+  if (Array.isArray(rootSplitLegs)) {
+    const first = rootSplitLegs.find((value) => {
+      if (!value || typeof value !== 'object') return false
+      const orderId = (value as { orderId?: unknown }).orderId
+      return typeof orderId === 'string' && orderId.trim().length > 0
+    }) as { orderId?: string } | undefined
+    if (first?.orderId) return first.orderId.trim()
   }
 
   const nestedOrderId = (response.data as { orderid?: unknown } | undefined)?.orderid
@@ -161,7 +473,7 @@ function extractOrderIdFromResponse(response: ApiResponse<{ orderid: string }>):
   return ''
 }
 
-function recordScalpingOrderAck(order: PlaceOrderRequest, response: ApiResponse<{ orderid: string }>): void {
+function recordScalpingOrderAck(order: PlaceOrderRequest, response: PlaceOrderResponse): void {
   const orderId = extractOrderIdFromResponse(response)
   if (!orderId) return
 
@@ -376,13 +688,61 @@ export const tradingApi = {
   /**
    * Place order
    */
-  placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
-    let result: ApiResponse<{ orderid: string }>
-    if (isMultiBrokerUnifiedMode()) {
-      result = await proxyV1ByRole<ApiResponse<{ orderid: string }>>('execution', 'placeorder', order)
-    } else {
-      const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
-      result = response.data
+  placeOrder: async (order: PlaceOrderRequest): Promise<PlaceOrderResponse> => {
+    let result: PlaceOrderResponse | null = null
+
+    if (shouldAttemptAutoSlice(order)) {
+      const freezeQty = await getFreezeQtyForOrder(order)
+      if (
+        freezeQty != null &&
+        freezeQty >= MIN_AUTO_SLICE_FREEZE_QTY &&
+        Number(order.quantity) > freezeQty
+      ) {
+        const splitPayload = {
+          ...order,
+          splitsize: freezeQty,
+        }
+        try {
+          console.info('[Scalping] Auto-slice splitorder route', {
+            symbol: order.symbol,
+            exchange: order.exchange,
+            quantity: Number(order.quantity),
+            splitSize: freezeQty,
+          })
+          if (isMultiBrokerUnifiedMode()) {
+            const splitResponse = await proxyV1ByRole<unknown>(
+              'execution',
+              'splitorder',
+              splitPayload
+            )
+            result = normalizeSplitOrderResponse(splitResponse, freezeQty, Number(order.quantity))
+          } else {
+            const splitResponse = await apiClient.post<unknown>('/splitorder', splitPayload)
+            result = normalizeSplitOrderResponse(
+              splitResponse.data,
+              freezeQty,
+              Number(order.quantity)
+            )
+          }
+        } catch {
+          console.warn('[Scalping] Auto-slice splitorder failed; falling back to placeorder.', {
+            symbol: order.symbol,
+            exchange: order.exchange,
+            quantity: Number(order.quantity),
+            splitSize: freezeQty,
+          })
+          result = null
+        }
+      }
+    }
+
+    if (result == null) {
+      if (isMultiBrokerUnifiedMode()) {
+        result = await proxyV1ByRole<PlaceOrderResponse>('execution', 'placeorder', order)
+      } else {
+        const response = await apiClient.post<PlaceOrderResponse>('/placeorder', order)
+        result = response.data
+      }
     }
 
     if (result.status === 'success') {
@@ -464,12 +824,38 @@ export const tradingApi = {
   closePosition: async (
     symbol: string,
     exchange: string,
-    product: string
+    product: string,
+    options?: {
+      knownQuantity?: number | null
+      knownAction?: 'BUY' | 'SELL' | string | null
+    }
   ): Promise<ApiResponse<void>> => {
     if (isMultiBrokerUnifiedMode()) {
       const apiKey = await resolveRuntimeApiKey()
       if (!apiKey) {
         return { status: 'error', message: 'Missing API key' }
+      }
+
+      const knownQty = parsePositiveInteger(options?.knownQuantity)
+      const knownAction = normalizeText(options?.knownAction)
+      if (knownQty != null && (knownAction === 'BUY' || knownAction === 'SELL')) {
+        const closeAction = knownAction === 'BUY' ? 'SELL' : 'BUY'
+        const directClose = await tradingApi.placeOrder({
+          apikey: apiKey,
+          strategy: 'Scalping',
+          exchange,
+          symbol,
+          action: closeAction,
+          quantity: knownQty,
+          pricetype: 'MARKET',
+          product: normalizeProduct(product),
+          price: 0,
+          trigger_price: 0,
+          disclosed_quantity: 0,
+        })
+        if (isResponseSuccess(directClose.status)) {
+          return { status: 'success', message: 'Position closed' }
+        }
       }
 
       const positionsResponse = await tradingApi.getPositions(apiKey)
@@ -552,12 +938,19 @@ export const tradingApi = {
   /**
    * Close all positions (uses session auth with CSRF)
    */
-  closeAllPositions: async (): Promise<ApiResponse<void>> => {
+  closeAllPositions: async (
+    options?: { verify?: boolean; verifyDelayMs?: number }
+  ): Promise<ApiResponse<void>> => {
     if (isMultiBrokerUnifiedMode()) {
       const apiKey = await resolveRuntimeApiKey()
       if (!apiKey) {
         return { status: 'error', message: 'Missing API key' }
       }
+      const shouldVerify = options?.verify !== false
+      const verifyDelayMs =
+        typeof options?.verifyDelayMs === 'number' && Number.isFinite(options.verifyDelayMs)
+          ? Math.max(0, Math.floor(options.verifyDelayMs))
+          : 120
 
       const closeRemainingByMarket = async (): Promise<ApiResponse<void>> => {
         const positionsResponse = await tradingApi.getPositions(apiKey)
@@ -619,7 +1012,14 @@ export const tradingApi = {
         })
 
         if (isResponseSuccess(closeResponse.status)) {
-          await new Promise((resolve) => setTimeout(resolve, 120))
+          if (!shouldVerify) {
+            return {
+              status: 'success',
+              message: closeResponse.message ?? 'Close-all request submitted',
+            }
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, verifyDelayMs))
           const verifyResponse = await closeRemainingByMarket()
           if (isResponseSuccess(verifyResponse.status)) {
             return {

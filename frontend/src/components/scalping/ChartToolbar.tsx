@@ -10,6 +10,7 @@ const TIMEFRAMES = [
   { label: '15m', sec: 900 },
   { label: '30m', sec: 1800 },
   { label: '1h', sec: 3600 },
+  { label: '1D', sec: 86400 },
 ] as const
 
 interface ChartToolbarProps {

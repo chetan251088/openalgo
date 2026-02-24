@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useAuthStore } from '@/stores/authStore'
@@ -7,6 +7,8 @@ import type { Position } from '@/types/trading'
 import type { ActiveSide, ScalpingPosition } from '@/types/scalping'
 
 const POSITION_POLL_MS = 1000
+const POSITION_POLL_MS_UNIFIED = 1500
+const POSITION_POLL_MS_UNIFIED_DHAN = 3000
 
 function parseNumber(value: unknown): number | null {
   if (typeof value === 'number') {
@@ -49,9 +51,11 @@ export function useScalpingPositions() {
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
   const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
+  const executionBroker = useMultiBrokerStore((s) => s.executionBroker)
 
   const [rawPositions, setRawPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const isFetchInFlightRef = useRef(false)
 
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
     if (apiKey) return apiKey
@@ -69,9 +73,13 @@ export function useScalpingPositions() {
   }, [apiKey, setApiKey])
 
   const fetchPositions = useCallback(async () => {
+    if (isFetchInFlightRef.current) return
+    isFetchInFlightRef.current = true
+
     const resolvedApiKey = await ensureApiKey()
     if (!resolvedApiKey) {
       setIsLoading(false)
+      isFetchInFlightRef.current = false
       return
     }
 
@@ -87,14 +95,20 @@ export function useScalpingPositions() {
       // Keep last known positions on transient failures.
     } finally {
       setIsLoading(false)
+      isFetchInFlightRef.current = false
     }
   }, [ensureApiKey])
 
+  const pollIntervalMs = useMemo(() => {
+    if (!unifiedMode) return POSITION_POLL_MS
+    return executionBroker === 'dhan' ? POSITION_POLL_MS_UNIFIED_DHAN : POSITION_POLL_MS_UNIFIED
+  }, [unifiedMode, executionBroker])
+
   useEffect(() => {
     fetchPositions()
-    const interval = setInterval(fetchPositions, POSITION_POLL_MS)
+    const interval = setInterval(fetchPositions, pollIntervalMs)
     return () => clearInterval(interval)
-  }, [fetchPositions])
+  }, [fetchPositions, pollIntervalMs])
 
   const { data: enhancedPositions, isLive, isPaused } = useLivePrice(rawPositions, {
     enabled: !unifiedMode && rawPositions.length > 0,

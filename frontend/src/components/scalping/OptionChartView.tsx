@@ -40,6 +40,7 @@ const OPTION_MIN_PRICE_SPAN = 40
 const ORDER_FLOW_WINDOW_MS = 30_000
 const ORDER_FLOW_EMIT_THROTTLE_MS = 120
 const ORDER_FLOW_STALE_MS = 5_000
+const ORDER_FLOW_FALLBACK_STALE_MS = 12_000
 
 interface OptionChartViewProps {
   side: ActiveSide
@@ -90,6 +91,8 @@ function toHistoryInterval(intervalSec: number): string {
       return '30m'
     case 3600:
       return '1h'
+    case 86400:
+      return 'D'
     default:
       return '1m'
   }
@@ -460,26 +463,45 @@ export function OptionChartView({
     () => (showOrderFlow && symbol ? [{ symbol, exchange: optionExchange }] : []),
     [showOrderFlow, symbol, optionExchange]
   )
-  const { data: orderFlowQuoteData } = useMarketData({
+  const { data: orderFlowQuoteData, isFallbackMode: isQuoteFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'Quote',
     enabled: showOrderFlow && !!symbol,
   })
-  const { data: orderFlowLtpData } = useMarketData({
+  const { data: orderFlowLtpData, isFallbackMode: isLtpFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'LTP',
     enabled: showOrderFlow && !!symbol,
   })
-  const { data: orderFlowDepthData } = useMarketData({
+  const { data: orderFlowDepthData, isFallbackMode: isDepthFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'Depth',
     enabled: showOrderFlow && !!symbol,
   })
+  const flowDataKey = useMemo(
+    () =>
+      showOrderFlow && symbol
+        ? `${optionExchange.toUpperCase()}:${symbol.toUpperCase()}`
+        : null,
+    [optionExchange, showOrderFlow, symbol]
+  )
+  const isOrderFlowFallbackMode =
+    isQuoteFallbackMode || isLtpFallbackMode || isDepthFallbackMode
+  const lastFlowTickAt = useMemo(() => {
+    if (!flowDataKey) return 0
+    const quoteTs = orderFlowQuoteData.get(flowDataKey)?.lastUpdate ?? 0
+    const ltpTs = orderFlowLtpData.get(flowDataKey)?.lastUpdate ?? 0
+    const depthTs = orderFlowDepthData.get(flowDataKey)?.lastUpdate ?? 0
+    return Math.max(0, quoteTs, ltpTs, depthTs)
+  }, [flowDataKey, orderFlowDepthData, orderFlowLtpData, orderFlowQuoteData])
   const flowBias = useMemo(() => deriveFlowBias(side, orderFlow), [side, orderFlow])
   const isFlowStale = useMemo(() => {
-    if (!showOrderFlow || !symbol || orderFlow.lastUpdate <= 0) return false
-    return flowClock - orderFlow.lastUpdate > ORDER_FLOW_STALE_MS
-  }, [flowClock, orderFlow.lastUpdate, showOrderFlow, symbol])
+    if (!showOrderFlow || !symbol || lastFlowTickAt <= 0) return false
+    const staleThreshold = isOrderFlowFallbackMode
+      ? ORDER_FLOW_FALLBACK_STALE_MS
+      : ORDER_FLOW_STALE_MS
+    return flowClock - lastFlowTickAt > staleThreshold
+  }, [flowClock, isOrderFlowFallbackMode, lastFlowTickAt, showOrderFlow, symbol])
 
   useEffect(() => {
     if (!showOrderFlow || !symbol) return
@@ -502,11 +524,10 @@ export function OptionChartView({
   }, [showOrderFlow, symbol, optionExchange])
 
   useEffect(() => {
-    if (!showOrderFlow || !symbol) return
-    const key = `${optionExchange.toUpperCase()}:${symbol.toUpperCase()}`
-    const quoteTick = orderFlowQuoteData.get(key)
-    const ltpTick = orderFlowLtpData.get(key)
-    const depthTick = orderFlowDepthData.get(key)
+    if (!showOrderFlow || !symbol || !flowDataKey) return
+    const quoteTick = orderFlowQuoteData.get(flowDataKey)
+    const ltpTick = orderFlowLtpData.get(flowDataKey)
+    const depthTick = orderFlowDepthData.get(flowDataKey)
     const candidates = [quoteTick, ltpTick, depthTick].filter(
       (tick): tick is NonNullable<typeof tick> => !!tick
     )
@@ -527,7 +548,7 @@ export function OptionChartView({
     })
     if (ltp == null || ltp <= 0) return
 
-    const now = latestTick?.lastUpdate ?? Date.now()
+    const now = Math.max(Date.now(), latestTick?.lastUpdate ?? 0)
     const flowState = flowStateRef.current
     const prevLtp = flowState.lastLtp
     const hasFreshTick = now > flowState.lastTickAt
@@ -707,7 +728,7 @@ export function OptionChartView({
       flowSource: usedVolumeFlow && !usedEstimatedFlow ? 'VOL' : 'EST',
       lastUpdate: now,
     })
-  }, [orderFlowDepthData, orderFlowLtpData, orderFlowQuoteData, optionExchange, showOrderFlow, symbol])
+  }, [flowDataKey, orderFlowDepthData, orderFlowLtpData, orderFlowQuoteData, showOrderFlow, symbol])
 
   const refreshIndicators = useCallback(() => {
     const candles = candlesRef.current
@@ -863,9 +884,9 @@ export function OptionChartView({
     symbol: symbol ?? '',
     exchange: optionExchange,
     intervalSec: chartInterval,
-    mode: 'Quote',
+    mode: 'LTP',
     enabled: !!symbol,
-    useIndiaMarketHours: true,
+    useIndiaMarketHours: false,
     onCandleUpdate: handleCandleUpdate,
   })
 

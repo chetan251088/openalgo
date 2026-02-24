@@ -16,6 +16,8 @@ echo ========================================
 echo.
 
 set UV_HTTP_TIMEOUT=300
-uv run --env-file %ENV_FILE% python scripts/historify_replay_server.py
+REM Run without auto-sync to avoid Windows file-lock issues while other instances are running.
+REM If dependencies changed, run: uv sync
+uv run --no-sync --env-file %ENV_FILE% python scripts/historify_replay_server.py
 
 pause

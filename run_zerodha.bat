@@ -17,8 +17,9 @@ echo.
 REM Increase timeout for slow networks (5 minutes)
 set UV_HTTP_TIMEOUT=300
 
-REM Run the application using uv (--env-file tells uv to load .env.zerodha instead of .env)
-uv run --env-file .env.zerodha app.py
+REM Run without auto-sync to avoid Windows file-lock issues while other instances are running.
+REM If dependencies changed, run: uv sync
+uv run --no-sync --env-file .env.zerodha app.py
 
 echo.
 echo Application stopped.

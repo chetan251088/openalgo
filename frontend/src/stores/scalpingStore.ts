@@ -49,6 +49,11 @@ interface ScalpingState {
     side: ActiveSide
     action: OrderAction
     orderId: string | null
+    orderIds?: string[]
+    splitLegs?: Array<{
+      orderId: string
+      quantity: number
+    }>
     quantity: number
     entryPrice: number
     tpPoints: number
@@ -117,6 +122,11 @@ interface ScalpingActions {
       side: ActiveSide
       action: OrderAction
       orderId: string | null
+      orderIds?: string[]
+      splitLegs?: Array<{
+        orderId: string
+        quantity: number
+      }>
       quantity: number
       entryPrice: number
       tpPoints: number
@@ -319,18 +329,57 @@ export const useScalpingStore = create<ScalpingStore>()(
           if (placement === null) {
             return s.pendingLimitPlacement === null ? s : { pendingLimitPlacement: null }
           }
+          const normalizedOrderIds =
+            Array.isArray(placement.orderIds) && placement.orderIds.length > 0
+              ? Array.from(
+                  new Set(
+                    placement.orderIds
+                      .map((value) => String(value ?? '').trim())
+                      .filter((value) => value.length > 0)
+                  )
+                )
+              : undefined
+          const normalizedSplitLegs =
+            Array.isArray(placement.splitLegs) && placement.splitLegs.length > 0
+              ? placement.splitLegs
+                  .map((leg) => {
+                    const orderId = String(leg.orderId ?? '').trim()
+                    const quantity = Math.max(0, Number(leg.quantity) || 0)
+                    if (!orderId || quantity <= 0) return null
+                    return { orderId, quantity }
+                  })
+                  .filter((leg): leg is { orderId: string; quantity: number } => leg !== null)
+              : undefined
           const next = {
             ...placement,
+            orderIds: normalizedOrderIds,
+            splitLegs: normalizedSplitLegs,
             trailDistancePoints: Math.max(0, Number(placement.trailDistancePoints) || 0),
             createdAt: placement.createdAt ?? Date.now(),
           }
           const current = s.pendingLimitPlacement
+          const currentOrderIds = current?.orderIds ?? []
+          const nextOrderIds = next.orderIds ?? []
+          const currentSplitLegs = current?.splitLegs ?? []
+          const nextSplitLegs = next.splitLegs ?? []
+          const orderIdsEqual =
+            currentOrderIds.length === nextOrderIds.length &&
+            currentOrderIds.every((value, idx) => value === nextOrderIds[idx])
+          const splitLegsEqual =
+            currentSplitLegs.length === nextSplitLegs.length &&
+            currentSplitLegs.every(
+              (value, idx) =>
+                value.orderId === nextSplitLegs[idx].orderId &&
+                value.quantity === nextSplitLegs[idx].quantity
+            )
           if (
             current &&
             current.symbol === next.symbol &&
             current.side === next.side &&
             current.action === next.action &&
             current.orderId === next.orderId &&
+            orderIdsEqual &&
+            splitLegsEqual &&
             current.quantity === next.quantity &&
             current.entryPrice === next.entryPrice &&
             current.tpPoints === next.tpPoints &&

@@ -36,7 +36,7 @@ export function RiskPanel({ liveOpenPnl, isLivePnl = false }: RiskPanelProps) {
       <section className="space-y-1.5">
         <div className="flex items-center justify-between">
           <span className="font-medium text-foreground">Market Clock</span>
-          <span className="font-mono text-sm font-bold tabular-nums">{clock.currentTime}</span>
+          <span className="font-mono text-sm font-bold tabular-nums">{clock.currentTime} IST</span>
         </div>
 
         <div className="flex items-center justify-between">

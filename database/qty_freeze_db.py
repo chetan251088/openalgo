@@ -159,8 +159,8 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     Get freeze quantity for a symbol.
     Uses in-memory cache for fast lookups.
 
-    For NFO: Returns actual freeze quantity from database
-    For other exchanges (BFO, CDS, MCX): Returns 1 (default)
+    Returns freeze quantity from in-memory cache for any exchange.
+    If not configured, returns 1 as safe fallback.
 
     Args:
         symbol: The underlying symbol (e.g., "NIFTY", "RELIANCE")
@@ -174,10 +174,6 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     # Ensure cache is loaded
     if not _cache_loaded:
         load_freeze_qty_cache()
-
-    # For non-NFO exchanges, return 1 as default (to be implemented later)
-    if exchange not in ["NFO"]:
-        return 1
 
     # Look up in cache
     cache_key = f"{exchange}:{symbol}"
@@ -207,16 +203,21 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     """
     import re
 
-    # For non-NFO exchanges, return 1 as default
-    if exchange not in ["NFO"]:
-        return 1
-
     # Extract underlying from option/futures symbol
     # Pattern: SYMBOL + DATE + optional(STRIKE) + TYPE(FUT/CE/PE)
     # Examples: NIFTY24DEC24FUT, NIFTY24DEC2424000CE, RELIANCE24DEC241000PE
 
     # Try to match known index symbols first
-    index_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
+    index_symbols = [
+        "NIFTY",
+        "BANKNIFTY",
+        "FINNIFTY",
+        "MIDCPNIFTY",
+        "NIFTYNXT50",
+        "SENSEX",
+        "BANKEX",
+        "SENSEX50",
+    ]
     for idx_sym in index_symbols:
         if option_symbol.upper().startswith(idx_sym):
             return get_freeze_qty(idx_sym, exchange)

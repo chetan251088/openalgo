@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
+  extractOrderIds,
+  extractOrderLegs,
   resolveFilledOrderPrice,
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
@@ -226,11 +228,15 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
             if (limitPrice == null) {
               console.warn('[Scalping] LIMIT order acknowledged without a tracked limitPrice; keeping existing line state.')
             }
+            const brokerOrderIds = extractOrderIds(res)
+            const splitLegs = extractOrderLegs(res)
             setPendingLimitPlacement({
               symbol,
               side,
               action,
               orderId: brokerOrderId,
+              orderIds: brokerOrderIds.length > 0 ? brokerOrderIds : undefined,
+              splitLegs: splitLegs.length > 0 ? splitLegs : undefined,
               quantity: quantity * lotSize,
               entryPrice: limitPrice ?? 0,
               tpPoints,
@@ -314,6 +320,8 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       // Skip when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      // Prevent OS key auto-repeat from sending accidental order bursts.
+      if (e.repeat) return
 
       const symbol = getActiveSymbol()
 

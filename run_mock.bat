@@ -30,6 +30,8 @@ echo.
 echo Start the replay server first in another terminal: run_replay_server.bat
 echo.
 set UV_HTTP_TIMEOUT=300
-uv run --env-file .env.mock app.py
+REM Run without auto-sync to avoid Windows file-lock issues while other instances are running.
+REM If dependencies changed, run: uv sync
+uv run --no-sync --env-file .env.mock app.py
 echo.
 pause

@@ -10,6 +10,8 @@ import { toast } from 'sonner'
 import {
   buildVirtualPosition,
   extractOrderId,
+  extractOrderIds,
+  extractOrderLegs,
   resolveFilledOrderPrice,
   resolveEntryPrice,
 } from '@/lib/scalpingVirtualPosition'
@@ -200,11 +202,15 @@ export function ManualTradeTab() {
             if (limitPrice == null) {
               console.warn('[Scalping] LIMIT order acknowledged without a tracked limitPrice; keeping existing line state.')
             }
+            const brokerOrderIds = extractOrderIds(res)
+            const splitLegs = extractOrderLegs(res)
             setPendingLimitPlacement({
               symbol: activeSymbol,
               side: activeSide,
               action,
               orderId: brokerOrderId,
+              orderIds: brokerOrderIds.length > 0 ? brokerOrderIds : undefined,
+              splitLegs: splitLegs.length > 0 ? splitLegs : undefined,
               quantity: quantity * lotSize,
               entryPrice: limitPrice ?? 0,
               tpPoints,
@@ -340,7 +346,7 @@ export function ManualTradeTab() {
     })
 
     try {
-      const res = await tradingApi.closeAllPositions()
+      const res = await tradingApi.closeAllPositions({ verify: false })
       const cancelAllRes = await cancelAllPromise
 
       if (res.status === 'success' || res.status === 'info') {

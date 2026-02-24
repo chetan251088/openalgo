@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useOptionChainPolling } from './useOptionChainPolling'
-import { useMarketData } from './useMarketData'
+import { useMarketData, type SymbolData } from './useMarketData'
 
 // Index symbols that use NSE_INDEX/BSE_INDEX for quotes (matches backend lists)
 const NSE_INDEX_SYMBOLS = new Set([
@@ -23,6 +23,77 @@ function roundToTickSize(price: number | undefined, tickSize: number | undefined
   if (!tickSize || tickSize <= 0) return price
   // Round to nearest tick and fix floating point precision
   return Number((Math.round(price / tickSize) * tickSize).toFixed(2))
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getExchangeLookupCandidates(exchange: string): string[] {
+  const normalized = (exchange || '').trim().toUpperCase()
+  const candidates = new Set<string>()
+  if (normalized) candidates.add(normalized)
+
+  if (normalized === 'NSE_INDEX') candidates.add('NSE')
+  else if (normalized === 'BSE_INDEX') candidates.add('BSE')
+  else if (normalized === 'NSE') candidates.add('NSE_INDEX')
+  else if (normalized === 'BSE') candidates.add('BSE_INDEX')
+
+  return Array.from(candidates)
+}
+
+function getSymbolDataFromWs(
+  wsData: Map<string, SymbolData>,
+  symbolIndex: Map<string, SymbolData[]>,
+  symbol: string,
+  preferredExchange: string
+): SymbolData | undefined {
+  const symbolKey = (symbol || '').trim().toUpperCase()
+  if (!symbolKey) return undefined
+
+  const exchangeCandidates = getExchangeLookupCandidates(preferredExchange)
+  for (const exchange of exchangeCandidates) {
+    const direct = wsData.get(`${exchange}:${symbolKey}`)
+    if (direct) return direct
+  }
+
+  const symbolCandidates = symbolIndex.get(symbolKey)
+  if (!symbolCandidates || symbolCandidates.length === 0) {
+    return undefined
+  }
+
+  for (const exchange of exchangeCandidates) {
+    const matched = symbolCandidates.find((entry) => entry.exchange.toUpperCase() === exchange)
+    if (matched) return matched
+  }
+
+  return symbolCandidates[0]
+}
+
+function resolveAtmStrike(
+  chain: OptionStrike[],
+  underlyingLtp: number | null,
+  fallbackAtmStrike: number
+): number {
+  if (!chain.length || underlyingLtp == null || underlyingLtp <= 0) {
+    return fallbackAtmStrike
+  }
+
+  let nearest = chain[0].strike
+  let bestDistance = Math.abs(chain[0].strike - underlyingLtp)
+  for (const row of chain) {
+    const distance = Math.abs(row.strike - underlyingLtp)
+    if (distance < bestDistance) {
+      nearest = row.strike
+      bestDistance = distance
+    }
+  }
+  return nearest
 }
 
 interface UseOptionChainLiveOptions {
@@ -153,6 +224,14 @@ export function useOptionChainLive(
         return
       }
 
+      const wsSymbolIndex = new Map<string, SymbolData[]>()
+      for (const [, symbolData] of currentWs) {
+        const symbolKey = symbolData.symbol.toUpperCase()
+        const existing = wsSymbolIndex.get(symbolKey)
+        if (existing) existing.push(symbolData)
+        else wsSymbolIndex.set(symbolKey, [symbolData])
+      }
+
       // Create merged chain with WebSocket LTP updates
       const mergedChain: OptionStrike[] = currentPolled.chain.map((strike) => {
         let ceChanged = false
@@ -166,8 +245,12 @@ export function useOptionChainLive(
 
         // Update CE LTP from WebSocket
         if (strike.ce?.symbol) {
-          const wsKey = `${optionExchangeKey}:${strike.ce.symbol.toUpperCase()}`
-          const wsSymbolData = currentWs.get(wsKey)
+          const wsSymbolData = getSymbolDataFromWs(
+            currentWs,
+            wsSymbolIndex,
+            strike.ce.symbol,
+            optionExchangeKey
+          )
           const wsPayload = wsSymbolData?.data
           if (wsPayload?.ltp !== undefined) {
             const rounded = roundToTickSize(wsPayload.ltp, strike.ce.tick_size)
@@ -189,8 +272,12 @@ export function useOptionChainLive(
 
         // Update PE LTP from WebSocket
         if (strike.pe?.symbol) {
-          const wsKey = `${optionExchangeKey}:${strike.pe.symbol.toUpperCase()}`
-          const wsSymbolData = currentWs.get(wsKey)
+          const wsSymbolData = getSymbolDataFromWs(
+            currentWs,
+            wsSymbolIndex,
+            strike.pe.symbol,
+            optionExchangeKey
+          )
           const wsPayload = wsSymbolData?.data
           if (wsPayload?.ltp !== undefined) {
             const rounded = roundToTickSize(wsPayload.ltp, strike.pe.tick_size)
@@ -249,27 +336,49 @@ export function useOptionChainLive(
 
       // Get real-time underlying spot price from WebSocket
       const underlyingExch = getUnderlyingExchange(underlyingSymbolKey, optionExchangeKey).toUpperCase()
-      const underlyingKey = `${underlyingExch}:${underlyingSymbolKey}`
-      const underlyingWsData = currentWs.get(underlyingKey)
-      const underlyingLtp = underlyingWsData?.data?.ltp ?? currentPolled.underlying_ltp
+      const underlyingWsData = getSymbolDataFromWs(
+        currentWs,
+        wsSymbolIndex,
+        underlyingSymbolKey,
+        underlyingExch
+      )
+      const underlyingLtp =
+        toFiniteNumber(underlyingWsData?.data?.ltp) ??
+        toFiniteNumber(currentPolled.underlying_ltp) ??
+        currentPolled.underlying_ltp
+      const atmStrike = resolveAtmStrike(
+        mergedChain,
+        toFiniteNumber(underlyingLtp),
+        currentPolled.atm_strike
+      )
 
       setMergedData({
         ...currentPolled,
         underlying_ltp: underlyingLtp,
+        atm_strike: atmStrike,
         chain: mergedChain,
       })
     }
   }, [optionExchangeKey, underlyingSymbolKey])
 
+  const clearMergeTimer = useCallback(() => {
+    if (mergeTimerRef.current !== null) {
+      clearTimeout(mergeTimerRef.current)
+      mergeTimerRef.current = null
+    }
+  }, [])
+
   // Trigger throttled merge when wsData or polledData changes
   useEffect(() => {
     if (!polledData) {
+      clearMergeTimer()
       setMergedData(null)
       return
     }
 
     // If no WS data, set polled immediately (first load)
     if (wsData.size === 0) {
+      clearMergeTimer()
       setMergedData(polledData)
       return
     }
@@ -278,14 +387,10 @@ export function useOptionChainLive(
     if (mergeTimerRef.current === null) {
       mergeTimerRef.current = setTimeout(doMerge, MERGE_INTERVAL)
     }
+  }, [clearMergeTimer, polledData, wsData, doMerge])
 
-    return () => {
-      if (mergeTimerRef.current !== null) {
-        clearTimeout(mergeTimerRef.current)
-        mergeTimerRef.current = null
-      }
-    }
-  }, [polledData, wsData, doMerge])
+  // Cleanup pending merge timer on unmount.
+  useEffect(() => clearMergeTimer, [clearMergeTimer])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0

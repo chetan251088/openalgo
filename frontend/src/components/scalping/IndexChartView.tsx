@@ -81,6 +81,8 @@ function toHistoryInterval(intervalSec: number): string {
       return '30m'
     case 3600:
       return '1h'
+    case 86400:
+      return 'D'
     default:
       return '1m'
   }
@@ -406,9 +408,9 @@ export function IndexChartView({
     symbol: underlying,
     exchange: indexExchange,
     intervalSec: chartInterval,
-    mode: 'Quote',
+    mode: 'LTP',
     enabled: !!underlying,
-    useIndiaMarketHours: true,
+    useIndiaMarketHours: false,
     onCandleUpdate: handleCandleUpdate,
   })
 

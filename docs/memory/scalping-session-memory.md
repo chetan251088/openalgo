@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-02-19
+Last updated: 2026-02-24
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -390,6 +390,43 @@ Major implemented behavior (high level):
    - fill-resolution now bypasses broker orderbook lookups in fast mode and anchors from preferred/cache/fallback local price immediately
    - manual, hotkey, and floating widget MARKET entry paths now feed local market-price hints into virtual-line attach
    - scalping positionbook poll interval reduced from `2500ms` to `1000ms` for quicker post-trade and post-close reconciliation
+69. Unified scalping auto-slice routing added for large lot orders:
+   - `tradingApi.placeOrder()` now auto-checks freeze quantity for scalping strategies and routes oversized orders to `/api/v1/splitorder`
+   - applies to manual/hotkey/widget/chart/auto/trigger-driven execution paths because all use shared `placeOrder`
+   - split response is normalized to keep a primary `orderid` while preserving all child order ids/quantities (`orderids`, `split_legs`)
+   - pending LIMIT handling now carries split child ids and updates/cancels all child orders together from chart overlay
+   - freeze-qty lookup now supports configured non-NFO exchanges (e.g., BFO) instead of hard-defaulting everything to `1`
+   - if freeze-qty is unavailable/misconfigured for known index symbols, auto-slice falls back to lot-based chunking (`lotsize * 10`) so SENSEX/BANKEX flows still slice in `/scalping-unified`
+   - split size is normalized to lot multiples before calling `/splitorder` (e.g., NIFTY `1800` freeze -> `1755`) so child orders remain broker-valid
+70. Pending LIMIT virtual attach hardened for split and broker-shape variance:
+   - post-fill attach no longer hard-fails on strict side/action match; it now falls back to the detected live position for the same symbol
+   - fill price resolution for pending LIMIT now considers split child ids (`orderId` / `orderIds` / `splitLegs`) and stronger fallback pricing
+   - attached virtual quantity is clamped to current live broker qty to avoid oversized TP/SL tracking when split limits are partially filled
+   - explicit attach diagnostics added (`[Scalping] Pending LIMIT fill attached to virtual TP/SL`) for quick runtime verification
+71. FLOW stale false-positive fix for moving option charts:
+   - option-chart FLOW staleness no longer depends on throttled FLOW emission timestamps
+   - stale check now uses latest raw Quote/LTP/Depth tick timestamp for the symbol key
+   - fallback polling mode now uses a wider stale threshold (`12s`) to avoid `WS stale` flicker on slower fallback updates
+   - FLOW processing timestamps now clamp with local arrival time (`Math.max(Date.now(), tick.lastUpdate)`) for monotonic freshness
+72. Scalping chart live-candle feed reliability hardening:
+   - index and option chart candle builders now subscribe with `LTP` mode instead of `Quote`
+   - fixes scenarios where option chain continues updating via hybrid path but chart candles stall due sparse/laggy quote-stream updates
+   - chart market-hours and history-seed behavior remains unchanged; only live tick source mode is adjusted
+73. Option-chain live merge and ATM refresh fix:
+   - fixed merge-throttle lifecycle so pending `setTimeout` merges are no longer cancelled on every WS update cycle
+   - option-chain `atm_strike` now recomputes from live `underlying_ltp` against current strike rows, instead of staying stuck at initial REST snapshot
+   - index/option chart live candle builders now accept off-hour/replay ticks (`useIndiaMarketHours: false`) to avoid false frozen charts when feed is active
+74. Flow subscribe symbol-recovery hardening:
+   - flow executor subscribe `LTP`/`Quote`/`Depth` REST fallbacks now detect master-contract symbol-miss errors and attempt recovery
+   - for canonical option symbols (e.g., `NIFTY26FEB2625600CE`) recovery selects nearest available same-underlying/same-strike/same-CE-PE contract from `symtoken`
+   - successful recovery returns live data using resolved symbol and includes `requested_symbol` in node output for transparency
+75. Option-chain ATM/CE live-update alias hardening:
+   - `useOptionChainLive` now resolves WS ticks using exchange-alias candidates (`NSE_INDEX <-> NSE`, `BSE_INDEX <-> BSE`) instead of strict single-key lookup
+   - added symbol-level fallback lookup when exchange in WS payload differs from subscribed exchange naming
+   - prevents ATM recompute freeze and CE/PE row staleness when broker/feed emits alias exchange codes for the same symbol
+76. Option-chain near-ATM staleness recovery:
+   - scalping option-chain panel now keeps low-frequency REST refresh (`15s`) instead of one-shot-only polling
+   - WS remains primary for live ticks, but periodic snapshot refresh now self-heals rows when a subset of option symbols temporarily stops streaming
 
 ## 7) Still Important Gaps / Follow-ups
 
@@ -516,3 +553,21 @@ Notes:
 1. Script creates and pushes backup branch before merge.
 2. Script prefers local side for generated `frontend/dist/*` conflicts.
 3. Use `-NoPush` if you want to inspect merge result before pushing.
+
+## 15) Recent Latency Optimizations (2026-02-24)
+
+1. Scalping order placement fast-gate:
+   - `tradingApi.placeOrder` now skips freeze-quantity symbol lookup when order size is already below known safe thresholds (cached freeze size or store-derived fallback lot threshold).
+   - This removes an avoidable pre-order round trip for common small-lot hotkey/manual scalping entries.
+2. Unified single-close fast path:
+   - `tradingApi.closePosition` now accepts optional known position context (`knownQuantity`, `knownAction`) and submits direct market close first.
+   - If direct close fails, it falls back to previous positionbook-based close resolution.
+3. Unified close-all fast mode:
+   - `tradingApi.closeAllPositions` now supports `{ verify: false }` to skip blocking verification sweep.
+   - Scalping hotkey/manual close-all paths now use fast mode for lower perceived execution latency.
+4. Unified position polling overlap guard:
+   - `useScalpingPositions` now blocks overlapping fetch cycles with an in-flight ref.
+   - Prevents request pile-ups against `/api/multibroker/v1` when execution broker responses are slow, reducing repeated 502 bursts.
+5. Dhan unified execution polling throttle:
+   - `useScalpingPositions` now uses broker-aware polling cadence in unified mode.
+   - Poll interval is slowed for Dhan execution broker (3s) to reduce Dhan multiquotes `805` rate-limit retries triggered by Dhan positionbook LTP enrichment.

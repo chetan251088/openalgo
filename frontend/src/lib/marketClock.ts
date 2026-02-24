@@ -5,6 +5,34 @@ import type { MarketClockZone } from '@/types/scalping'
  * All times are in IST (UTC+5:30).
  */
 
+const IST_TIME_ZONE = 'Asia/Kolkata'
+const IST_PARTS_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+  timeZone: IST_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  hourCycle: 'h23',
+})
+
+const MONTH_MAP: Record<string, number> = {
+  JAN: 1,
+  FEB: 2,
+  MAR: 3,
+  APR: 4,
+  MAY: 5,
+  JUN: 6,
+  JUL: 7,
+  AUG: 8,
+  SEP: 9,
+  OCT: 10,
+  NOV: 11,
+  DEC: 12,
+}
+
 // Standard hot zones
 const STANDARD_ZONES: MarketClockZone[] = [
   { label: 'Pre-Open', start: '09:00', end: '09:15', sensitivity: 0 },
@@ -33,13 +61,64 @@ function timeToMinutes(timeStr: string): number {
   return h * 60 + m
 }
 
+function getISTDateParts(now: Date = new Date()) {
+  const partMap: Record<string, string> = {}
+  for (const part of IST_PARTS_FORMATTER.formatToParts(now)) {
+    if (part.type !== 'literal') {
+      partMap[part.type] = part.value
+    }
+  }
+
+  return {
+    year: Number(partMap.year),
+    month: Number(partMap.month),
+    day: Number(partMap.day),
+    hours: Number(partMap.hour),
+    minutes: Number(partMap.minute),
+    seconds: Number(partMap.second),
+  }
+}
+
+function parseExpiryDateParts(expiry: string, referenceDate: Date = new Date()) {
+  const normalized = expiry.trim().toUpperCase()
+  if (!normalized) return null
+
+  const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (isoMatch) {
+    return {
+      year: Number(isoMatch[1]),
+      month: Number(isoMatch[2]),
+      day: Number(isoMatch[3]),
+    }
+  }
+
+  const dmyMatch = normalized.match(/^(\d{1,2})-([A-Z]{3})-(\d{2}|\d{4})$/)
+  if (dmyMatch) {
+    const month = MONTH_MAP[dmyMatch[2]]
+    if (!month) return null
+    const day = Number(dmyMatch[1])
+    const yearRaw = dmyMatch[3]
+    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw)
+    return { year, month, day }
+  }
+
+  const dmMatch = normalized.match(/^(\d{1,2})-([A-Z]{3})$/)
+  if (dmMatch) {
+    const month = MONTH_MAP[dmMatch[2]]
+    if (!month) return null
+    const { year } = getISTDateParts(referenceDate)
+    return { year, month, day: Number(dmMatch[1]) }
+  }
+
+  return null
+}
+
 /**
  * Get the current IST time as { hours, minutes } from a UTC Date.
  */
 export function getISTTime(now: Date = new Date()) {
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000
-  const ist = new Date(utc + 5.5 * 60 * 60 * 1000)
-  return { hours: ist.getUTCHours(), minutes: ist.getUTCMinutes() }
+  const { hours, minutes } = getISTDateParts(now)
+  return { hours, minutes }
 }
 
 /**
@@ -100,15 +179,14 @@ export function isExpiryDate(expiry: string, today: Date = new Date()): boolean 
   if (!expiry) return false
 
   try {
-    const expiryDate = new Date(expiry)
-    // Use IST date for comparison
-    const utc = today.getTime() + today.getTimezoneOffset() * 60000
-    const ist = new Date(utc + 5.5 * 60 * 60 * 1000)
+    const expiryDateParts = parseExpiryDateParts(expiry, today)
+    if (!expiryDateParts) return false
 
+    const istToday = getISTDateParts(today)
     return (
-      expiryDate.getFullYear() === ist.getUTCFullYear() &&
-      expiryDate.getMonth() === ist.getUTCMonth() &&
-      expiryDate.getDate() === ist.getUTCDate()
+      expiryDateParts.year === istToday.year &&
+      expiryDateParts.month === istToday.month &&
+      expiryDateParts.day === istToday.day
     )
   } catch {
     return false
@@ -128,10 +206,8 @@ export function isMarketOpen(now: Date = new Date()): boolean {
  * Format IST time as HH:MM:SS string.
  */
 export function formatISTTime(now: Date = new Date()): string {
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000
-  const ist = new Date(utc + 5.5 * 60 * 60 * 1000)
-  return `${ist.getUTCHours().toString().padStart(2, '0')}:${ist
-    .getUTCMinutes()
+  const { hours, minutes, seconds } = getISTDateParts(now)
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
     .toString()
-    .padStart(2, '0')}:${ist.getUTCSeconds().toString().padStart(2, '0')}`
+    .padStart(2, '0')}`
 }

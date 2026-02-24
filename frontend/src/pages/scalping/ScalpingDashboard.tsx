@@ -55,6 +55,9 @@ export default function ScalpingDashboard() {
   const product = useScalpingStore((s) => s.product)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
+  const tpPoints = useScalpingStore((s) => s.tpPoints)
+  const slPoints = useScalpingStore((s) => s.slPoints)
+  const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
@@ -74,6 +77,11 @@ export default function ScalpingDashboard() {
   const updateRiskState = useAutoTradeStore((s) => s.updateRiskState)
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
+  const {
+    positions: livePositions,
+    totalPnl: liveOpenPnl,
+    isLive: isLivePnl,
+  } = useScalpingPositions()
 
   // Eagerly fetch apiKey on mount so expiry/chain loading don't wait for AuthSync
   useEffect(() => {
@@ -105,7 +113,13 @@ export default function ScalpingDashboard() {
         return
       }
       try {
-        const response = await tradingApi.closePosition(symbol, optionExchange, product)
+        const knownPosition = livePositions.find(
+          (position) => position.symbol === symbol && position.side === side
+        )
+        const response = await tradingApi.closePosition(symbol, optionExchange, product, {
+          knownQuantity: knownPosition?.quantity,
+          knownAction: knownPosition?.action,
+        })
         if (response.status !== 'success' && response.status !== 'info') {
           console.error('[Scalping] Close rejected:', response)
           toast.error(extractErrorMessage(response, 'Close position rejected'))
@@ -125,6 +139,7 @@ export default function ScalpingDashboard() {
       paperMode,
       optionExchange,
       product,
+      livePositions,
       clearVirtualForSymbol,
       setLimitPrice,
       setPendingEntryAction,
@@ -149,7 +164,7 @@ export default function ScalpingDashboard() {
     })
 
     try {
-      const response = await tradingApi.closeAllPositions()
+      const response = await tradingApi.closeAllPositions({ verify: false })
       const cancelAllResponse = await cancelAllPromise
 
       if (response.status !== 'success' && response.status !== 'info') {
@@ -183,8 +198,14 @@ export default function ScalpingDashboard() {
       if (!apiKey) return
 
       try {
+        const knownPosition = livePositions.find(
+          (position) => position.symbol === symbol && position.side === side
+        )
         // Close existing position first
-        const closeRes = await tradingApi.closePosition(symbol, optionExchange, product)
+        const closeRes = await tradingApi.closePosition(symbol, optionExchange, product, {
+          knownQuantity: knownPosition?.quantity,
+          knownAction: knownPosition?.action,
+        })
         if (closeRes.status !== 'success' && closeRes.status !== 'info') {
           console.error('[Scalping] Reversal close rejected:', closeRes)
           toast.error(extractErrorMessage(closeRes, 'Reversal close failed'))
@@ -219,7 +240,7 @@ export default function ScalpingDashboard() {
         toast.error(extractErrorMessage(err, 'Reversal failed'))
       }
     },
-    [paperMode, apiKey, optionExchange, product, quantity, lotSize]
+    [paperMode, apiKey, optionExchange, product, quantity, lotSize, livePositions]
   )
 
   // Wire up keyboard hotkeys
@@ -273,12 +294,6 @@ export default function ScalpingDashboard() {
     mode: imbalanceFilterEnabled ? 'Quote' : 'LTP',
     enabled: tickSymbols.length > 0,
   })
-
-  const {
-    positions: livePositions,
-    totalPnl: liveOpenPnl,
-    isLive: isLivePnl,
-  } = useScalpingPositions()
 
   // Flow bridge: attach virtual TP/SL lines for flow-triggered entries.
   useFlowVirtualBridge()
@@ -347,37 +362,77 @@ export default function ScalpingDashboard() {
 
     // Attach virtual TP/SL for live LIMIT only after fill confirmation.
     if (!pendingLimitPlacement || pendingLimitAttachRef.current) return
-    const live = liveBySymbol.get(pendingLimitPlacement.symbol)
-    if (!live) return
-    if (live.side !== pendingLimitPlacement.side || live.action !== pendingLimitPlacement.action) return
+    const liveCandidates = livePositions.filter((position) => position.symbol === pendingLimitPlacement.symbol)
+    if (liveCandidates.length === 0) return
+
+    const exactLive = liveCandidates.find(
+      (position) =>
+        position.side === pendingLimitPlacement.side &&
+        position.action === pendingLimitPlacement.action
+    )
+    const live = exactLive ?? liveCandidates[0]
+    const resolvedSide = exactLive ? pendingLimitPlacement.side : live.side
+    const resolvedAction = exactLive ? pendingLimitPlacement.action : live.action
 
     pendingLimitAttachRef.current = true
     void (async () => {
       try {
+        const fallbackPrice = live.avgPrice > 0 ? live.avgPrice : live.ltp
+        const preferredEntry =
+          pendingLimitPlacement.entryPrice > 0 ? pendingLimitPlacement.entryPrice : fallbackPrice
+        const splitOrderId =
+          pendingLimitPlacement.orderId ??
+          pendingLimitPlacement.orderIds?.[0] ??
+          pendingLimitPlacement.splitLegs?.[0]?.orderId ??
+          null
         const entryPrice = await resolveFilledOrderPrice({
           symbol: pendingLimitPlacement.symbol,
           exchange: live.exchange,
-          orderId: pendingLimitPlacement.orderId,
-          preferredPrice: pendingLimitPlacement.entryPrice,
-          fallbackPrice: live.avgPrice,
+          orderId: splitOrderId,
+          preferredPrice: preferredEntry,
+          fallbackPrice,
           apiKey,
         })
-        if (entryPrice <= 0) return
+        if (entryPrice <= 0) {
+          console.warn('[Scalping] Pending LIMIT fill attach skipped: no valid entry price', {
+            symbol: pendingLimitPlacement.symbol,
+            orderId: splitOrderId,
+            pendingEntry: pendingLimitPlacement.entryPrice,
+            fallbackPrice,
+          })
+          return
+        }
+
+        const liveQty = Math.max(0, live.quantity)
+        const requestedQty = Math.max(0, pendingLimitPlacement.quantity)
+        const attachQty = liveQty > 0 ? Math.max(1, Math.min(requestedQty, liveQty)) : requestedQty
+        if (attachQty <= 0) return
 
         setVirtualTPSL(
           buildVirtualPosition({
             symbol: pendingLimitPlacement.symbol,
             exchange: live.exchange,
-            side: pendingLimitPlacement.side,
-            action: pendingLimitPlacement.action,
+            side: resolvedSide,
+            action: resolvedAction,
             entryPrice,
-            quantity: pendingLimitPlacement.quantity,
-            tpPoints: pendingLimitPlacement.tpPoints,
-            slPoints: pendingLimitPlacement.slPoints,
-            trailDistancePoints: pendingLimitPlacement.trailDistancePoints,
+            quantity: attachQty,
+            tpPoints: pendingLimitPlacement.tpPoints > 0 ? pendingLimitPlacement.tpPoints : tpPoints,
+            slPoints: pendingLimitPlacement.slPoints > 0 ? pendingLimitPlacement.slPoints : slPoints,
+            trailDistancePoints:
+              pendingLimitPlacement.trailDistancePoints > 0
+                ? pendingLimitPlacement.trailDistancePoints
+                : trailDistancePoints,
             managedBy: 'manual',
           })
         )
+        console.info('[Scalping] Pending LIMIT fill attached to virtual TP/SL', {
+          symbol: pendingLimitPlacement.symbol,
+          side: resolvedSide,
+          action: resolvedAction,
+          quantity: attachQty,
+          entryPrice,
+          orderId: splitOrderId,
+        })
         incrementTradeCount()
         clearPendingLimitPlacement()
         setLimitPrice(null)
@@ -395,6 +450,9 @@ export default function ScalpingDashboard() {
     removeVirtualTPSL,
     updateVirtualTPSL,
     setVirtualTPSL,
+    tpPoints,
+    slPoints,
+    trailDistancePoints,
     incrementTradeCount,
     clearPendingLimitPlacement,
     setLimitPrice,
