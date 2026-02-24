@@ -469,7 +469,7 @@ export const NODE_DEFINITIONS = {
 
 export const DEFAULT_NODE_DATA = {
   tomicControl: {
-    action: 'start' as const,
+    action: 'stop' as const,
     reason: 'Flow pause',
     outputVariable: '',
   },

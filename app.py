@@ -560,11 +560,22 @@ def setup_environment(app):
 
             from tomic.runtime import TomicRuntime
 
+            def _is_env_flag_enabled(name: str, default: bool = False) -> bool:
+                raw = os.getenv(name, "").strip().lower()
+                if not raw:
+                    return default
+                return raw not in {"0", "false", "no", "off"}
+
             tomic_runtime = TomicRuntime()
             set_tomic_runtime(tomic_runtime)
             app.extensions["tomic_runtime"] = tomic_runtime
             atexit.register(tomic_runtime.stop)
-            logger.debug("TOMIC runtime bootstrapped")
+
+            if _is_env_flag_enabled("TOMIC_AUTO_START", default=False):
+                tomic_runtime.start()
+                logger.info("TOMIC runtime auto-started (TOMIC_AUTO_START=true)")
+            else:
+                logger.info("TOMIC runtime bootstrapped in stopped state (manual start required)")
         except Exception as e:
             logger.error(f"Failed to bootstrap TOMIC runtime: {e}")
 

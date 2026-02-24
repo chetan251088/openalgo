@@ -241,7 +241,7 @@ export function ConfigPanel() {
 
           {/* ===== PLACE ORDER ===== */}
           {nodeType === 'tomicControl' && (<>
-            <div className="space-y-2"><Label className="text-xs">Action</Label><Select value={(nodeData.action as string) || 'start'} onValueChange={(v) => handleDataChange('action', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="start">Start</SelectItem><SelectItem value="pause">Pause</SelectItem><SelectItem value="resume">Resume</SelectItem><SelectItem value="stop">Stop</SelectItem></SelectContent></Select></div>
+            <div className="space-y-2"><Label className="text-xs">Action</Label><Select value={(nodeData.action as string) || 'stop'} onValueChange={(v) => handleDataChange('action', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="start">Start</SelectItem><SelectItem value="pause">Pause</SelectItem><SelectItem value="resume">Resume</SelectItem><SelectItem value="stop">Stop</SelectItem></SelectContent></Select></div>
             {(nodeData.action as string) === 'pause' && (<div className="space-y-2"><Label className="text-xs">Pause Reason</Label><Input className="h-8" placeholder="Manual pause from flow" value={(nodeData.reason as string) || ''} onChange={(e) => handleDataChange('reason', e.target.value)} /></div>)}
             <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="tomicControl" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{tomicControl.runtime.runtime}}`}</p></div>
           </>)}

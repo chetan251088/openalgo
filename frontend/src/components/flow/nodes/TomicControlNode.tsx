@@ -17,7 +17,7 @@ const actionLabel: Record<string, string> = {
 }
 
 export const TomicControlNode = memo(({ data, selected }: TomicControlNodeProps) => {
-  const action = (data.action || 'start').toLowerCase()
+  const action = (data.action || 'stop').toLowerCase()
   return (
     <div className={cn('workflow-node node-action min-w-[130px] border-l-emerald-500', selected && 'selected')}>
       <Handle type="target" position={Position.Top} />
@@ -42,4 +42,3 @@ export const TomicControlNode = memo(({ data, selected }: TomicControlNodeProps)
 })
 
 TomicControlNode.displayName = 'TomicControlNode'
-

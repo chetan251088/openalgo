@@ -6,6 +6,7 @@ Executes workflow nodes using internal OpenAlgo services (synchronous Flask vers
 
 import json
 import logging
+import os
 import re
 import threading
 import time as time_module
@@ -203,6 +204,207 @@ class NodeExecutor:
             if token in {"0", "false", "no", "off"}:
                 return False
         return bool(default)
+
+    def _is_symbol_not_found_error(self, message: str | None) -> bool:
+        """Check whether an error message indicates master-contract symbol miss."""
+        if not message:
+            return False
+        normalized = str(message).strip().lower()
+        return (
+            "symbol" in normalized
+            and "not found" in normalized
+            and "exchange" in normalized
+        )
+
+    def _parse_option_contract_symbol(
+        self, symbol: str
+    ) -> tuple[str, datetime, float, str] | None:
+        """
+        Parse canonical option symbol: UNDERLYING + DDMMMYY + STRIKE + CE/PE.
+        Example: NIFTY26FEB2625600CE
+        """
+        token = (symbol or "").strip().upper()
+        match = re.match(r"^([A-Z0-9]+?)(\d{2}[A-Z]{3}\d{2})(\d+(?:\.\d+)?)(CE|PE)$", token)
+        if not match:
+            return None
+        underlying, expiry_raw, strike_raw, option_type = match.groups()
+        try:
+            expiry_dt = datetime.strptime(expiry_raw, "%d%b%y")
+            strike = float(strike_raw)
+        except ValueError:
+            return None
+        return underlying, expiry_dt, strike, option_type
+
+    def _parse_master_expiry(self, expiry_value: str) -> datetime | None:
+        """Parse expiry values commonly stored in master contracts."""
+        if not expiry_value:
+            return None
+        token = str(expiry_value).strip().upper()
+        for fmt in (
+            "%d-%b-%y",
+            "%d-%B-%Y",
+            "%d%b%y",
+            "%d%B%Y",
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                return datetime.strptime(token, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _resolve_nearest_option_symbol(self, symbol: str, exchange: str) -> str | None:
+        """
+        Resolve nearest available option symbol for same underlying/strike/type.
+        Used only as recovery when requested symbol is missing from master contracts.
+        """
+        parsed = self._parse_option_contract_symbol(symbol)
+        if not parsed:
+            return None
+
+        underlying, requested_expiry, strike, option_type = parsed
+        exchange_u = (exchange or "").strip().upper()
+        if not exchange_u:
+            return None
+
+        try:
+            from database.symbol import SymToken, db_session
+            from sqlalchemy import or_
+
+            strike_low = strike - 0.001
+            strike_high = strike + 0.001
+            rows = (
+                db_session.query(SymToken.symbol, SymToken.expiry)
+                .filter(
+                    SymToken.exchange == exchange_u,
+                    SymToken.strike >= strike_low,
+                    SymToken.strike <= strike_high,
+                    SymToken.symbol.like(f"{underlying}%"),
+                    or_(
+                        SymToken.instrumenttype == option_type,
+                        SymToken.symbol.like(f"%{option_type}"),
+                    ),
+                )
+                .all()
+            )
+        except Exception as exc:
+            self.log(f"Symbol recovery lookup failed: {exc}", "warning")
+            return None
+
+        candidates: list[tuple[str, datetime]] = []
+        for row in rows:
+            candidate_symbol = str(getattr(row, "symbol", "") or "").strip().upper()
+            if not candidate_symbol.endswith(option_type):
+                continue
+            expiry_dt = self._parse_master_expiry(str(getattr(row, "expiry", "") or ""))
+            if not candidate_symbol or expiry_dt is None:
+                continue
+            candidates.append((candidate_symbol, expiry_dt))
+
+        if not candidates:
+            return None
+
+        today = datetime.now().date()
+        future_candidates = [item for item in candidates if item[1].date() >= today]
+        pool = future_candidates if future_candidates else candidates
+
+        best_symbol, _ = min(
+            pool,
+            key=lambda item: (
+                abs((item[1].date() - requested_expiry.date()).days),
+                item[1],
+            ),
+        )
+
+        original = (symbol or "").strip().upper()
+        return best_symbol if best_symbol != original else None
+
+    def _get_quotes_with_symbol_recovery(
+        self, symbol: str, exchange: str
+    ) -> tuple[dict[str, Any], str]:
+        """Fetch quote and recover to nearest listed option contract when symbol is missing."""
+        result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+        if result.get("status") == "success":
+            return result, symbol
+
+        error_msg = str(result.get("error") or result.get("message") or "")
+        if not self._is_symbol_not_found_error(error_msg):
+            return result, symbol
+
+        resolved_symbol = self._resolve_nearest_option_symbol(symbol, exchange)
+        if not resolved_symbol:
+            return result, symbol
+
+        self.log(
+            f"Symbol recovery: {symbol} -> {resolved_symbol} ({exchange})",
+            "warning",
+        )
+        retry = self.client.get_quotes(symbol=resolved_symbol, exchange=exchange)
+        if retry.get("status") == "success":
+            return retry, resolved_symbol
+
+        retry_msg = str(retry.get("error") or retry.get("message") or "unknown error")
+        self.log(
+            f"Recovered symbol quote fetch failed for {resolved_symbol}: {retry_msg}",
+            "warning",
+        )
+        return result, symbol
+
+    def _get_depth_with_symbol_recovery(
+        self, symbol: str, exchange: str
+    ) -> tuple[dict[str, Any], str]:
+        """Fetch depth and recover to nearest listed option contract when symbol is missing."""
+        result = self.client.get_depth(symbol=symbol, exchange=exchange)
+        if result.get("status") == "success":
+            return result, symbol
+
+        error_msg = str(result.get("error") or result.get("message") or "")
+        if not self._is_symbol_not_found_error(error_msg):
+            return result, symbol
+
+        resolved_symbol = self._resolve_nearest_option_symbol(symbol, exchange)
+        if not resolved_symbol:
+            return result, symbol
+
+        self.log(
+            f"Symbol recovery: {symbol} -> {resolved_symbol} ({exchange})",
+            "warning",
+        )
+        retry = self.client.get_depth(symbol=resolved_symbol, exchange=exchange)
+        if retry.get("status") == "success":
+            return retry, resolved_symbol
+
+        retry_msg = str(retry.get("error") or retry.get("message") or "unknown error")
+        self.log(
+            f"Recovered symbol depth fetch failed for {resolved_symbol}: {retry_msg}",
+            "warning",
+        )
+        return result, symbol
+
+    def _resolve_stream_symbol(self, symbol: str, exchange: str) -> str:
+        """
+        Resolve a usable stream symbol quickly.
+        If exact symbol exists in master contract, use it.
+        Else attempt nearest option contract recovery.
+        """
+        symbol_u = (symbol or "").strip().upper()
+        exchange_u = (exchange or "").strip().upper()
+        if not symbol_u or not exchange_u:
+            return symbol_u or symbol
+
+        try:
+            from database.token_db import get_token
+
+            if get_token(symbol_u, exchange_u) is not None:
+                return symbol_u
+        except Exception:
+            # Non-fatal; continue with fallback resolution.
+            pass
+
+        recovered = self._resolve_nearest_option_symbol(symbol_u, exchange_u)
+        return recovered or symbol_u
 
     # === Order Nodes ===
 
@@ -1327,12 +1529,21 @@ class NodeExecutor:
         if not runtime:
             return {"status": "error", "message": "TOMIC runtime not initialized"}
 
-        action = self.get_str(node_data, "action", "start").strip().lower()
+        action = self.get_str(node_data, "action", "stop").strip().lower()
         reason = self.get_str(node_data, "reason", "Flow control")
         self.log(f"TOMIC control action: {action}")
 
         try:
             if action == "start":
+                manual_only = os.getenv("TOMIC_MANUAL_START_ONLY", "true").strip().lower()
+                manual_only_enabled = manual_only not in {"0", "false", "no", "off"}
+                if manual_only_enabled:
+                    message = (
+                        "TOMIC start is manual-only. "
+                        "Use the dashboard Start button or POST /tomic/start."
+                    )
+                    self.log(message, "warning")
+                    return {"status": "error", "message": message, "action": action}
                 runtime.start()
             elif action == "stop":
                 runtime.stop()
@@ -1794,10 +2005,18 @@ class NodeExecutor:
             self.log("Subscribe LTP: No symbol specified", "error")
             return {"status": "error", "message": "No symbol specified"}
 
-        self.log(f"Subscribing to LTP stream: {symbol} ({exchange})")
+        requested_symbol = symbol
+        stream_symbol = self._resolve_stream_symbol(symbol, exchange)
+        if stream_symbol != requested_symbol:
+            self.log(
+                f"Subscribe LTP symbol adjusted: {requested_symbol} -> {stream_symbol} ({exchange})",
+                "warning",
+            )
+
+        self.log(f"Subscribing to LTP stream: {stream_symbol} ({exchange})")
 
         # Try WebSocket first
-        ws_data = self._get_websocket_data(symbol, exchange, "LTP", timeout=5.0)
+        ws_data = self._get_websocket_data(stream_symbol, exchange, "LTP", timeout=5.0)
 
         if ws_data:
             # LTP may be nested under 'data' or at top level
@@ -1811,12 +2030,14 @@ class NodeExecutor:
             streaming_result = {
                 "status": "success",
                 "type": "ltp",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "ltp": ltp,
                 "source": "websocket",
             }
-            self.log(f"LTP for {symbol}: {ltp} (via WebSocket)")
+            if stream_symbol != requested_symbol:
+                streaming_result["requested_symbol"] = requested_symbol
+            self.log(f"LTP for {stream_symbol}: {ltp} (via WebSocket)")
 
             # Store in context variable
             self.context.set_variable(output_var, ltp)
@@ -1824,10 +2045,12 @@ class NodeExecutor:
             return streaming_result
 
         # Fallback to REST API
-        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {stream_symbol}")
 
         try:
-            result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+            result, effective_symbol = self._get_quotes_with_symbol_recovery(
+                stream_symbol, exchange
+            )
 
             if result.get("status") == "success":
                 data = result.get("data", {})
@@ -1836,12 +2059,14 @@ class NodeExecutor:
                 streaming_result = {
                     "status": "success",
                     "type": "ltp",
-                    "symbol": symbol,
+                    "symbol": effective_symbol,
                     "exchange": exchange,
                     "ltp": ltp,
                     "source": "rest_api",
                 }
-                self.log(f"LTP for {symbol}: {ltp} (via REST API)")
+                if effective_symbol != requested_symbol:
+                    streaming_result["requested_symbol"] = requested_symbol
+                self.log(f"LTP for {effective_symbol}: {ltp} (via REST API)")
 
                 # Store in context variable
                 self.context.set_variable(output_var, ltp)
@@ -1853,7 +2078,7 @@ class NodeExecutor:
                 return {
                     "status": "error",
                     "type": "ltp",
-                    "symbol": symbol,
+                    "symbol": stream_symbol,
                     "exchange": exchange,
                     "error": error_msg,
                 }
@@ -1863,7 +2088,7 @@ class NodeExecutor:
             return {
                 "status": "error",
                 "type": "ltp",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "error": str(e),
             }
@@ -1882,10 +2107,18 @@ class NodeExecutor:
             self.log("Subscribe Quote: No symbol specified", "error")
             return {"status": "error", "message": "No symbol specified"}
 
-        self.log(f"Subscribing to Quote stream: {symbol} ({exchange})")
+        requested_symbol = symbol
+        stream_symbol = self._resolve_stream_symbol(symbol, exchange)
+        if stream_symbol != requested_symbol:
+            self.log(
+                f"Subscribe Quote symbol adjusted: {requested_symbol} -> {stream_symbol} ({exchange})",
+                "warning",
+            )
+
+        self.log(f"Subscribing to Quote stream: {stream_symbol} ({exchange})")
 
         # Try WebSocket first
-        ws_data = self._get_websocket_data(symbol, exchange, "Quote", timeout=5.0)
+        ws_data = self._get_websocket_data(stream_symbol, exchange, "Quote", timeout=5.0)
 
         if ws_data:
             # Quote data may be nested under 'data' or at top level
@@ -1909,12 +2142,14 @@ class NodeExecutor:
             streaming_result = {
                 "status": "success",
                 "type": "quote",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "data": quote_data,
                 "source": "websocket",
             }
-            self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via WebSocket)")
+            if stream_symbol != requested_symbol:
+                streaming_result["requested_symbol"] = requested_symbol
+            self.log(f"Quote for {stream_symbol}: LTP={quote_data.get('ltp')} (via WebSocket)")
 
             # Store in context variable
             self.context.set_variable(output_var, quote_data)
@@ -1922,10 +2157,12 @@ class NodeExecutor:
             return streaming_result
 
         # Fallback to REST API
-        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {stream_symbol}")
 
         try:
-            result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+            result, effective_symbol = self._get_quotes_with_symbol_recovery(
+                stream_symbol, exchange
+            )
 
             if result.get("status") == "success":
                 data = result.get("data", {})
@@ -1947,12 +2184,16 @@ class NodeExecutor:
                 streaming_result = {
                     "status": "success",
                     "type": "quote",
-                    "symbol": symbol,
+                    "symbol": effective_symbol,
                     "exchange": exchange,
                     "data": quote_data,
                     "source": "rest_api",
                 }
-                self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via REST API)")
+                if effective_symbol != requested_symbol:
+                    streaming_result["requested_symbol"] = requested_symbol
+                self.log(
+                    f"Quote for {effective_symbol}: LTP={quote_data.get('ltp')} (via REST API)"
+                )
 
                 # Store in context variable
                 self.context.set_variable(output_var, quote_data)
@@ -1964,7 +2205,7 @@ class NodeExecutor:
                 return {
                     "status": "error",
                     "type": "quote",
-                    "symbol": symbol,
+                    "symbol": stream_symbol,
                     "exchange": exchange,
                     "error": error_msg,
                 }
@@ -1974,7 +2215,7 @@ class NodeExecutor:
             return {
                 "status": "error",
                 "type": "quote",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "error": str(e),
             }
@@ -1993,10 +2234,18 @@ class NodeExecutor:
             self.log("Subscribe Depth: No symbol specified", "error")
             return {"status": "error", "message": "No symbol specified"}
 
-        self.log(f"Subscribing to Depth stream: {symbol} ({exchange})")
+        requested_symbol = symbol
+        stream_symbol = self._resolve_stream_symbol(symbol, exchange)
+        if stream_symbol != requested_symbol:
+            self.log(
+                f"Subscribe Depth symbol adjusted: {requested_symbol} -> {stream_symbol} ({exchange})",
+                "warning",
+            )
+
+        self.log(f"Subscribing to Depth stream: {stream_symbol} ({exchange})")
 
         # Try WebSocket first (shorter timeout for depth as it may not stream outside market hours)
-        ws_data = self._get_websocket_data(symbol, exchange, "Depth", timeout=3.0)
+        ws_data = self._get_websocket_data(stream_symbol, exchange, "Depth", timeout=3.0)
 
         if ws_data:
             # Depth data may be nested under 'data' or at top level
@@ -2045,18 +2294,20 @@ class NodeExecutor:
             streaming_result = {
                 "status": "success",
                 "type": "depth",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "data": depth_data,
                 "source": "websocket",
             }
+            if stream_symbol != requested_symbol:
+                streaming_result["requested_symbol"] = requested_symbol
             # Log depth summary with top bid/ask prices
             bids_list = depth_data.get("bids", [])
             asks_list = depth_data.get("asks", [])
             top_bid = bids_list[0].get("price", 0) if bids_list else 0
             top_ask = asks_list[0].get("price", 0) if asks_list else 0
             self.log(
-                f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via WebSocket"
+                f"Depth for {stream_symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via WebSocket"
             )
 
             # Store in context variable
@@ -2065,10 +2316,12 @@ class NodeExecutor:
             return streaming_result
 
         # Fallback to REST API
-        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {stream_symbol}")
 
         try:
-            result = self.client.get_depth(symbol=symbol, exchange=exchange)
+            result, effective_symbol = self._get_depth_with_symbol_recovery(
+                stream_symbol, exchange
+            )
 
             if result.get("status") == "success":
                 data = result.get("data", {})
@@ -2088,18 +2341,20 @@ class NodeExecutor:
                 streaming_result = {
                     "status": "success",
                     "type": "depth",
-                    "symbol": symbol,
+                    "symbol": effective_symbol,
                     "exchange": exchange,
                     "data": depth_data,
                     "source": "rest_api",
                 }
+                if effective_symbol != requested_symbol:
+                    streaming_result["requested_symbol"] = requested_symbol
                 # Log depth summary with top bid/ask prices
                 bids_list = depth_data.get("bids", [])
                 asks_list = depth_data.get("asks", [])
                 top_bid = bids_list[0].get("price", 0) if bids_list else 0
                 top_ask = asks_list[0].get("price", 0) if asks_list else 0
                 self.log(
-                    f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via REST API"
+                    f"Depth for {effective_symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via REST API"
                 )
 
                 # Store in context variable
@@ -2112,7 +2367,7 @@ class NodeExecutor:
                 return {
                     "status": "error",
                     "type": "depth",
-                    "symbol": symbol,
+                    "symbol": stream_symbol,
                     "exchange": exchange,
                     "error": error_msg,
                 }
@@ -2122,7 +2377,7 @@ class NodeExecutor:
             return {
                 "status": "error",
                 "type": "depth",
-                "symbol": symbol,
+                "symbol": stream_symbol,
                 "exchange": exchange,
                 "error": str(e),
             }
