@@ -9,6 +9,66 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _extract_position_rows(raw_payload: Any) -> list[dict[str, Any]]:
+    """
+    Normalize broker position payloads to a list of rows.
+
+    Brokers are inconsistent: some return list directly, some wrap under
+    keys like `data` / `positions`, and some return empty objects for no data.
+    """
+    if isinstance(raw_payload, list):
+        return [row for row in raw_payload if isinstance(row, dict)]
+
+    if isinstance(raw_payload, dict):
+        candidates = (
+            raw_payload.get("data"),
+            raw_payload.get("positions"),
+            raw_payload.get("position"),
+            raw_payload.get("result"),
+            raw_payload.get("results"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                return [row for row in candidate if isinstance(row, dict)]
+            if isinstance(candidate, dict):
+                return [candidate]
+        return []
+
+    return []
+
+
+def _is_no_positions_payload(raw_payload: Any) -> bool:
+    """
+    Detect broker responses that semantically mean "no open positions".
+    """
+    if isinstance(raw_payload, list):
+        return len(raw_payload) == 0
+
+    if isinstance(raw_payload, dict):
+        parts = [
+            str(raw_payload.get("message", "")),
+            str(raw_payload.get("errorMessage", "")),
+            str(raw_payload.get("status", "")),
+            str(raw_payload.get("remarks", "")),
+            str(raw_payload.get("data", "")),
+            str(raw_payload.get("internalErrorMessage", "")),
+            str(raw_payload.get("errorType", "")),
+        ]
+        text = " ".join(parts).lower()
+        markers = (
+            "no position",
+            "no positions",
+            "position not found",
+            "no open position",
+            "no data",
+            "empty",
+            "doesn't have any open position",
+        )
+        return any(marker in text for marker in markers)
+
+    return False
+
+
 def format_decimal(value):
     """Format numeric value to 2 decimal places"""
     if isinstance(value, (int, float)):
@@ -116,7 +176,13 @@ def get_positionbook_with_auth(
         # Get positions data using broker's implementation
         positions_data = broker_funcs["get_positions"](auth_token)
 
-        if "status" in positions_data and positions_data["status"] == "error":
+        if isinstance(positions_data, dict) and str(positions_data.get("status", "")).lower() in {
+            "error",
+            "failed",
+            "failure",
+        }:
+            if _is_no_positions_payload(positions_data):
+                return True, {"status": "success", "data": []}, 200
             return (
                 False,
                 {
@@ -126,8 +192,22 @@ def get_positionbook_with_auth(
                 500,
             )
 
+        if isinstance(positions_data, dict) and positions_data.get("errorType"):
+            if _is_no_positions_payload(positions_data):
+                return True, {"status": "success", "data": []}, 200
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": positions_data.get("errorMessage", "Error fetching positions data"),
+                },
+                500,
+            )
+
+        normalized_positions = _extract_position_rows(positions_data)
+
         # Transform data using mapping functions
-        positions_data = broker_funcs["map_position_data"](positions_data)
+        positions_data = broker_funcs["map_position_data"](normalized_positions)
         positions_data = broker_funcs["transform_positions_data"](positions_data)
 
         # Format numeric values to 2 decimal places

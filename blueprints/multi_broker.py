@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -25,6 +26,18 @@ FLASK_TO_WS_PORT = {
     "5002": "8767",
 }
 FEED_MODES = {"auto", "dhan", "zerodha"}
+API_KEY_CACHE_SESSION_KEY = "_multi_broker_target_api_keys"
+
+
+def _parse_cache_ttl_seconds() -> int:
+    raw = os.getenv("MULTI_BROKER_APIKEY_CACHE_TTL_S", "120")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 120
+
+
+API_KEY_CACHE_TTL_SECONDS = _parse_cache_ttl_seconds()
 
 
 def _normalize_base_url(url: str) -> str:
@@ -45,6 +58,71 @@ def _require_session_user() -> tuple[bool, str | None]:
     if not username:
         return False, None
     return True, username
+
+
+def _read_cached_target_openalgo_apikey(broker: str, username: str | None = None) -> str | None:
+    if API_KEY_CACHE_TTL_SECONDS <= 0:
+        return None
+
+    cache = session.get(API_KEY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict):
+        return None
+
+    entry = cache.get(broker)
+    if not isinstance(entry, dict):
+        return None
+
+    api_key = str(entry.get("api_key", "")).strip()
+    if not api_key:
+        return None
+
+    cached_user = str(entry.get("username", "")).strip()
+    if username and cached_user and cached_user != username:
+        return None
+
+    cached_at_raw = entry.get("cached_at")
+    try:
+        cached_at = float(cached_at_raw)
+    except (TypeError, ValueError):
+        return None
+    if cached_at <= 0:
+        return None
+
+    if (time.time() - cached_at) > API_KEY_CACHE_TTL_SECONDS:
+        return None
+
+    return api_key
+
+
+def _write_cached_target_openalgo_apikey(broker: str, api_key: str, username: str | None = None) -> None:
+    if API_KEY_CACHE_TTL_SECONDS <= 0:
+        return
+
+    normalized_key = str(api_key).strip()
+    if not normalized_key:
+        return
+
+    cache = session.get(API_KEY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+
+    cache[broker] = {
+        "api_key": normalized_key,
+        "username": str(username or ""),
+        "cached_at": time.time(),
+    }
+    session[API_KEY_CACHE_SESSION_KEY] = cache
+    session.modified = True
+
+
+def _clear_cached_target_openalgo_apikey(broker: str) -> None:
+    cache = session.get(API_KEY_CACHE_SESSION_KEY)
+    if not isinstance(cache, dict) or broker not in cache:
+        return
+
+    cache.pop(broker, None)
+    session[API_KEY_CACHE_SESSION_KEY] = cache
+    session.modified = True
 
 
 def _resolve_ws_url(broker: str, base_url: str) -> str:
@@ -79,6 +157,10 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
         if value:
             return value
 
+    cached_key = _read_cached_target_openalgo_apikey(broker, username=username)
+    if cached_key:
+        return cached_key
+
     # Try target instance session-backed API key endpoint.
     cookie_header = request.headers.get("Cookie", "")
     forward_headers = {"Cookie": cookie_header} if cookie_header else {}
@@ -92,6 +174,9 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
             data = response.json() if response.content else {}
             api_key = str(data.get("api_key", "")).strip()
             if data.get("status") == "success" and api_key:
+                _write_cached_target_openalgo_apikey(
+                    broker, api_key, username=username
+                )
                 return api_key
     except requests.RequestException:
         pass
@@ -103,6 +188,9 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
         try:
             api_key = get_api_key_for_tradingview(username)
             if api_key:
+                _write_cached_target_openalgo_apikey(
+                    broker, api_key, username=username
+                )
                 return api_key
         except Exception:
             pass
@@ -146,7 +234,9 @@ def get_multi_broker_ws_config():
     targets = []
     for target_broker in sequence:
         target_base_url = broker_urls[target_broker]
-        target_api_key = _resolve_target_openalgo_apikey(target_broker, target_base_url)
+        target_api_key = _resolve_target_openalgo_apikey(
+            target_broker, target_base_url, username=username
+        )
         if not target_api_key:
             return (
                 jsonify(
@@ -185,8 +275,8 @@ def get_multi_broker_ws_config():
 
 @multi_broker_bp.route("/v1", methods=["POST"], strict_slashes=False)
 def proxy_multi_broker_v1():
-    ok, _ = _require_session_user()
-    if not ok:
+    ok, username = _require_session_user()
+    if not ok or not username:
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
     payload = request.get_json(silent=True) or {}
@@ -216,7 +306,9 @@ def proxy_multi_broker_v1():
 
     proxied_body = body
     if isinstance(proxied_body, dict) and "apikey" in proxied_body:
-        target_api_key = _resolve_target_openalgo_apikey(broker, target_base_url)
+        target_api_key = _resolve_target_openalgo_apikey(
+            broker, target_base_url, username=username
+        )
         if not target_api_key:
             return (
                 jsonify(
@@ -260,8 +352,32 @@ def proxy_multi_broker_v1():
             502,
         )
 
+    if response.status_code >= 500:
+        logger.warning(
+            "Multi-broker upstream failure broker=%s path=%s status=%s",
+            broker,
+            path,
+            response.status_code,
+        )
+
     try:
         proxied_json = response.json()
+
+        if (
+            response.status_code in {401, 403}
+            and isinstance(proxied_body, dict)
+            and "apikey" in proxied_body
+            and isinstance(proxied_json, dict)
+        ):
+            message = str(proxied_json.get("message", "")).lower()
+            if "apikey" in message or "api key" in message:
+                _clear_cached_target_openalgo_apikey(broker)
+
+        if response.status_code >= 500 and isinstance(proxied_json, dict):
+            proxied_json = dict(proxied_json)
+            proxied_json["proxy_broker"] = broker
+            proxied_json["proxy_path"] = path
+
         return jsonify(proxied_json), response.status_code
     except ValueError:
         snippet = (response.text or "")[:500]
@@ -270,6 +386,8 @@ def proxy_multi_broker_v1():
                 {
                     "status": "error",
                     "message": f"Non-JSON response from {broker}",
+                    "proxy_broker": broker,
+                    "proxy_path": path,
                     "raw": snippet,
                 }
             ),

@@ -2,6 +2,8 @@ import type { OptionChainResponse } from '@/types/option-chain'
 import { apiClient } from './client'
 import { isMultiBrokerUnifiedMode, proxyV1ByRole } from './multi-broker'
 
+const OPTION_CHAIN_PROXY_TIMEOUT_MS = 2500
+
 export interface ExpiryResponse {
   status: 'success' | 'error'
   data: string[]
@@ -23,7 +25,7 @@ export const optionChainApi = {
         exchange,
         expiry_date: expiryDate,
         strike_count: strikeCount ?? 20,
-      })
+      }, 'POST', { timeoutMs: OPTION_CHAIN_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<OptionChainResponse>('/optionchain', {
       apikey: apiKey,
@@ -47,7 +49,7 @@ export const optionChainApi = {
         symbol,
         exchange,
         instrumenttype,
-      })
+      }, 'POST', { timeoutMs: OPTION_CHAIN_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<ExpiryResponse>('/expiry', {
       apikey: apiKey,

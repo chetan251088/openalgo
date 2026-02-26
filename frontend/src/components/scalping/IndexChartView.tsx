@@ -404,7 +404,7 @@ export function IndexChartView({
     [scheduleIndicatorRefresh]
   )
 
-  const { isConnected, reset: resetCandles, seed: seedCandles } = useCandleBuilder({
+  const { isConnected, isFallbackMode, reset: resetCandles, seed: seedCandles } = useCandleBuilder({
     symbol: underlying,
     exchange: indexExchange,
     intervalSec: chartInterval,
@@ -694,8 +694,11 @@ export function IndexChartView({
       {/* Index label */}
       <div className="absolute top-1 left-2 flex items-center gap-1.5 pointer-events-none">
         <span className="text-xs font-bold text-foreground/80">{underlying}</span>
-        {!isConnected && (
+        {!isConnected && !isFallbackMode && (
           <span className="text-[10px] text-yellow-500">Connecting...</span>
+        )}
+        {!isConnected && isFallbackMode && (
+          <span className="text-[10px] text-blue-500">REST fallback</span>
         )}
       </div>
       <div className="absolute top-1 right-2 flex items-center gap-1 pointer-events-none">

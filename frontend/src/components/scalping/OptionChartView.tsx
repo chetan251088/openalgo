@@ -880,7 +880,7 @@ export function OptionChartView({
     [scheduleIndicatorRefresh]
   )
 
-  const { isConnected, reset: resetCandles, seed: seedCandles } = useCandleBuilder({
+  const { isConnected, isFallbackMode, reset: resetCandles, seed: seedCandles } = useCandleBuilder({
     symbol: symbol ?? '',
     exchange: optionExchange,
     intervalSec: chartInterval,
@@ -1292,9 +1292,14 @@ export function OptionChartView({
       )}
 
       {/* Connection status */}
-      {symbol && !isConnected && (
+      {symbol && !isConnected && !isFallbackMode && (
         <div className="absolute bottom-1 right-2 pointer-events-none">
           <span className="text-[10px] text-yellow-500">Connecting...</span>
+        </div>
+      )}
+      {symbol && !isConnected && isFallbackMode && (
+        <div className="absolute bottom-1 right-2 pointer-events-none">
+          <span className="text-[10px] text-blue-500">REST fallback</span>
         </div>
       )}
 

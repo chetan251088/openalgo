@@ -425,8 +425,29 @@ Major implemented behavior (high level):
    - added symbol-level fallback lookup when exchange in WS payload differs from subscribed exchange naming
    - prevents ATM recompute freeze and CE/PE row staleness when broker/feed emits alias exchange codes for the same symbol
 76. Option-chain near-ATM staleness recovery:
-   - scalping option-chain panel now keeps low-frequency REST refresh (`15s`) instead of one-shot-only polling
-   - WS remains primary for live ticks, but periodic snapshot refresh now self-heals rows when a subset of option symbols temporarily stops streaming
+    - scalping option-chain panel now keeps low-frequency REST refresh (`15s`) instead of one-shot-only polling
+    - WS remains primary for live ticks, but periodic snapshot refresh now self-heals rows when a subset of option symbols temporarily stops streaming
+77. CE/PE chart tick-resolution hardening:
+    - `useCandleBuilder` now resolves WS ticks with exchange-alias + symbol fallback instead of strict `EXCHANGE:SYMBOL` only lookup
+    - prevents option charts from appearing stuck when feed payload exchange labels differ from subscribed exchange naming while option-chain rows still update
+78. Unified proxy latency and failover hardening:
+    - `blueprints/multi_broker.py` now caches target broker OpenAlgo API keys per user session (`MULTI_BROKER_APIKEY_CACHE_TTL_S`, default `120s`) instead of resolving on every proxied request
+    - cached keys are auto-cleared on proxied `401/403` responses that indicate API-key errors, reducing stale-key loops
+    - cuts one extra `/api/websocket/apikey` round trip from most `/api/multibroker/v1` calls, improving hotkey/manual order responsiveness
+79. Unified feed timeout + chart status hardening:
+    - `proxyV1ByRole` now supports per-call timeout and short feed-broker cooldown after 5xx/timeout/network errors to avoid retrying a failing feed target on every call
+    - feed REST paths now use tighter timeouts (quotes/multiquotes/depth/optionchain/expiry), while history keeps a slightly wider timeout
+    - freeze-quantity symbol precheck now uses fast timeout + short failure cooldown fallback to avoid blocking hotkey orders when `/symbol` is slow
+    - chart overlays now show `REST fallback` (instead of forever `Connecting...`) when WS is unavailable but fallback polling is active
+80. Chart stall auto-heal fallback (no manual refresh required):
+    - `useCandleBuilder` now tracks last processed tick and detects stale streams (`~4s` with no updates)
+    - when stale (or when WS fallback mode is active), it polls `/api/v1/quotes` at low frequency (`~3s`) and feeds synthetic ticks into candle merge
+    - keeps CE/PE and index chart candles moving even if per-symbol WS ticks temporarily stop while option-chain continues via hybrid updates
+81. Unified positionbook 500 hardening + proxy diagnostics:
+    - `services/positionbook_service.py` now normalizes broker payload shapes (`list`, wrapped `data/positions/result`) before mapping
+    - broker responses that mean "no positions" are treated as successful empty positionbook (`status: success, data: []`) instead of hard 500
+    - `/api/multibroker/v1` now enriches upstream 5xx JSON with `proxy_broker` and `proxy_path`
+    - frontend `proxyV1ByRole` now logs broker/path/status/message for failed proxy attempts (`[MultiBroker] Proxy request failed`)
 
 ## 7) Still Important Gaps / Follow-ups
 

@@ -128,7 +128,12 @@ type SymbolInfoResponse = ApiResponse<SymbolInfoData>
 type TradeProduct = NonNullable<PlaceOrderRequest['product']>
 const MIN_AUTO_SLICE_FREEZE_QTY = 2
 const FALLBACK_AUTO_SLICE_LOTS = 10
+const FEED_PROXY_TIMEOUT_MS = 2000
+const HISTORY_PROXY_TIMEOUT_MS = 4500
+const FREEZE_LOOKUP_TIMEOUT_MS = 700
+const FREEZE_LOOKUP_FAILURE_COOLDOWN_MS = 5000
 const freezeQtyCache = new Map<string, number>()
+const freezeLookupFailureUntil = new Map<string, number>()
 const INDEX_PREFIXES = [
   'NIFTY',
   'BANKNIFTY',
@@ -368,6 +373,18 @@ async function getFreezeQtyForOrder(order: PlaceOrderRequest): Promise<number | 
     return freezeQtyCache.get(cacheKey) ?? null
   }
   const storeFallbackSliceSize = deriveStoreFallbackSliceSize(order)
+  const now = Date.now()
+  const retryAfter = freezeLookupFailureUntil.get(cacheKey) ?? 0
+  if (retryAfter > now) {
+    if (storeFallbackSliceSize != null) {
+      const normalizedStoreFallbackSliceSize = normalizeSliceSizeToLot(order, storeFallbackSliceSize)
+      if (normalizedStoreFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY) {
+        freezeQtyCache.set(cacheKey, normalizedStoreFallbackSliceSize)
+        return normalizedStoreFallbackSliceSize
+      }
+    }
+    return null
+  }
 
   try {
     const payload = {
@@ -377,15 +394,24 @@ async function getFreezeQtyForOrder(order: PlaceOrderRequest): Promise<number | 
     }
     let response: SymbolInfoResponse
     if (isMultiBrokerUnifiedMode()) {
-      response = await proxyV1ByRole<SymbolInfoResponse>('execution', 'symbol', payload)
+      response = await proxyV1ByRole<SymbolInfoResponse>(
+        'execution',
+        'symbol',
+        payload,
+        'POST',
+        { timeoutMs: FREEZE_LOOKUP_TIMEOUT_MS }
+      )
     } else {
-      const result = await apiClient.post<SymbolInfoResponse>('/symbol', payload)
+      const result = await apiClient.post<SymbolInfoResponse>('/symbol', payload, {
+        timeout: FREEZE_LOOKUP_TIMEOUT_MS,
+      })
       response = result.data
     }
     const freezeQty = parsePositiveInteger(response.data?.freeze_qty)
     if (freezeQty != null && freezeQty >= MIN_AUTO_SLICE_FREEZE_QTY) {
       const normalizedFreezeQty = normalizeSliceSizeToLot(order, freezeQty, response.data)
       if (normalizedFreezeQty >= MIN_AUTO_SLICE_FREEZE_QTY) {
+        freezeLookupFailureUntil.delete(cacheKey)
         freezeQtyCache.set(cacheKey, normalizedFreezeQty)
         return normalizedFreezeQty
       }
@@ -399,11 +425,13 @@ async function getFreezeQtyForOrder(order: PlaceOrderRequest): Promise<number | 
         response.data
       )
       if (normalizedFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY) {
+        freezeLookupFailureUntil.delete(cacheKey)
         freezeQtyCache.set(cacheKey, normalizedFallbackSliceSize)
         return normalizedFallbackSliceSize
       }
     }
   } catch (error) {
+    freezeLookupFailureUntil.set(cacheKey, Date.now() + FREEZE_LOOKUP_FAILURE_COOLDOWN_MS)
     console.warn('[Scalping] Auto-slice freeze lookup failed; using local fallback if available.', {
       symbol: order.symbol,
       exchange: order.exchange,
@@ -414,6 +442,7 @@ async function getFreezeQtyForOrder(order: PlaceOrderRequest): Promise<number | 
   if (storeFallbackSliceSize != null) {
     const normalizedStoreFallbackSliceSize = normalizeSliceSizeToLot(order, storeFallbackSliceSize)
     if (normalizedStoreFallbackSliceSize >= MIN_AUTO_SLICE_FREEZE_QTY) {
+      freezeLookupFailureUntil.delete(cacheKey)
       freezeQtyCache.set(cacheKey, normalizedStoreFallbackSliceSize)
       return normalizedStoreFallbackSliceSize
     }
@@ -505,7 +534,7 @@ export const tradingApi = {
         apikey: apiKey,
         symbol,
         exchange,
-      })
+      }, 'POST', { timeoutMs: FEED_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<ApiResponse<QuotesData>>('/quotes', {
       apikey: apiKey,
@@ -526,7 +555,7 @@ export const tradingApi = {
       return proxyV1ByRole<MultiQuotesApiResponse>('feed', 'multiquotes', {
         apikey: apiKey,
         symbols,
-      })
+      }, 'POST', { timeoutMs: FEED_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<MultiQuotesApiResponse>('/multiquotes', {
       apikey: apiKey,
@@ -556,7 +585,7 @@ export const tradingApi = {
         start_date: startDate,
         end_date: endDate,
         source,
-      })
+      }, 'POST', { timeoutMs: HISTORY_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<ApiResponse<HistoryCandleData[]>>('/history', {
       apikey: apiKey,
@@ -583,7 +612,7 @@ export const tradingApi = {
         apikey: apiKey,
         symbol,
         exchange,
-      })
+      }, 'POST', { timeoutMs: FEED_PROXY_TIMEOUT_MS })
     }
     const response = await apiClient.post<ApiResponse<DepthData>>('/depth', {
       apikey: apiKey,

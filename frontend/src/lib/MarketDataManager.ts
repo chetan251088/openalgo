@@ -897,7 +897,7 @@ export class MarketDataManager {
         data = await proxyV1ByRole<MultiQuotesApiResponse>('feed', 'multiquotes', {
           apikey: this.apiKey,
           symbols: symbolsArray,
-        })
+        }, 'POST', { timeoutMs: 1800 })
       } else {
         // Call multiquotes API
         const response = await fetch('/api/v1/multiquotes', {
