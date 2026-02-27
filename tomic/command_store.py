@@ -519,6 +519,101 @@ class CommandStore:
             ).fetchone()
             return row["cnt"] if row else 0
 
+    def get_dead_letters(self, limit: int = 50, offset: int = 0) -> List[CommandRow]:
+        """Return dead-lettered commands, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM commands
+                WHERE status = 'DEAD_LETTER'
+                ORDER BY processed_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+            return [self._row_to_command(r) for r in rows]
+
+    def requeue_dead_letter(self, row_id: int) -> bool:
+        """
+        Reset a single DEAD_LETTER row back to PENDING with a fresh attempt count.
+        Returns True if a row was updated, False if not found or wrong status.
+        """
+        with self._conn() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE commands
+                SET status = 'PENDING',
+                    attempt_count = 0,
+                    next_retry_at = NULL,
+                    last_error = 'Manual retry',
+                    processed_at = NULL,
+                    owner_token = NULL,
+                    lease_expires = NULL
+                WHERE id = ? AND status = 'DEAD_LETTER'
+                """,
+                (row_id,),
+            )
+            if cursor.rowcount == 0:
+                return False
+            logger.info("Command REQUEUED (manual): id=%d", row_id)
+            return True
+
+    def requeue_dead_letters_by_class(self, error_class: Optional[str] = None) -> int:
+        """
+        Bulk-requeue dead-lettered commands.
+        If error_class is given (e.g. 'network_timeout'), only requeue rows whose
+        last_error starts with '[error_class]'. Returns count requeued.
+        """
+        with self._conn() as conn:
+            if error_class:
+                prefix = f"[{error_class}]"
+                cursor = conn.execute(
+                    """
+                    UPDATE commands
+                    SET status = 'PENDING',
+                        attempt_count = 0,
+                        next_retry_at = NULL,
+                        last_error = 'Manual retry (bulk)',
+                        processed_at = NULL,
+                        owner_token = NULL,
+                        lease_expires = NULL
+                    WHERE status = 'DEAD_LETTER' AND last_error LIKE ?
+                    """,
+                    (f"{prefix}%",),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE commands
+                    SET status = 'PENDING',
+                        attempt_count = 0,
+                        next_retry_at = NULL,
+                        last_error = 'Manual retry (bulk)',
+                        processed_at = NULL,
+                        owner_token = NULL,
+                        lease_expires = NULL
+                    WHERE status = 'DEAD_LETTER'
+                    """,
+                )
+            count = cursor.rowcount
+            if count > 0:
+                logger.info("Bulk REQUEUE: %d dead-letter(s) restored, class_filter=%s", count, error_class)
+            return count
+
+    def get_commands(self, status: str, limit: int = 50, offset: int = 0) -> List[CommandRow]:
+        """Paginated command query by status."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM commands
+                WHERE status = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (status, limit, offset),
+            ).fetchall()
+            return [self._row_to_command(r) for r in rows]
+
     def reject_all_pending(self, reason: str = "System paused") -> int:
         """Kill switch: reject all queued commands. Returns count rejected."""
         with self._conn() as conn:

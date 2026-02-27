@@ -271,18 +271,52 @@ class CircuitBreakerEngine:
     # -----------------------------------------------------------------------
 
     def get_status_summary(self) -> Dict[str, object]:
-        """Diagnostic summary for observability endpoint."""
+        """Structured diagnostic summary per breaker for observability endpoint."""
         now = time.monotonic()
         with self._lock:
-            # Prune for accurate count
+            # Prune for accurate order rate count
             while self._order_timestamps and (now - self._order_timestamps[0]) > 60.0:
                 self._order_timestamps.popleft()
+            order_count = len(self._order_timestamps)
 
             return {
                 "capital": self._capital,
-                "orders_last_minute": len(self._order_timestamps),
-                "max_orders_per_minute": self._th.max_orders_per_minute,
-                "daily_max_loss_pct": self._th.daily_max_loss_pct,
-                "max_notional_multiple": self._th.max_gross_notional_multiple,
-                "unhedged_keys": list(self._unhedged_since.keys()),
+                "breakers": {
+                    "DAILY_MAX_LOSS": {
+                        "tripped": False,  # live check requires current PnL; static here
+                        "threshold_pct": self._th.daily_max_loss_pct,
+                        "description": f"Trip if daily PnL < -{self._th.daily_max_loss_pct:.0%} of capital",
+                        "message": "",
+                    },
+                    "ORDER_RATE": {
+                        "tripped": order_count >= self._th.max_orders_per_minute,
+                        "threshold": self._th.max_orders_per_minute,
+                        "current": order_count,
+                        "message": (
+                            f"{order_count} orders/min exceeds limit {self._th.max_orders_per_minute}"
+                            if order_count >= self._th.max_orders_per_minute else ""
+                        ),
+                    },
+                    "GROSS_NOTIONAL": {
+                        "tripped": False,  # live check requires current notional; static here
+                        "threshold_x": self._th.max_gross_notional_multiple,
+                        "description": f"Trip if gross notional > {self._th.max_gross_notional_multiple}x capital",
+                        "message": "",
+                    },
+                    "PER_UNDERLYING": {
+                        "tripped": False,
+                        "threshold_pct": self._th.per_underlying_margin_cap,
+                        "description": f"Trip if single underlying > {self._th.per_underlying_margin_cap:.0%} of margin",
+                        "message": "",
+                    },
+                    "UNHEDGED_EXPOSURE": {
+                        "tripped": bool(self._unhedged_since),
+                        "unhedged_count": len(self._unhedged_since),
+                        "timeout_s": self._th.unhedged_timeout_seconds,
+                        "message": (
+                            f"{len(self._unhedged_since)} unhedged position(s) tracked"
+                            if self._unhedged_since else ""
+                        ),
+                    },
+                },
             }

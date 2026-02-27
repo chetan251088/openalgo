@@ -202,6 +202,7 @@ packages = []
 testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+pythonpath = ["."]
 addopts = "-v --timeout=60"
 filterwarnings = [
     "ignore::DeprecationWarning",
