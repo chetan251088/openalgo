@@ -76,11 +76,11 @@ class TomicRuntime:
         self._last_signal_quality: Dict[str, Any] = {}
 
         self._signal_loop_enabled = self._resolve_bool_env("TOMIC_SIGNAL_LOOP_ENABLED", default=True)
-        self._signal_loop_interval_s = self._resolve_float_env("TOMIC_SIGNAL_LOOP_INTERVAL_S", default=5.0)
-        self._signal_enqueue_cooldown_s = self._resolve_float_env("TOMIC_SIGNAL_ENQUEUE_COOLDOWN_S", default=20.0)
+        self._signal_loop_interval_s = self._resolve_float_env("TOMIC_SIGNAL_LOOP_INTERVAL_S", default=60.0)
+        self._signal_enqueue_cooldown_s = self._resolve_float_env("TOMIC_SIGNAL_ENQUEUE_COOLDOWN_S", default=300.0)
         self._startup_enqueue_grace_s = self._resolve_non_negative_float_env(
             "TOMIC_STARTUP_ENQUEUE_GRACE_S",
-            default=20.0,
+            default=60.0,
         )
         self._require_live_tick_after_start = self._resolve_bool_env(
             "TOMIC_REQUIRE_LIVE_TICK_AFTER_START",
@@ -91,7 +91,7 @@ class TomicRuntime:
             default=True,
         )
         self._reject_alert_threshold = int(self._resolve_float_env("TOMIC_SIGNAL_REJECT_ALERT_THRESHOLD", default=5.0))
-        self._feed_stale_alert_after_s = self._resolve_float_env("TOMIC_FEED_STALE_ALERT_AFTER_S", default=15.0)
+        self._feed_stale_alert_after_s = self._resolve_float_env("TOMIC_FEED_STALE_ALERT_AFTER_S", default=60.0)
         self._alert_cooldown_s = self._resolve_float_env("TOMIC_ALERT_COOLDOWN_S", default=60.0)
         self._telegram_alerts_enabled = self._resolve_bool_env("TOMIC_TELEGRAM_ALERTS", default=True)
         self._enforce_market_hours = self._resolve_bool_env("TOMIC_ENFORCE_MARKET_HOURS", default=True)

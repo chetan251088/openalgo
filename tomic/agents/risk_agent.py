@@ -519,7 +519,7 @@ class RiskAgent(AgentBase):
         self.logger.info("Risk Agent stopped, %d trades processed", self._total_trades)
 
     def _get_tick_interval(self) -> float:
-        return 1.0
+        return 30.0  # process signal queue every 30s — options signals are enqueued at ~60s intervals
 
     # -------------------------------------------------------------------
     # Core: signal evaluation + sizing

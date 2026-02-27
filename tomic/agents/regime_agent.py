@@ -652,4 +652,4 @@ class RegimeAgent(AgentBase):
         self.logger.info("Regime Agent stopped at version %d", self._regime_state.current_version)
 
     def _get_tick_interval(self) -> float:
-        return 1.0  # 1-second rescore
+        return 300.0  # 5-min rescore — Ichimoku runs on hourly/daily candles, no value in faster rescoring

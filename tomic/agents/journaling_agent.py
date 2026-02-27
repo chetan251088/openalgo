@@ -51,7 +51,7 @@ class JournalingAgent(AgentBase):
         self._journaled_ids: set = set()
 
     def _get_tick_interval(self) -> float:
-        return 5.0  # scan every 5 seconds
+        return 60.0  # scan every 60s — journal latency of a minute is acceptable for options
 
     def _setup(self) -> None:
         """Initialize journal database."""

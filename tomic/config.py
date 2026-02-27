@@ -284,7 +284,7 @@ class ExecutionParams:
     no_entry_start: str = "09:15"            # no new entries 9:15-9:30
     no_entry_end: str = "09:30"
     auto_square_off: str = "15:15"           # MIS by 3:15 PM
-    command_poll_interval: float = 0.1       # 100ms poll
+    command_poll_interval: float = 0.5       # 500ms poll — options execution still fast, no need for 100ms
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +411,7 @@ class PositionManagerParams:
     delta_warning_threshold: float = 0.35
     delta_adjust_threshold: float = 0.45
     max_reentries_per_day: int = 2
-    check_interval_s: float = 5.0        # check every 5 seconds
+    check_interval_s: float = 60.0       # check every 60s — options P&L drifts slowly, 60s is plenty
     intraday_exit_hhmm: str = "15:00"    # force close at 3 PM
 
 
