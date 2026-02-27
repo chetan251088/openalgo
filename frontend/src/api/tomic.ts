@@ -308,4 +308,14 @@ export const tomicApi = {
     })
     return response.data
   },
+
+  deleteDeadLetter: async (id: number): Promise<TomicActionResponse> => {
+    const response = await webClient.delete<TomicActionResponse>(`/tomic/dead-letters/${id}`)
+    return response.data
+  },
+
+  deleteAllDeadLetters: async (): Promise<{ status: string; deleted: number }> => {
+    const response = await webClient.delete<{ status: string; deleted: number }>('/tomic/dead-letters')
+    return response.data
+  },
 }

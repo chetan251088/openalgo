@@ -1,4 +1,4 @@
-import { Activity, ChevronDown, ChevronRight, PauseCircle, PlayCircle, RefreshCw, RotateCcw, ShieldAlert, Square } from 'lucide-react'
+import { Activity, ChevronDown, ChevronRight, PauseCircle, PlayCircle, RefreshCw, RotateCcw, ShieldAlert, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
@@ -96,6 +96,7 @@ export default function TomicDashboard() {
   const [deadLetters, setDeadLetters] = useState<TomicDeadLetter[]>([])
   const [deadLettersLoading, setDeadLettersLoading] = useState(false)
   const [retryAllBusy, setRetryAllBusy] = useState(false)
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false)
 
   const loadData = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true)
@@ -198,6 +199,29 @@ export default function TomicDashboard() {
       setRetryAllBusy(false)
     }
   }, [fetchDeadLetters])
+
+  const handleDeleteOne = useCallback(async (id: number) => {
+    try {
+      await tomicApi.deleteDeadLetter(id)
+      setDeadLetters((prev) => prev.filter((item) => item.id !== id))
+      showToast.success('Dead letter deleted', 'monitoring')
+    } catch {
+      showToast.error('Failed to delete dead letter', 'monitoring')
+    }
+  }, [])
+
+  const handleDeleteAll = useCallback(async () => {
+    setDeleteAllBusy(true)
+    try {
+      const result = await tomicApi.deleteAllDeadLetters()
+      showToast.success(`Deleted ${result.deleted} dead letter(s)`, 'monitoring')
+      setDeadLetters([])
+    } catch {
+      showToast.error('Failed to delete all dead letters', 'monitoring')
+    } finally {
+      setDeleteAllBusy(false)
+    }
+  }, [])
 
   const runtime = status?.data
   const loop = runtime?.signal_loop
@@ -424,18 +448,33 @@ export default function TomicDashboard() {
               </CardTitle>
             </div>
             {deadLettersExpanded && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void handleRetryAll()
-                }}
-                disabled={retryAllBusy || deadLetters.length === 0}
-              >
-                <RotateCcw className={`h-3.5 w-3.5 mr-1.5 ${retryAllBusy ? 'animate-spin' : ''}`} />
-                {retryAllBusy ? 'Retrying...' : 'Retry All Transient'}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleRetryAll()
+                  }}
+                  disabled={retryAllBusy || deadLetters.length === 0}
+                >
+                  <RotateCcw className={`h-3.5 w-3.5 mr-1.5 ${retryAllBusy ? 'animate-spin' : ''}`} />
+                  {retryAllBusy ? 'Retrying...' : 'Retry All Transient'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleDeleteAll()
+                  }}
+                  disabled={deleteAllBusy || deadLetters.length === 0}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                  {deleteAllBusy ? 'Deleting...' : 'Delete All'}
+                </Button>
+              </div>
             )}
           </div>
           <CardDescription>
@@ -497,17 +536,28 @@ export default function TomicDashboard() {
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">{ageStr}</TableCell>
                           <TableCell>
-                            {!isPermanent && (
+                            <div className="flex items-center gap-1">
+                              {!isPermanent && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => void handleRetryOne(item.id)}
+                                >
+                                  <RotateCcw className="h-3 w-3 mr-1" />
+                                  Retry
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => void handleRetryOne(item.id)}
+                                className="h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => void handleDeleteOne(item.id)}
                               >
-                                <RotateCcw className="h-3 w-3 mr-1" />
-                                Retry
+                                <Trash2 className="h-3 w-3 mr-1" />
+                                Delete
                               </Button>
-                            )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       )

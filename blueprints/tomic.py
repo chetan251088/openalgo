@@ -599,6 +599,58 @@ def retry_dead_letter(row_id: int):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@tomic_bp.route("/dead-letters", methods=["DELETE"])
+def delete_all_dead_letters():
+    """Permanently delete all dead-letter commands."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
+
+    try:
+        store = runtime.command_store
+        count = store.delete_all_dead_letters()
+        _audit_log(
+            "dead_letter.delete_all",
+            f"deleted={count}",
+            category="DEAD_LETTER",
+        )
+        return jsonify({"status": "success", "deleted": count})
+    except Exception as e:
+        logger.error("delete_all_dead_letters failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@tomic_bp.route("/dead-letters/<int:row_id>", methods=["DELETE"])
+def delete_dead_letter(row_id: int):
+    """Permanently delete a single dead-letter command."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
+
+    try:
+        store = runtime.command_store
+        ok = store.delete_dead_letter(row_id)
+        if not ok:
+            return jsonify({"status": "error", "message": "Dead-letter command not found"}), 404
+        _audit_log(
+            "dead_letter.delete",
+            f"id={row_id}",
+            category="DEAD_LETTER",
+        )
+        return jsonify({"status": "success", "message": "Command deleted"})
+    except Exception as e:
+        logger.error("delete_dead_letter(%s) failed: %s", row_id, e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @tomic_bp.route("/commands", methods=["GET"])
 def get_commands():
     """List commands from the CommandStore filtered by status."""

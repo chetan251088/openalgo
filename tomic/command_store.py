@@ -600,6 +600,27 @@ class CommandStore:
                 logger.info("Bulk REQUEUE: %d dead-letter(s) restored, class_filter=%s", count, error_class)
             return count
 
+    def delete_dead_letter(self, row_id: int) -> bool:
+        """Permanently delete a single DEAD_LETTER row. Returns False if not found/wrong status."""
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM commands WHERE id = ? AND status = 'DEAD_LETTER'",
+                (row_id,),
+            )
+            if cursor.rowcount == 0:
+                return False
+            logger.info("Command DELETED (dead-letter): id=%d", row_id)
+            return True
+
+    def delete_all_dead_letters(self) -> int:
+        """Permanently delete all DEAD_LETTER rows. Returns count deleted."""
+        with self._conn() as conn:
+            cursor = conn.execute("DELETE FROM commands WHERE status = 'DEAD_LETTER'")
+            count = cursor.rowcount
+            if count > 0:
+                logger.info("Bulk DELETE: %d dead-letter(s) purged", count)
+            return count
+
     def get_commands(self, status: str, limit: int = 50, offset: int = 0) -> List[CommandRow]:
         """Paginated command query by status."""
         with self._conn() as conn:
