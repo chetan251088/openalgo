@@ -37,18 +37,6 @@ function resolveMetric(metrics: Record<string, unknown> | undefined, candidates:
 
 const PERMANENT_ERROR_CLASSES = new Set(['broker_reject', 'validation'])
 
-function parseDeadLetterError(lastError: string): { errorClass: string; errorMessage: string } {
-  if (lastError.startsWith('[')) {
-    const closingIdx = lastError.indexOf(']')
-    if (closingIdx > 0) {
-      return {
-        errorClass: lastError.slice(1, closingIdx),
-        errorMessage: lastError.slice(closingIdx + 1).trimStart(),
-      }
-    }
-  }
-  return { errorClass: 'unknown', errorMessage: lastError }
-}
 
 function formatAge(dateStr: string): string {
   const now = Date.now()
@@ -479,7 +467,8 @@ export default function TomicDashboard() {
                   </TableHeader>
                   <TableBody>
                     {deadLetters.map((item) => {
-                      const { errorClass, errorMessage } = parseDeadLetterError(item.last_error)
+                      const errorClass = item.error_class ?? 'unknown'
+                      const errorMessage = item.error_message ?? ''
                       const isPermanent = PERMANENT_ERROR_CLASSES.has(errorClass)
                       const badgeVariant = errorClassBadgeVariant(errorClass)
                       const badgeClass = errorClassBadgeClass(errorClass)

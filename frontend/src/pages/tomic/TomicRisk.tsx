@@ -263,7 +263,7 @@ export default function TomicRisk() {
                       </div>
                       <div className="text-xs text-muted-foreground space-y-0.5">
                         {breaker.threshold_pct != null && (
-                          <div>Threshold: {breaker.threshold_pct}% | Current: {breaker.current_pct ?? '—'}%</div>
+                          <div>Threshold: {breaker.threshold_pct}% | Current: {breaker.current ?? '—'}%</div>
                         )}
                         {breaker.threshold != null && breaker.threshold_pct == null && (
                           <div>Threshold: {breaker.threshold} | Current: {breaker.current ?? '—'}</div>
