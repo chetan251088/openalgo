@@ -368,29 +368,28 @@ class TomicRuntime:
         When run_scan=False:
           - returns the latest cached snapshot if available.
         """
+        _QUALITY_TTL_S = 60.0
         if not run_scan:
             with self._quality_lock:
                 if self._last_signal_quality:
-                    cached = self._last_signal_quality.copy()
-                    cached["cached"] = True
-                    cached["cached_age_s"] = round(
-                        max(0.0, time.time() - float(cached.get("timestamp_epoch", time.time()))), 2
-                    )
-                    return cached
-            return {
-                "generated_at": "",
-                "timestamp_epoch": 0.0,
-                "runtime_started": self._started,
-                "cached": True,
-                "cached_age_s": -1.0,
-                "message": "No cached signal-quality snapshot yet. Run with run_scan=true first.",
-                "signals": {
-                    "sniper_count": 0,
-                    "volatility_count": 0,
-                    "routed_count": 0,
-                    "decision_breakdown": {"ACCEPT": 0, "REJECT": 0, "DEFER": 0, "MERGE": 0},
-                },
-            }
+                    age_s = max(0.0, time.time() - float(
+                        self._last_signal_quality.get("timestamp_epoch", 0.0)
+                    ))
+                    if age_s <= _QUALITY_TTL_S:
+                        cached = self._last_signal_quality.copy()
+                        cached["cached"] = True
+                        cached["cached_age_s"] = round(age_s, 2)
+                        return cached
+                    # Cache stale — fall through to fresh scan below
+                else:
+                    return {
+                        "generated_at": "",
+                        "timestamp_epoch": 0.0,
+                        "runtime_started": self._started,
+                        "cached": True,
+                        "cached_age_s": 0.0,
+                        "message": "No signal quality snapshot available yet.",
+                    }
 
         snapshot = self._compute_signal_quality_snapshot(enqueue_signals=False, source="api")
         with self._quality_lock:
