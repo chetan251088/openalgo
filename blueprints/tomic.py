@@ -7,12 +7,13 @@ Status/data APIs: GET /tomic/status|positions|journal|analytics|metrics
 All control actions logged to audit table.
 """
 
+import dataclasses
 import os
 import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import Blueprint, jsonify, request, session
 
@@ -31,6 +32,7 @@ _tomic_runtime = None
 _audit_db_path = "db/tomic_audit.db"
 _last_position_sync_mono = 0.0
 _position_sync_min_interval_s = float(os.getenv("TOMIC_POSITIONS_SYNC_MIN_INTERVAL_S", "2.0"))
+_audit_category_column_ensured = False
 
 
 def _get_runtime():
@@ -56,7 +58,26 @@ def _require_auth():
     return None
 
 
-def _audit_log(action: str, details: str = "") -> None:
+def _ensure_audit_category_column() -> None:
+    """Add category column to audit_log if it doesn't exist (idempotent migration)."""
+    global _audit_category_column_ensured
+    if _audit_category_column_ensured:
+        return
+    try:
+        Path(_audit_db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(_audit_db_path, timeout=5.0)
+        # Check whether the column already exists
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()]
+        if "category" not in cols:
+            conn.execute("ALTER TABLE audit_log ADD COLUMN category TEXT DEFAULT 'CONTROL'")
+            conn.commit()
+        conn.close()
+        _audit_category_column_ensured = True
+    except Exception as e:
+        logger.error("Audit category column migration failed: %s", e)
+
+
+def _audit_log(action: str, details: str = "", category: str = "CONTROL") -> None:
     """Log control action to audit table."""
     try:
         Path(_audit_db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -71,13 +92,15 @@ def _audit_log(action: str, details: str = "") -> None:
                 ip_address TEXT
             )
         """)
+        _ensure_audit_category_column()
         conn.execute(
-            "INSERT INTO audit_log (user_id, action, details, ip_address) VALUES (?,?,?,?)",
+            "INSERT INTO audit_log (user_id, action, details, ip_address, category) VALUES (?,?,?,?,?)",
             (
                 session.get("user", "unknown"),
                 action,
                 details,
                 request.remote_addr or "unknown",
+                category,
             ),
         )
         conn.commit()
@@ -437,23 +460,173 @@ def get_signal_quality():
 
 @tomic_bp.route("/audit", methods=["GET"])
 def get_audit_log():
-    """Get recent audit log entries."""
+    """Get recent audit log entries, with optional ?category= filter."""
     auth_err = _require_auth()
     if auth_err:
         return auth_err
 
     limit = request.args.get("limit", 100, type=int)
+    category_filter = request.args.get("category", "").strip() or None
     try:
+        _ensure_audit_category_column()
         conn = sqlite3.connect(_audit_db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if category_filter:
+            rows = conn.execute(
+                "SELECT id, timestamp, user_id, action, details, ip_address, category"
+                " FROM audit_log WHERE category = ? ORDER BY timestamp DESC LIMIT ?",
+                (category_filter, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, timestamp, user_id, action, details, ip_address, category"
+                " FROM audit_log ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         conn.close()
         return jsonify({
             "status": "success",
             "entries": [dict(r) for r in rows],
         })
     except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter endpoints (CommandStore integration)
+# ---------------------------------------------------------------------------
+
+def _command_row_to_dict(row) -> Dict[str, Any]:
+    """Serialize a CommandRow dataclass to a plain dict."""
+    if dataclasses.is_dataclass(row) and not isinstance(row, type):
+        return dataclasses.asdict(row)
+    # Fallback: try __dict__
+    return dict(vars(row))
+
+
+def _command_row_to_dead_letter_dict(row, payload_max: int = 120) -> Dict[str, Any]:
+    """Serialize a CommandRow for the dead-letters endpoint (with payload preview)."""
+    d = _command_row_to_dict(row)
+    raw_payload = str(d.get("payload") or "")
+    d["payload_preview"] = raw_payload[:payload_max] if len(raw_payload) > payload_max else raw_payload
+    d.pop("payload", None)
+    return d
+
+
+@tomic_bp.route("/dead-letters", methods=["GET"])
+def get_dead_letters():
+    """List DEAD_LETTER commands from the CommandStore."""
+    limit = min(request.args.get("limit", 50, type=int), 200)
+    offset = request.args.get("offset", 0, type=int)
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({
+            "status": "unavailable",
+            "items": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+        })
+
+    try:
+        store = runtime.command_store
+        rows = store.get_dead_letters(limit=limit, offset=offset)
+        items = [_command_row_to_dead_letter_dict(r) for r in rows]
+        return jsonify({
+            "status": "success",
+            "total": len(items),
+            "limit": limit,
+            "offset": offset,
+            "items": items,
+        })
+    except Exception as e:
+        logger.error("get_dead_letters failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@tomic_bp.route("/dead-letters/retry-all", methods=["POST"])
+def retry_all_dead_letters():
+    """Requeue all (or filtered) DEAD_LETTER commands back to PENDING."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
+
+    error_class: Optional[str] = request.args.get("error_class", "").strip() or None
+
+    try:
+        store = runtime.command_store
+        count = store.requeue_dead_letters_by_class(error_class or None)
+        _audit_log(
+            "dead_letter.retry_all",
+            f"error_class={error_class}, requeued={count}",
+            category="DEAD_LETTER",
+        )
+        return jsonify({"status": "success", "requeued": count})
+    except Exception as e:
+        logger.error("retry_all_dead_letters failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@tomic_bp.route("/dead-letters/<int:row_id>/retry", methods=["POST"])
+def retry_dead_letter(row_id: int):
+    """Requeue a single DEAD_LETTER command back to PENDING."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
+
+    try:
+        store = runtime.command_store
+        ok = store.requeue_dead_letter(row_id)
+        if not ok:
+            return jsonify({"status": "error", "message": "Dead-letter command not found"}), 404
+        _audit_log(
+            "dead_letter.retry",
+            f"id={row_id}",
+            category="DEAD_LETTER",
+        )
+        return jsonify({"status": "success", "message": "Command requeued"})
+    except Exception as e:
+        logger.error("retry_dead_letter(%s) failed: %s", row_id, e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@tomic_bp.route("/commands", methods=["GET"])
+def get_commands():
+    """List commands from the CommandStore filtered by status."""
+    status_filter = request.args.get("status", "DONE").strip().upper()
+    limit = min(request.args.get("limit", 50, type=int), 200)
+    offset = request.args.get("offset", 0, type=int)
+
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({
+            "status": "unavailable",
+            "status_filter": status_filter,
+            "limit": limit,
+            "offset": offset,
+            "items": [],
+        })
+
+    try:
+        store = runtime.command_store
+        rows = store.get_commands(status_filter, limit=limit, offset=offset)
+        items = [_command_row_to_dead_letter_dict(r) for r in rows]
+        return jsonify({
+            "status": "success",
+            "status_filter": status_filter,
+            "limit": limit,
+            "offset": offset,
+            "items": items,
+        })
+    except Exception as e:
+        logger.error("get_commands failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
