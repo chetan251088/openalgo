@@ -66,10 +66,29 @@ export interface TomicAnalyticsResponse {
   message?: string
 }
 
+// Structured per-breaker details
+export interface TomicCircuitBreakerDetail {
+  tripped: boolean
+  threshold_pct?: number
+  threshold?: number
+  threshold_x?: number
+  current?: number
+  current_x?: number
+  unhedged_count?: number
+  timeout_s?: number
+  description?: string
+  message: string
+}
+
+export interface TomicCircuitBreakersStructured {
+  capital: number
+  breakers: Record<string, TomicCircuitBreakerDetail>
+}
+
 export interface TomicMetricsResponse {
   status: string
   data?: {
-    circuit_breakers?: Record<string, unknown>
+    circuit_breakers?: TomicCircuitBreakersStructured | Record<string, unknown>
     freshness?: Record<string, unknown>
     ws_data?: Record<string, unknown>
     market_bridge?: Record<string, unknown>
@@ -144,11 +163,46 @@ export interface TomicAuditEntry {
   action: string
   details?: string
   ip_address?: string
+  category?: string
 }
 
 export interface TomicAuditResponse {
   status: string
   entries: TomicAuditEntry[]
+  message?: string
+}
+
+// Dead letter record with parsed error class
+export interface TomicDeadLetter {
+  id: number
+  event_id: string
+  event_type: string
+  source_agent: string
+  status: string
+  error_class: string
+  error_message: string
+  attempt_count: number
+  max_attempts: number
+  instrument: string
+  created_at: string
+  processed_at: string | null
+}
+
+export interface TomicDeadLettersResponse {
+  status: string
+  total: number
+  limit: number
+  offset: number
+  items: TomicDeadLetter[]
+  message?: string
+}
+
+export interface TomicCommandsResponse {
+  status: string
+  status_filter: string
+  limit: number
+  offset: number
+  items: TomicDeadLetter[]
   message?: string
 }
 
@@ -215,6 +269,42 @@ export const tomicApi = {
   getAudit: async (limit = 100): Promise<TomicAuditResponse> => {
     const response = await webClient.get<TomicAuditResponse>('/tomic/audit', {
       params: { limit },
+    })
+    return response.data
+  },
+
+  getDeadLetters: async (limit = 50, offset = 0): Promise<TomicDeadLettersResponse> => {
+    const response = await webClient.get<TomicDeadLettersResponse>('/tomic/dead-letters', {
+      params: { limit, offset },
+    })
+    return response.data
+  },
+
+  retryDeadLetter: async (id: number): Promise<TomicActionResponse> => {
+    const response = await webClient.post<TomicActionResponse>(`/tomic/dead-letters/${id}/retry`)
+    return response.data
+  },
+
+  retryAllDeadLetters: async (errorClass?: string): Promise<{ status: string; requeued: number; error_class: string | null }> => {
+    const params = errorClass ? { error_class: errorClass } : {}
+    const response = await webClient.post<{ status: string; requeued: number; error_class: string | null }>(
+      '/tomic/dead-letters/retry-all',
+      {},
+      { params },
+    )
+    return response.data
+  },
+
+  getCommands: async (status = 'DONE', limit = 50, offset = 0): Promise<TomicCommandsResponse> => {
+    const response = await webClient.get<TomicCommandsResponse>('/tomic/commands', {
+      params: { status, limit, offset },
+    })
+    return response.data
+  },
+
+  getAuditByCategory: async (category: string, limit = 100): Promise<TomicAuditResponse> => {
+    const response = await webClient.get<TomicAuditResponse>('/tomic/audit', {
+      params: { category, limit },
     })
     return response.data
   },
