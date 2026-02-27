@@ -105,6 +105,136 @@ class ExecutionAgent(AgentBase):
         self._max_queue_age_s = self._env_float("TOMIC_MAX_QUEUE_AGE_S", 10.0, min_value=0.0)
         self._virtual_positions: Dict[str, Dict[str, Any]] = {}
 
+        # LegResolver support — lazy-init GreeksEngine for delta-based strike resolution
+        from tomic.greeks_engine import GreeksEngine
+        self._greeks_engine = GreeksEngine()
+
+    def set_ws_manager(self, ws_manager) -> None:
+        """Inject WS data manager for real-time price lookups (called by runtime)."""
+        self._ws_data_manager = ws_manager
+
+    # -----------------------------------------------------------------------
+    # Multi-leg symbol resolution via LegResolver (new options selling flow)
+    # -----------------------------------------------------------------------
+
+    def _resolve_legs_for_command(
+        self,
+        payload: Dict[str, Any],
+    ):
+        """
+        Resolve abstract leg delta targets to real option symbols.
+        Called before placing multi-leg options selling orders.
+
+        Returns List[LegResolution] or empty list on failure.
+        """
+        from tomic.leg_resolver import LegResolver
+
+        instrument = str(payload.get("instrument", "")).upper()
+        strategy_type = str(payload.get("strategy_type", ""))
+        short_delta = float(payload.get("short_delta_target", 0.25))
+        wing_delta = float(payload.get("wing_delta_target", 0.10))
+        expiry_date = str(payload.get("expiry_date", ""))
+
+        spot = self._get_spot_price(instrument)
+        if spot <= 0:
+            logger.warning("LegResolver: no spot price for %s", instrument)
+            return []
+
+        strikes, prices, dte = self._get_strikes_and_prices(instrument, expiry_date)
+        if not strikes:
+            logger.warning("LegResolver: no strikes for %s expiry=%s", instrument, expiry_date)
+            return []
+
+        resolver = LegResolver(greeks_engine=self._greeks_engine)
+
+        if strategy_type == "IRON_CONDOR":
+            return resolver.resolve_iron_condor(
+                strikes=strikes, prices=prices, spot=spot, dte=dte,
+                short_delta=short_delta, wing_delta=wing_delta,
+            )
+        if strategy_type == "BULL_PUT_SPREAD":
+            return resolver.resolve_bull_put_spread(
+                strikes=strikes, prices=prices, spot=spot, dte=dte,
+                short_delta=short_delta, wing_delta=wing_delta,
+            )
+        if strategy_type == "BEAR_CALL_SPREAD":
+            return resolver.resolve_bear_call_spread(
+                strikes=strikes, prices=prices, spot=spot, dte=dte,
+                short_delta=short_delta, wing_delta=wing_delta,
+            )
+        if strategy_type == "GAMMA_CAPTURE":
+            max_price = float(payload.get("max_option_price",
+                                           self._config.expiry.max_option_price))
+            return resolver.resolve_gamma_capture(
+                strikes=strikes, prices=prices, spot=spot, max_price=max_price,
+            )
+
+        logger.warning("LegResolver: unknown strategy_type=%s", strategy_type)
+        return []
+
+    def _get_spot_price(self, instrument: str) -> float:
+        """Get current spot price from WS data manager."""
+        exchange = (
+            "NSE_INDEX" if instrument in {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+            else "BSE_INDEX" if instrument in {"SENSEX", "BANKEX"}
+            else "NSE"
+        )
+        return self._get_ws_price(symbol=instrument, exchange=exchange)
+
+    def _get_strikes_and_prices(
+        self,
+        instrument: str,
+        expiry_date: str,
+    ):
+        """
+        Fetch available strikes + LTPs + DTE for an instrument/expiry.
+        Returns (strikes_list, prices_dict, dte_days).
+        """
+        from datetime import datetime as _dt
+        try:
+            exchange = (
+                "NFO" if instrument in {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+                else "BFO" if instrument in {"SENSEX", "BANKEX"}
+                else "NFO"
+            )
+
+            # DTE computation
+            dte = 7.0
+            if expiry_date:
+                try:
+                    expiry_dt = _dt.strptime(expiry_date.upper(), "%d%b%y")
+                    dte = max(0.1, (_dt.now() - expiry_dt).days * -1 + 1.0)
+                except ValueError:
+                    dte = 7.0
+
+            # Attempt to get strikes from WS data manager's known symbols
+            # Falls back to empty list — ExecutionAgent will log and skip resolution
+            if not self._ws_data_manager:
+                return [], {}, dte
+
+            strikes_raw = getattr(self._ws_data_manager, "get_strikes_for_expiry", None)
+            if callable(strikes_raw):
+                strikes = sorted(strikes_raw(instrument, expiry_date, exchange) or [])
+            else:
+                return [], {}, dte
+
+            if not strikes:
+                return [], {}, dte
+
+            prices: Dict[float, float] = {}
+            for strike in strikes:
+                for opt_type in ("CE", "PE"):
+                    symbol = f"{instrument}{expiry_date}{int(strike)}{opt_type}"
+                    ltp = self._get_ws_price(symbol=symbol, exchange=exchange)
+                    if ltp > 0:
+                        prices[strike] = ltp
+
+            return strikes, prices, dte
+
+        except Exception as exc:
+            logger.warning("_get_strikes_and_prices failed for %s: %s", instrument, exc)
+            return [], {}, 0.0
+
     def _get_tick_interval(self) -> float:
         return self._exec_params.command_poll_interval  # 100ms
 
