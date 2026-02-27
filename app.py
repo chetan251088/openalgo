@@ -413,7 +413,7 @@ def create_app():
 
         # Check if it's a CSRF error
         if "CSRF" in error_description or "csrf" in error_description.lower():
-            if request.is_json or request.path.startswith("/api"):
+            if request.is_json or request.path.startswith("/api") or request.path.startswith("/tomic"):
                 return jsonify(
                     {
                         "error": "CSRF validation failed",
