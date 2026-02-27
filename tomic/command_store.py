@@ -600,6 +600,26 @@ class CommandStore:
                 logger.info("Bulk REQUEUE: %d dead-letter(s) restored, class_filter=%s", count, error_class)
             return count
 
+    def has_active_order(self, strategy_tag: str) -> bool:
+        """Return True if a non-terminal ORDER_REQUEST exists for strategy_tag.
+
+        Checks for PENDING, RUNNING, FAILED (retry cycle), or DEAD_LETTER commands
+        whose idempotency_key starts with ``{strategy_tag}:entry:``.  A DONE command
+        means the order completed and re-entry is allowed.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM commands
+                WHERE event_type = 'ORDER_REQUEST'
+                  AND status IN ('PENDING', 'RUNNING', 'FAILED', 'DEAD_LETTER')
+                  AND idempotency_key LIKE ?
+                LIMIT 1
+                """,
+                (f"{strategy_tag}:entry:%",),
+            ).fetchone()
+            return row is not None
+
     def delete_dead_letter(self, row_id: int) -> bool:
         """Permanently delete a single DEAD_LETTER row. Returns False if not found/wrong status."""
         with self._conn() as conn:

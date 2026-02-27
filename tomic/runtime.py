@@ -776,6 +776,16 @@ class TomicRuntime:
                 dedupe_keys.append(key)
                 continue
 
+            # Block if a non-terminal ORDER_REQUEST already exists for this strategy.
+            # Prevents repeat entries when orders are pending, retrying, or dead-lettered.
+            strategy_tag = f"TOMIC_{strategy_type}_{instrument}"
+            if self.command_store.has_active_order(strategy_tag):
+                dedupe_keys.append(key)
+                logger.debug(
+                    "Signal suppressed — active order exists for %s", strategy_tag
+                )
+                continue
+
             signal.setdefault("correlation_id", f"{source}:{instrument}:{int(time.time() * 1000)}:{idx}")
             route_decision = getattr(routed, "route_decision", None)
             if route_decision is not None:

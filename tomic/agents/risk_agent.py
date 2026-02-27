@@ -939,9 +939,11 @@ class RiskAgent(AgentBase):
         # Build strategy tag
         strategy_tag = f"TOMIC_{strategy_type}_{instrument}"
 
-        # Build idempotency key
+        # Build idempotency key — use correlation_id (contains ms timestamp) so
+        # two signals for the same strategy in the same loop tick share the key
+        # and the second is blocked by the UNIQUE constraint.
         correlation_id = signal.get("correlation_id", "")
-        idem_key = f"{strategy_tag}:entry:{int(time.time())}"
+        idem_key = f"{strategy_tag}:entry:{correlation_id or int(time.time())}"
         entry_reason, entry_reason_meta = self._build_entry_reason(signal, sizing, regime)
 
         # Create order request event
