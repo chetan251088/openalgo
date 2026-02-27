@@ -279,6 +279,8 @@ class TomicMarketBridge:
             dividend_yield=max(0.0, _safe_float(os.getenv("TOMIC_OPTION_IV_DIVIDEND_YIELD"), 0.0)),
         )
 
+        self._market_context_agent = None  # set via set_market_context_agent()
+
         self._stats: Dict[str, Any] = {
             "ticks_total": 0,
             "underlying_ticks": 0,
@@ -321,6 +323,11 @@ class TomicMarketBridge:
             self._running = False
             self._ws.set_tick_callback(None)
             logger.info("TOMIC market bridge stopped")
+
+    def set_market_context_agent(self, agent) -> None:
+        """Wire a MarketContextAgent for options-selling pipeline feeds."""
+        with self._lock:
+            self._market_context_agent = agent
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
@@ -381,12 +388,16 @@ class TomicMarketBridge:
                         wall_time=wall_time,
                     )
                     self._handle_underlying_tick(symbol_key, symbol, exchange, ltp, volume, ts)
+                    if self._market_context_agent is not None:
+                        self._market_context_agent.feed_ltp(symbol, ltp)
 
                 if symbol_key in self._sniper_keys:
                     self._handle_sniper_tick(symbol_key, symbol, ltp, volume, ts)
 
                 if symbol_key == self._vix_key:
                     self._regime.feed_vix(ltp)
+                    if self._market_context_agent is not None:
+                        self._market_context_agent.feed_vix(ltp)
                     self._freshness.update_vix()
 
                 if symbol.endswith("CE") or symbol.endswith("PE"):
@@ -421,6 +432,8 @@ class TomicMarketBridge:
             self._stats["candles_built_regime"] += 1
             self._sniper.feed_benchmark(close)
         self._vol.feed_price(symbol, close)
+        if self._market_context_agent is not None:
+            self._market_context_agent.feed_candle(symbol, close)
 
     def _handle_sniper_tick(self, symbol_key: str, symbol: str, ltp: float, volume: float, ts: float) -> None:
         builder = self._sniper_candles.get(symbol_key)

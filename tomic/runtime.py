@@ -25,6 +25,12 @@ from tomic.agents.regime_agent import AtomicRegimeState, RegimeAgent
 from tomic.agents.risk_agent import RiskAgent
 from tomic.agents.sniper_agent import SniperAgent
 from tomic.agents.volatility_agent import VolatilityAgent
+# New options-selling pipeline agents
+from tomic.agents.market_context_agent import MarketContextAgent
+from tomic.agents.daily_plan_agent import DailyPlanAgent
+from tomic.agents.strategy_engine import StrategyEngine
+from tomic.agents.position_manager import PositionManager
+from tomic.agents.expiry_specialist import ExpirySpecialist
 from tomic.circuit_breakers import CircuitBreakerEngine
 from tomic.command_store import CommandStore
 from tomic.config import TomicConfig
@@ -132,6 +138,7 @@ class TomicRuntime:
         self._signal_recent_enqueues: Dict[str, float] = {}
         self._reject_streaks: Dict[str, int] = {}
         self._last_dead_letter_count = 0
+        self._morning_plan_last_date: Optional[date] = None
         self._runtime_started_wall = 0.0
         self._runtime_started_mono = 0.0
         self._feed_disconnected_alert_active = False
@@ -176,6 +183,31 @@ class TomicRuntime:
             config=self.config,
             regime_state=self.regime_state,
         )
+
+        # --- New options-selling pipeline ---
+        self.market_context_agent = MarketContextAgent(config=self.config)
+
+        self.daily_plan_agent = DailyPlanAgent(
+            config=self.config,
+            market_context_agent=self.market_context_agent,
+            regime_state=self.regime_state,
+        )
+
+        self.strategy_engine = StrategyEngine(
+            config=self.config,
+            daily_plan_agent=self.daily_plan_agent,
+            market_context_agent=self.market_context_agent,
+            regime_state=self.regime_state,
+        )
+
+        self.position_manager = PositionManager(
+            config=self.config,
+            position_book=self.position_book,
+            command_store=self.command_store,
+        )
+
+        self.expiry_specialist = ExpirySpecialist(config=self.config)
+
         self.market_bridge = TomicMarketBridge(
             config=self.config,
             ws_data_manager=self.ws_data_manager,
@@ -184,6 +216,7 @@ class TomicRuntime:
             sniper_agent=self.sniper_agent,
             volatility_agent=self.volatility_agent,
         )
+        self.market_bridge.set_market_context_agent(self.market_context_agent)
         self.risk_agent = RiskAgent(
             config=self.config,
             publisher=self._publisher,
@@ -269,6 +302,9 @@ class TomicRuntime:
                 self.supervisor.start(zmq_port=self._zmq_port)
                 started_stoppers.append(self.supervisor.stop)
 
+                self.position_manager.start()
+                started_stoppers.append(self.position_manager.stop)
+
                 self._started = True
                 if self._signal_loop_enabled:
                     self._start_signal_loop()
@@ -307,6 +343,8 @@ class TomicRuntime:
                 self.risk_agent.stop()
             with suppress(Exception):
                 self.regime_agent.stop()
+            with suppress(Exception):
+                self.position_manager.stop()
             with suppress(Exception):
                 self._publisher.stop()
 
@@ -354,6 +392,20 @@ class TomicRuntime:
             status["signal_quality_cached_age_s"] = round(
                 max(0.0, time.time() - float(cached.get("timestamp_epoch", time.time()))), 2
             )
+        # New options-selling pipeline status
+        try:
+            import dataclasses
+            status["market_context"] = dataclasses.asdict(self.market_context_agent.read_context())
+        except Exception:
+            status["market_context"] = {}
+        try:
+            status["daily_plans"] = self.daily_plan_agent.get_summary()
+        except Exception:
+            status["daily_plans"] = {}
+        try:
+            status["position_manager"] = self.position_manager.get_states()
+        except Exception:
+            status["position_manager"] = {}
         return status
 
     def get_signal_quality(self, run_scan: bool = True) -> Dict[str, Any]:
@@ -453,7 +505,40 @@ class TomicRuntime:
             wait_s = max(0.1, self._signal_loop_interval_s - elapsed)
             self._signal_loop_stop.wait(wait_s)
 
+    def _maybe_run_morning_plan(self) -> None:
+        """
+        Generate daily trade plans at 9:45 AM IST if not already done today.
+        Resets DailyPlanAgent and ExpirySpecialist on a new trading day.
+        """
+        try:
+            tz = self._market_tz
+            now_local = datetime.now(tz=tz) if tz else datetime.now()
+            today = now_local.date()
+
+            # Reset for new day when calendar date changes
+            if self._morning_plan_last_date is not None and today != self._morning_plan_last_date:
+                self.daily_plan_agent.reset_for_new_day()
+                self.expiry_specialist.reset_for_new_day()
+                self._morning_plan_last_date = None
+                logger.info("TOMIC: new trading day %s — reset daily plan and expiry specialist", today)
+
+            # Already generated today
+            if self._morning_plan_last_date == today:
+                return
+
+            # Only generate at or after 9:45 AM local time
+            if now_local.hour < 9 or (now_local.hour == 9 and now_local.minute < 45):
+                return
+
+            self.daily_plan_agent.generate_all_plans(entry_mode="morning")
+            self._morning_plan_last_date = today
+            logger.info("TOMIC: morning trade plans generated for %s", today)
+        except Exception as exc:
+            logger.debug("TOMIC _maybe_run_morning_plan failed: %s", exc)
+
     def _compute_signal_quality_snapshot(self, enqueue_signals: bool, source: str) -> Dict[str, Any]:
+        # Morning plan generation runs outside bridge_lock (may take time)
+        self._maybe_run_morning_plan()
         bridge_lock = self.market_bridge.lock if self.market_bridge else nullcontext()
         with bridge_lock:
             market_open, market_reason, market_meta = self._market_session_state()
@@ -494,6 +579,17 @@ class TomicRuntime:
                     startup_guard_reasons.append("Waiting for first live tick after Start")
             if enqueue_signals and not market_open and market_reason:
                 startup_guard_reasons.append(market_reason)
+
+            # Augment with options-selling pipeline signals
+            if scan_enabled:
+                try:
+                    strategy_signals = self.strategy_engine.get_pending_signals()
+                    expiry_signals = self.expiry_specialist.get_gamma_signals(
+                        instruments=list(self.config.daily_plan.instruments),
+                    )
+                    routed_signals = routed_signals + strategy_signals + expiry_signals
+                except Exception as _exc:
+                    logger.debug("TOMIC options pipeline error: %s", _exc)
 
             enqueue_result = {
                 "enqueued_count": 0,
