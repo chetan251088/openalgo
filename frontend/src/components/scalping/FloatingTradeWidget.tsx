@@ -61,6 +61,7 @@ export function FloatingTradeWidget() {
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
   const clearVirtualForSymbol = useVirtualOrderStore((s) => s.clearForSymbol)
+  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
 
@@ -440,6 +441,42 @@ export function FloatingTradeWidget() {
       return
     }
 
+    const key = await ensureApiKey()
+    if (!key) return
+
+    // Fast path: use virtual position data to place direct exit order (skips broker position fetch)
+    const virtualPos = getTPSLForSymbol(symbol)
+    if (virtualPos && virtualPos.quantity > 0) {
+      const closeAction = virtualPos.action === 'BUY' ? 'SELL' : 'BUY'
+      try {
+        const res = await tradingApi.placeOrder({
+          apikey: key,
+          strategy: 'Scalping',
+          exchange: optionExchange,
+          symbol,
+          action: closeAction,
+          quantity: virtualPos.quantity,
+          pricetype: 'MARKET',
+          product,
+          price: 0,
+          trigger_price: 0,
+          disclosed_quantity: 0,
+        })
+        if (res.status === 'success') {
+          console.log(`[Scalping] Closed ${activeSide} ${symbol} qty=${virtualPos.quantity} (fast path)`)
+          clearVirtualForSymbol(symbol)
+          setLimitPrice(null)
+          setPendingEntryAction(null)
+          clearPendingLimitPlacement()
+          return
+        }
+        console.warn('[Scalping] Fast-close rejected, falling back:', res)
+      } catch (err) {
+        console.warn('[Scalping] Fast-close failed, falling back:', err)
+      }
+    }
+
+    // Fallback: server-side close (fetches positions from broker)
     try {
       const res = await tradingApi.closePosition(symbol, optionExchange, product)
       if (res.status === 'success') {
@@ -462,6 +499,8 @@ export function FloatingTradeWidget() {
     optionExchange,
     product,
     paperMode,
+    getTPSLForSymbol,
+    ensureApiKey,
     clearVirtualForSymbol,
     setLimitPrice,
     setPendingEntryAction,

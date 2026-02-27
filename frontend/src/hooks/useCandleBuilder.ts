@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { useMarketData, type SymbolData } from './useMarketData'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { MarketDataManager, type SymbolData } from '@/lib/MarketDataManager'
 import { mergeTickIntoCandle, type Candle, type Tick } from '@/lib/candleUtils'
 import { isWithinIndiaMarketHours } from '@/lib/indiaMarketTime'
 import type { SubscriptionMode } from '@/lib/MarketDataManager'
@@ -21,53 +21,6 @@ interface UseCandleBuilderOptions {
   onCandleUpdate?: (candle: Candle, isNew: boolean) => void
 }
 
-function getExchangeLookupCandidates(exchange: string): string[] {
-  const normalized = exchange.trim().toUpperCase()
-  const candidates = new Set<string>()
-  if (normalized) candidates.add(normalized)
-
-  if (normalized === 'NSE_INDEX') candidates.add('NSE')
-  else if (normalized === 'BSE_INDEX') candidates.add('BSE')
-  else if (normalized === 'NSE') candidates.add('NSE_INDEX')
-  else if (normalized === 'BSE') candidates.add('BSE_INDEX')
-
-  return Array.from(candidates)
-}
-
-function getSymbolDataFromWs(
-  wsData: Map<string, SymbolData>,
-  symbol: string,
-  preferredExchange: string
-): SymbolData | undefined {
-  const symbolKey = symbol.trim().toUpperCase()
-  if (!symbolKey) return undefined
-
-  const exchangeCandidates = getExchangeLookupCandidates(preferredExchange)
-  for (const exchange of exchangeCandidates) {
-    const direct = wsData.get(`${exchange}:${symbolKey}`)
-    if (direct) return direct
-  }
-
-  const symbolMatches: SymbolData[] = []
-  for (const [, entry] of wsData) {
-    if (entry.symbol.trim().toUpperCase() === symbolKey) {
-      symbolMatches.push(entry)
-    }
-  }
-  if (symbolMatches.length === 0) return undefined
-
-  const preferred = preferredExchange.trim().toUpperCase()
-  const fuzzyMatch = symbolMatches.find((entry) => {
-    const entryExchange = entry.exchange.trim().toUpperCase()
-    return (
-      entryExchange === preferred ||
-      entryExchange.includes(preferred) ||
-      preferred.includes(entryExchange)
-    )
-  })
-  return fuzzyMatch ?? symbolMatches[0]
-}
-
 function parseOptionalNumber(value: unknown): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null
@@ -81,8 +34,10 @@ function parseOptionalNumber(value: unknown): number | null {
 
 /**
  * Builds OHLC candles from real-time WebSocket ticks.
- * Uses useMarketData for subscription and fires onCandleUpdate callback
- * on every tick (ref-based, no React re-renders per tick).
+ *
+ * Subscribes DIRECTLY to MarketDataManager (bypassing React state/rAF batching)
+ * so that every tick immediately fires the onCandleUpdate callback without
+ * waiting for a React render cycle.
  */
 export function useCandleBuilder({
   symbol,
@@ -101,6 +56,14 @@ export function useCandleBuilder({
   const restFallbackInFlightRef = useRef(false)
   const callbackRef = useRef(onCandleUpdate)
   callbackRef.current = onCandleUpdate
+
+  // Connection state (updated via direct addStateListener, no React render per tick)
+  const [isConnected, setIsConnected] = useState(() => {
+    return MarketDataManager.getInstance().getState().isConnected
+  })
+  const [isFallbackMode, setIsFallbackMode] = useState(() => {
+    return MarketDataManager.getInstance().getState().isFallbackMode
+  })
 
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
     const existing = useAuthStore.getState().apiKey
@@ -163,34 +126,54 @@ export function useCandleBuilder({
     [enabled, intervalSec, maxCandles, useIndiaMarketHours]
   )
 
-  const symbols = enabled && symbol
-    ? [{ symbol, exchange }]
-    : []
-
-  const { data: wsData, isConnected, isFallbackMode } = useMarketData({
-    symbols,
-    mode,
-    enabled: enabled && !!symbol,
-  })
-
-  // Process tick data when it arrives
+  // Direct subscription to MarketDataManager — bypasses React state/rAF batching.
+  // Every WS tick fires applyTick immediately without waiting for a render cycle.
   useEffect(() => {
-    if (!enabled || !symbol || wsData.size === 0) return
+    if (!enabled || !symbol) return
 
-    const symbolData = getSymbolDataFromWs(wsData, symbol, exchange)
-    if (!symbolData?.data?.ltp) return
+    const manager = MarketDataManager.getInstance()
+    const normalizedSymbol = symbol.trim().toUpperCase()
+    const normalizedExchange = exchange.trim().toUpperCase()
 
-    const tickTimestamp = parseOptionalNumber(symbolData.lastUpdate)
-    const tickLtp = parseOptionalNumber(symbolData.data.ltp)
-    if (tickTimestamp == null || tickLtp == null) return
+    // Sync initial connection state
+    const initial = manager.getState()
+    setIsConnected(initial.isConnected)
+    setIsFallbackMode(initial.isFallbackMode)
 
-    void applyTick({
-      ltp: tickLtp,
-      volume: parseOptionalNumber(symbolData.data.volume),
-      timestamp: tickTimestamp,
-      sourceKey: `${symbolData.exchange.toUpperCase()}:${symbolData.symbol.toUpperCase()}:WS`,
+    // Track connection state changes (for REST fallback logic)
+    const unsubscribeState = manager.addStateListener((state) => {
+      setIsConnected(state.isConnected)
+      setIsFallbackMode(state.isFallbackMode)
     })
-  }, [wsData, symbol, exchange, applyTick, enabled])
+
+    // Subscribe directly — callback fires on every WS tick, no React cycle overhead
+    const unsubscribeTick = manager.subscribe(
+      normalizedSymbol,
+      normalizedExchange,
+      mode,
+      (data: SymbolData) => {
+        const tickLtp = parseOptionalNumber(data.data?.ltp)
+        if (tickLtp == null || tickLtp <= 0) return
+        applyTick({
+          ltp: tickLtp,
+          volume: parseOptionalNumber(data.data?.volume),
+          timestamp: data.lastUpdate ?? Date.now(),
+          sourceKey: `${data.exchange.toUpperCase()}:${data.symbol.toUpperCase()}:WS`,
+        })
+      }
+    )
+
+    // Auto-connect if not already connected or paused
+    const currentState = manager.getState()
+    if (!currentState.isConnected && !currentState.isPaused) {
+      void manager.connect()
+    }
+
+    return () => {
+      unsubscribeState()
+      unsubscribeTick()
+    }
+  }, [enabled, symbol, exchange, mode, applyTick])
 
   // Auto-heal stalled chart streams: when symbol ticks stop, keep candles alive from quotes API.
   useEffect(() => {
@@ -220,7 +203,7 @@ export function useCandleBuilder({
         const quoteLtp = parseOptionalNumber(response.data.ltp)
         if (quoteLtp == null || quoteLtp <= 0) return
 
-        void applyTick({
+        applyTick({
           ltp: quoteLtp,
           volume: parseOptionalNumber(response.data.volume),
           timestamp: Date.now(),
@@ -254,7 +237,6 @@ export function useCandleBuilder({
   const reset = useCallback(() => {
     candlesRef.current = []
     currentCandleRef.current = null
-    // Allow one fresh rebuild after symbol/interval reset, even if the last tick timestamp is unchanged.
     lastProcessedTickKeyRef.current = null
     lastTickAtRef.current = 0
   }, [])

@@ -58,6 +58,7 @@ export function ManualTradeTab() {
   const clearVirtualOrders = useVirtualOrderStore((s) => s.clearAll)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
   const removeTriggerOrder = useVirtualOrderStore((s) => s.removeTriggerOrder)
+  const getTPSLForSymbol = useVirtualOrderStore((s) => s.getTPSLForSymbol)
 
   const setQuantity = useScalpingStore((s) => s.setQuantity)
   const incrementQuantity = useScalpingStore((s) => s.incrementQuantity)
@@ -225,34 +226,41 @@ export function ManualTradeTab() {
           incrementTradeCount()
 
           if (pricetype === 'MARKET') {
-            const marketPriceHint = await resolveEntryPrice({
-              symbol: activeSymbol,
-              exchange: optionExchange,
-              apiKey: null,
-            })
-            const entryPrice = await resolveFilledOrderPrice({
-              symbol: activeSymbol,
-              exchange: optionExchange,
-              orderId: brokerOrderId,
-              preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
-              apiKey: key,
-            })
-            if (entryPrice > 0) {
-              setVirtualTPSL(
-                buildVirtualPosition({
-                  symbol: activeSymbol,
-                  exchange: optionExchange,
-                  side: activeSide,
-                  action,
-                  entryPrice,
-                  quantity: quantity * lotSize,
-                  tpPoints,
-                  slPoints,
-                  trailDistancePoints,
-                  managedBy: 'manual',
-                })
-              )
-            }
+            // Resolve virtual position asynchronously — don't block order confirmation feedback
+            const snapSymbol = activeSymbol
+            const snapExchange = optionExchange
+            const snapSide = activeSide
+            const snapQty = quantity * lotSize
+            void (async () => {
+              const marketPriceHint = await resolveEntryPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                apiKey: null,
+              })
+              const entryPrice = await resolveFilledOrderPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                orderId: brokerOrderId,
+                preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
+                apiKey: key,
+              })
+              if (entryPrice > 0) {
+                setVirtualTPSL(
+                  buildVirtualPosition({
+                    symbol: snapSymbol,
+                    exchange: snapExchange,
+                    side: snapSide,
+                    action,
+                    entryPrice,
+                    quantity: snapQty,
+                    tpPoints,
+                    slPoints,
+                    trailDistancePoints,
+                    managedBy: 'manual',
+                  })
+                )
+              }
+            })()
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
@@ -302,6 +310,42 @@ export function ManualTradeTab() {
       return
     }
 
+    const key = await ensureApiKey()
+    if (!key) return
+
+    // Fast path: use virtual position data to place direct exit order (skips broker position fetch)
+    const virtualPos = getTPSLForSymbol(activeSymbol)
+    if (virtualPos && virtualPos.quantity > 0) {
+      const closeAction = virtualPos.action === 'BUY' ? 'SELL' : 'BUY'
+      try {
+        const res = await tradingApi.placeOrder({
+          apikey: key,
+          strategy: 'Scalping',
+          exchange: optionExchange,
+          symbol: activeSymbol,
+          action: closeAction,
+          quantity: virtualPos.quantity,
+          pricetype: 'MARKET',
+          product,
+          price: 0,
+          trigger_price: 0,
+          disclosed_quantity: 0,
+        })
+        if (res.status === 'success') {
+          console.log(`[Scalping] Closed ${activeSide} ${activeSymbol} qty=${virtualPos.quantity} (fast path)`)
+          clearVirtualForSymbol(activeSymbol)
+          setLimitPrice(null)
+          setPendingEntryAction(null)
+          clearPendingLimitPlacement()
+          return
+        }
+        console.warn('[Scalping] Fast-close rejected, falling back to position-fetch close:', res)
+      } catch (err) {
+        console.warn('[Scalping] Fast-close failed, falling back:', err)
+      }
+    }
+
+    // Fallback: server-side close (fetches positions from broker)
     try {
       const res = await tradingApi.closePosition(activeSymbol, optionExchange, product)
       if (res.status === 'success') {
@@ -324,6 +368,8 @@ export function ManualTradeTab() {
     optionExchange,
     product,
     paperMode,
+    getTPSLForSymbol,
+    ensureApiKey,
     clearVirtualForSymbol,
     setLimitPrice,
     setPendingEntryAction,

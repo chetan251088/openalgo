@@ -12,6 +12,7 @@ interface IndicatorSnapshot {
   supertrend: number | null
   rsi: number | null
   vwap: number | null
+  macdLine?: number | null
 }
 
 interface MomentumResult {
@@ -286,6 +287,7 @@ export function shouldEnterTrade(
     reEntryCountForSide?: number
     lastTradePnl?: number | null
     killSwitch?: boolean
+    lockProfitTriggered?: boolean
   },
   momentum: MomentumResult,
   indicators: IndicatorSnapshot,
@@ -295,7 +297,8 @@ export function shouldEnterTrade(
   spread: number,
   depthInfo?: { totalBid: number; totalAsk: number },
   recentPrices: number[] = [],
-  volumeFlow?: VolumeSignalSnapshot
+  volumeFlow?: VolumeSignalSnapshot,
+  regime?: MarketRegime
 ): EntryDecision {
   let score = 0
   const reasons: string[] = []
@@ -313,8 +316,16 @@ export function shouldEnterTrade(
     0.25,
     effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier)
   )
+  // In RANGING markets raise the bar by 1.5 pts — scalping direction trades
+  // have lower edge when price is oscillating without a clear trend.
+  // VOLATILE keeps the same bar (spikes can be tradeable).
+  // UNKNOWN gets a small +0.5 penalty (not enough data yet).
+  const regimePenalty =
+    regime === 'RANGING' ? 1.5 :
+    regime === 'UNKNOWN' ? 0.5 :
+    0
   // Keep score-gate realistic for current scoring weights.
-  const adjustedMinScore = Math.min(10, Math.max(1, config.entryMinScore / sensitivityFactor))
+  const adjustedMinScore = Math.min(10, Math.max(1, config.entryMinScore / sensitivityFactor) + regimePenalty)
 
   const addCheck = (id: string, label: string, pass: boolean, value?: string) => {
     checks.push({ id, label, pass, value })
@@ -355,6 +366,12 @@ export function shouldEnterTrade(
   addCheck('kill-switch', 'Kill switch', killSwitchOff)
   if (!killSwitchOff) {
     return block('Kill switch active', 'kill-switch')
+  }
+
+  const lockProfitFree = !runtime.lockProfitTriggered
+  addCheck('lock-profit', 'Lock-profit protection', lockProfitFree)
+  if (!lockProfitFree) {
+    return block('Lock-profit triggered: new entries blocked', 'lock-profit')
   }
 
   const hotZoneAllowed = !config.respectHotZones || effectiveSensitivity > 0
@@ -527,30 +544,37 @@ export function shouldEnterTrade(
       dominancePass,
       dominanceRatio == null
         ? 'NA'
-        : `${dominanceRatio.toFixed(2)}x/${dominanceMinRatio.toFixed(2)}x opp:${(oppositeDelta ?? 0).toFixed(0)}`
+        : `${Math.min(dominanceRatio, 20).toFixed(2)}x/${dominanceMinRatio.toFixed(2)}x opp:${(oppositeDelta ?? 0).toFixed(0)}`
     )
 
-    // Only hard-block when both side intensity and side-dominance are weak while data exists.
+    // Hard-block only on genuinely dead volume (< 50% of the configured minimum).
+    // For Indian index options (NIFTY/SENSEX), NSE/BSE WebSocket sends cumulative
+    // day-volume. Delta between two consecutive ticks can be 0 on quiet ticks,
+    // making the ratio temporarily very low. We avoid blocking on minor shortfalls
+    // and only gate out truly inactive sessions.
+    // Side-dominance (CE vs PE) is used for scoring only — NIFTY always has both
+    // sides heavily traded due to institutional hedging.
     const weakOptionFlow =
       optionRatio != null &&
-      dominanceRatio != null &&
-      !optionPass &&
-      !dominancePass
+      optionRatio < optionMinRatio * 0.5
     if (weakOptionFlow) {
-      return block(`Weak ${side} volume participation`, 'volume-option')
+      return block(`Very low ${side} volume (${optionRatio.toFixed(2)}x baseline)`, 'volume-option')
     }
 
     if (indexRatio != null && indexPass && volumeScoreWeight > 0) {
       score += 0.5 * volumeScoreWeight
-      reasons.push(`IdxVol x${indexRatio.toFixed(2)}`)
+      reasons.push(`IdxVol x${Math.min(indexRatio, 99).toFixed(2)}`)
     }
     if (optionRatio != null && optionPass && volumeScoreWeight > 0) {
       score += 1.0 * volumeScoreWeight
-      reasons.push(`${side}Vol x${optionRatio.toFixed(2)}`)
+      reasons.push(`${side}Vol x${Math.min(optionRatio, 99).toFixed(2)}`)
     }
+    // Cap the dominance display at 20x — when one side has near-zero delta
+    // (e.g. PE volume delta = 1 lot) the ratio explodes to 10000+, which is
+    // a measurement artifact, not a trading signal.
     if (dominanceRatio != null && dominancePass && volumeScoreWeight > 0) {
       score += 0.75 * volumeScoreWeight
-      reasons.push(`${side}>Opp x${dominanceRatio.toFixed(2)}`)
+      reasons.push(`${side}>Opp x${Math.min(dominanceRatio, 20).toFixed(2)}`)
     }
   } else {
     addCheck('volume-influence', 'Volume influence', true, 'OFF')
@@ -615,6 +639,24 @@ export function shouldEnterTrade(
     }
   }
   addCheck('rsi', 'RSI alignment', rsiAligned, indicators.rsi != null ? indicators.rsi.toFixed(1) : 'NA')
+
+  // MACD alignment — require meaningful separation between EMA12 and EMA26.
+  // On tick-level data, MACD oscillates within ±0.1 even in flat markets
+  // (EMA12/EMA26 never fully converge on a price series with tiny tick noise).
+  // A threshold of 0.1 filters the constant zero-cross noise while still
+  // capturing real directional moves.
+  const macdSignificant = indicators.macdLine != null && Math.abs(indicators.macdLine) >= 0.1
+  let macdAligned = false
+  if (macdSignificant) {
+    macdAligned =
+      (side === 'CE' && indicators.macdLine! > 0) ||
+      (side === 'PE' && indicators.macdLine! < 0)
+    if (macdAligned) {
+      score += 1
+      reasons.push(`MACD ${indicators.macdLine! > 0 ? '+' : ''}${indicators.macdLine!.toFixed(2)}`)
+    }
+  }
+  addCheck('macd', 'MACD alignment', macdAligned, indicators.macdLine != null ? indicators.macdLine.toFixed(2) : 'NA')
 
   // Index bias
   let biasAligned = false

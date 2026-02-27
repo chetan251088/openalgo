@@ -251,6 +251,83 @@ export const PRESETS: AutoTradePreset[] = [
     },
   },
   {
+    id: 'india-index',
+    name: 'NIFTY / SENSEX',
+    description: 'Tuned for Indian index options. Wider PCR bands, lighter max-pain gate, GEX off, volume thresholds calibrated for NSE cumulative data.',
+    config: {
+      // Entry — NIFTY/SENSEX need indicator confluence, not just momentum.
+      // Max score ≈11 (momentum 3 + velocity 2 + EMA 1 + RSI 1 + MACD 1 + bias 1 + vol ~2).
+      // Score 7 requires momentum + velocity + at least 2 indicator confirmations.
+      entryMomentumCount: 4,
+      entryMomentumVelocity: 3,
+      entryMinScore: 7,
+      entryMaxSpread: 3,
+
+      // Volume — NSE/BSE WebSocket sends cumulative day-volume.
+      // Delta between consecutive ticks can be 0 on quiet ticks → ratio = 0x.
+      // Thresholds are relaxed to use volume as a scoring signal, not a hard gate.
+      volumeInfluenceEnabled: true,
+      volumeLookbackTicks: 15,
+      indexVolumeMinRatio: 0.8,
+      optionVolumeMinRatio: 0.85,
+      sideVolumeDominanceRatio: 0.85,
+      volumeScoreWeight: 0.9,
+
+      // Trailing SL — calibrated for NIFTY ATM options (typical move: 5-40 pts)
+      trailInitialSL: 10,
+      trailBreakevenTrigger: 7,
+      trailLockTrigger: 15,
+      trailLockAmount: 7,
+      trailStartTrigger: 18,
+      trailStepSize: 4,
+      trailTightTrigger: 30,
+      trailTightStep: 2,
+
+      breakevenTriggerPts: 8,
+      breakevenBuffer: 1,
+
+      // Risk
+      maxTradesPerDay: 25,
+      maxTradesPerMinute: 6,
+      minGapMs: 3000,
+      cooldownAfterLossSec: 30,
+      coolingOffAfterLosses: 3,
+
+      // Options context — NIFTY/SENSEX specific thresholds
+      // NIFTY PCR typically 0.7–1.7 on normal days; 1.3 threshold blocks CE all day.
+      // Max pain is often within 50 pts of spot on active days — 50 pt filter kills most entries.
+      optionsContextEnabled: true,
+      pcrBullishThreshold: 0.5,       // block PE only when PCR is extremely low (very bullish)
+      pcrBearishThreshold: 1.8,       // block CE only when PCR is extremely high (very bearish)
+      maxPainProximityFilter: 20,     // 20 pts — only block if spot is ≤ 20 pts from max pain
+      gexWallFilterEnabled: false,    // GEX wall data is unreliable for Indian markets
+      ivSpikeExitEnabled: true,
+      ivSpikeThreshold: 8,            // NIFTY IV is volatile; 5% fires too often
+
+      // Index bias
+      indexBiasEnabled: true,
+      indexBiasWeight: 0.35,
+
+      // Regime — NIFTY index ticks
+      regimeDetectionPeriod: 40,
+      rangingThresholdPts: 25,
+
+      // Hot zones
+      respectHotZones: true,
+      sensitivityMultiplier: 1.1,
+
+      // No-trade zone — option price flat zone
+      noTradeZoneEnabled: true,
+      noTradeZoneRangePts: 10,
+      noTradeZonePeriod: 15,
+
+      // Re-entry
+      reEntryEnabled: true,
+      reEntryDelaySec: 20,
+      reEntryMaxPerSide: 3,
+    },
+  },
+  {
     id: 'expiry',
     name: 'Expiry Day',
     description: 'Post-13:30 surprise watch, tighter risk, faster exits.',

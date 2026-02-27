@@ -5,14 +5,17 @@ import {
   CrosshairMode,
   LineSeries,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { tradingApi, type HistoryCandleData } from '@/api/trading'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useCandleBuilder } from '@/hooks/useCandleBuilder'
 import { useMarketData } from '@/hooks/useMarketData'
 import { ChartOrderOverlay } from './ChartOrderOverlay'
@@ -144,6 +147,15 @@ interface FlowTickBucket {
   ts: number
   buy: number
   sell: number
+}
+
+interface ChartSignalMarker {
+  time: UTCTimestamp
+  position: 'aboveBar' | 'belowBar'
+  color: string
+  shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'
+  text: string
+  size: number
 }
 
 interface FlowState {
@@ -438,6 +450,9 @@ export function OptionChartView({
     buckets: [],
     lastEmitAt: 0,
   })
+  const chartMarkersRef = useRef<ChartSignalMarker[]>([])
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<any> | null>(null)
   const [orderFlow, setOrderFlow] = useState<OrderFlowStats>(EMPTY_ORDER_FLOW)
   const [flowClock, setFlowClock] = useState(() => Date.now())
   const indicatorConfigRef = useRef({
@@ -457,6 +472,9 @@ export function OptionChartView({
   const symbol = useScalpingStore((s) =>
     side === 'CE' ? s.selectedCESymbol : s.selectedPESymbol
   )
+
+  const ghostSignals = useAutoTradeStore((s) => s.ghostSignals)
+  const executionSamples = useAutoTradeStore((s) => s.executionSamples)
 
   const isActive = activeSide === side
   const orderFlowSymbols = useMemo(
@@ -772,6 +790,67 @@ export function OptionChartView({
     vwapSeriesRef.current?.setData([])
   }, [])
 
+  const applyChartMarkers = useCallback(() => {
+    try {
+      markersPluginRef.current?.setMarkers(chartMarkersRef.current)
+    } catch {
+      // plugin may not be ready yet
+    }
+  }, [])
+
+  // Sync ghost signals and filled/exited executions as chart markers.
+  // CE signals: green arrow below bar | PE signals: red arrow above bar.
+  // Actual fills are drawn larger. Exits get an amber square.
+  useEffect(() => {
+    if (!symbol) return
+    const isCE = side === 'CE'
+    const markers: ChartSignalMarker[] = []
+
+    // Ghost signals detected by the engine (shown in both ghost and execute modes)
+    for (const sig of ghostSignals.slice(-40)) {
+      if (sig.side !== side || sig.symbol !== symbol) continue
+      const aligned = (Math.floor(sig.timestamp / 1000 / chartInterval) * chartInterval) as UTCTimestamp
+      markers.push({
+        time: aligned,
+        position: isCE ? 'belowBar' : 'aboveBar',
+        color: isCE ? '#22c55e99' : '#ef444499',
+        shape: isCE ? 'arrowUp' : 'arrowDown',
+        text: sig.score.toFixed(1),
+        size: 1,
+      })
+    }
+
+    // Execution samples: filled orders and exits (execute mode only)
+    for (const samp of executionSamples.slice(-20)) {
+      if (samp.side !== side || samp.symbol !== symbol) continue
+      const aligned = (Math.floor(samp.timestamp / 1000 / chartInterval) * chartInterval) as UTCTimestamp
+      if (samp.status === 'filled') {
+        markers.push({
+          time: aligned,
+          position: isCE ? 'belowBar' : 'aboveBar',
+          color: isCE ? '#22c55e' : '#ef4444',
+          shape: isCE ? 'arrowUp' : 'arrowDown',
+          text: 'IN',
+          size: 2,
+        })
+      } else if (samp.status === 'exited') {
+        markers.push({
+          time: aligned,
+          position: isCE ? 'aboveBar' : 'belowBar',
+          color: '#f59e0b',
+          shape: 'square',
+          text: 'OUT',
+          size: 1,
+        })
+      }
+    }
+
+    // setMarkers requires the array to be sorted by time
+    markers.sort((a, b) => Number(a.time) - Number(b.time))
+    chartMarkersRef.current = markers
+    applyChartMarkers()
+  }, [ghostSignals, executionSamples, side, symbol, chartInterval, applyChartMarkers])
+
   const applyCandles = useCallback(
     (candles: Candle[]) => {
       const next = normalizeRuntimeCandles(candles)
@@ -901,6 +980,7 @@ export function OptionChartView({
       currentCacheKeyRef.current = null
       resetCandles()
       clearChartData()
+      chartMarkersRef.current = []
       return
     }
 
@@ -1136,6 +1216,13 @@ export function OptionChartView({
       scheduleIndicatorRefresh()
     }
 
+    // Create the v5 markers plugin and restore any accumulated markers
+    const markersPlugin = createSeriesMarkers(candleSeries)
+    markersPluginRef.current = markersPlugin
+    if (chartMarkersRef.current.length > 0) {
+      try { markersPlugin.setMarkers(chartMarkersRef.current) } catch { /* no-op */ }
+    }
+
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (chartRef.current && container) {
@@ -1154,6 +1241,8 @@ export function OptionChartView({
         indicatorTimerRef.current = null
       }
       ro.disconnect()
+      try { markersPluginRef.current?.detach() } catch { /* no-op */ }
+      markersPluginRef.current = null
       chart.remove()
       chartRef.current = null
       candleSeriesRef.current = null

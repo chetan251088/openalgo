@@ -80,12 +80,18 @@ function calculateRSIValue(prices: number[], period = 14): number | null {
 }
 
 function buildIndicatorSnapshot(prices: number[]) {
+  const ema9 = calculateEMAValue(prices, 9)
+  const ema12 = calculateEMAValue(prices, 12)
+  const ema21 = calculateEMAValue(prices, 21)
+  const ema26 = calculateEMAValue(prices, 26)
+  const macdLine = ema12 !== null && ema26 !== null ? ema12 - ema26 : null
   return {
-    ema9: calculateEMAValue(prices, 9),
-    ema21: calculateEMAValue(prices, 21),
+    ema9,
+    ema21,
     supertrend: null as number | null,
     rsi: calculateRSIValue(prices, 14),
     vwap: null as number | null,
+    macdLine,
   }
 }
 
@@ -176,6 +182,7 @@ export function useAutoTradeEngine(
   const sideLastExitAt = useAutoTradeStore((s) => s.sideLastExitAt)
   const replayMode = useAutoTradeStore((s) => s.replayMode)
   const killSwitch = useAutoTradeStore((s) => s.killSwitch)
+  const lockProfitTriggered = useAutoTradeStore((s) => s.lockProfitTriggered)
 
   const setRegime = useAutoTradeStore((s) => s.setRegime)
   const addGhostSignal = useAutoTradeStore((s) => s.addGhostSignal)
@@ -195,7 +202,7 @@ export function useAutoTradeEngine(
   const ceVolumeRef = useRef<number[]>([])
   const peVolumeRef = useRef<number[]>([])
   const lastProcessTimeRef = useRef(0)
-  const executingRef = useRef(false)
+  const executingRef = useRef<Record<ActiveSide, boolean>>({ CE: false, PE: false })
   const lastDecisionSignatureRef = useRef<Record<ActiveSide, string>>({ CE: '', PE: '' })
   const lastDecisionPushAtRef = useRef<Record<ActiveSide, number>>({ CE: 0, PE: 0 })
   const lastSignalEmitRef = useRef<Record<ActiveSide, { at: number; sig: string }>>({
@@ -363,17 +370,24 @@ export function useAutoTradeEngine(
         reEntryCountForSide: sideEntryCount[side],
         lastTradePnl,
         killSwitch,
+        lockProfitTriggered,
       }
       const decision = shouldEnterTrade(
         side, ltp, config, runtime, momentum, indicators,
-        indexBias, effectiveOptionsContext, sensitivity, spread, depthInfo, ticks, volumeFlow
+        indexBias, effectiveOptionsContext, sensitivity, spread, depthInfo, ticks, volumeFlow, regime
       )
 
       // Persist trader-facing "why trade" diagnostics at low frequency.
-      const signature = `${decision.enter}|${decision.blockedBy ?? ''}|${decision.reason}|${decision.score.toFixed(2)}|${decision.minScore.toFixed(2)}`
+      // Use a stable signature: score rounded to nearest 0.5, minScore to 1dp,
+      // reason truncated to 40 chars. This prevents the velocity float (e.g.
+      // "Velocity 5.23" → "5.24" each tick) from looking like a new decision
+      // and flooding the panel every 100 ms.
+      const sigScore = (Math.round(decision.score * 2) / 2).toFixed(1)
+      const sigReason = decision.reason.slice(0, 40)
+      const signature = `${decision.enter}|${decision.blockedBy ?? ''}|${sigScore}|${decision.minScore.toFixed(1)}|${sigReason}`
       if (
         signature !== lastDecisionSignatureRef.current[side] ||
-        now - lastDecisionPushAtRef.current[side] >= 1000
+        now - lastDecisionPushAtRef.current[side] >= 5000
       ) {
         pushDecision({
           timestamp: now,
@@ -401,9 +415,19 @@ export function useAutoTradeEngine(
         side, symbol, selectedStrike ?? 0, ltp, decision, regime, effectiveOptionsContext?.pcr
       )
       if (ghost) {
-        const signalSig = `${symbol}|${decision.reason}|${decision.score.toFixed(1)}`
+        // Use a stable sig: round score to integer + first 40 chars of reason.
+        // Velocity/count in the reason change every tick → cause false "new signal"
+        // if we include them verbatim. With this sig a signal only re-emits when
+        // the score bracket or the dominant reason actually changes.
+        const sigReason = decision.reason.slice(0, 40)
+        const signalSig = `${symbol}|${Math.round(decision.score)}|${sigReason}`
         const prev = lastSignalEmitRef.current[side]
-        const shouldEmit = signalSig !== prev.sig || now - prev.at >= 2500
+        // Minimum 4 seconds between any same-side signals (even if sig changes).
+        // A second emit of a different sig is allowed after 2 seconds.
+        const msSinceLast = now - prev.at
+        const shouldEmit =
+          msSinceLast >= 4000 ||
+          (signalSig !== prev.sig && msSinceLast >= 2000)
         if (shouldEmit) {
           addGhostSignal(ghost)
           lastSignalEmitRef.current[side] = { at: now, sig: signalSig }
@@ -413,9 +437,9 @@ export function useAutoTradeEngine(
         }
       }
 
-      if (mode === 'execute' && !replayMode && decision.enter && !executingRef.current) {
+      if (mode === 'execute' && !replayMode && decision.enter && !executingRef.current[side]) {
         // Execute mode: fire order
-        executingRef.current = true
+        executingRef.current[side] = true
         const action: 'BUY' = 'BUY'
         const qty = entryLots * lotSize
         const placeAutoEntry = async () => {
@@ -578,7 +602,7 @@ export function useAutoTradeEngine(
             })
             console.error('[AutoTrade] Order failed:', err)
           } finally {
-            executingRef.current = false
+            executingRef.current[side] = false
           }
         }
 
@@ -606,7 +630,7 @@ export function useAutoTradeEngine(
     enabled, tickData, mode, config, activePresetId, selectedCESymbol, selectedPESymbol,
     optionsContext, regime, consecutiveLosses, tradesCount, realizedPnl,
     lastTradeTime, tradesThisMinute, lastLossTime, lastTradePnl,
-    sideEntryCount, sideLastExitAt, replayMode, killSwitch,
+    sideEntryCount, sideLastExitAt, replayMode, killSwitch, lockProfitTriggered,
     ensureApiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
     selectedStrike, addGhostSignal, recordTrade, recordAutoEntry, pushDecision, pushExecutionSample, setRegime,
     virtualTPSL, setVirtualTPSL,

@@ -58,6 +58,10 @@ export function useVirtualTPSL(
   // Track which orders are currently being executed (prevent double-fire)
   const executingRef = useRef<Set<string>>(new Set())
 
+  // Time-based auto square-off tracking (fires once per trading day)
+  const squareOffFiredRef = useRef(false)
+  const squareOffDateRef = useRef('')
+
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
     if (apiKeyRef.current) return apiKeyRef.current
     try {
@@ -320,6 +324,33 @@ export function useVirtualTPSL(
             }
           }
         )
+      }
+    }
+    // Time-based auto square-off: close all positions before market close
+    // Normal day: 15:15 IST | Expiry day: 14:45 IST
+    const nowIST = new Date()
+    const istTotalMins = ((nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes()) + 330) % (24 * 60)
+    const dateIST = new Date(nowIST.getTime() + 330 * 60 * 1000).toISOString().slice(0, 10)
+
+    if (squareOffDateRef.current !== dateIST) {
+      squareOffDateRef.current = dateIST
+      squareOffFiredRef.current = false
+    }
+
+    const squareOffMinutes = activePresetId === 'expiry' ? 14 * 60 + 45 : 15 * 60 + 15
+    const hasOpenOrders = Object.keys(virtualTPSL).length > 0
+
+    if (!squareOffFiredRef.current && istTotalMins >= squareOffMinutes && hasOpenOrders) {
+      squareOffFiredRef.current = true
+      for (const order of Object.values(virtualTPSL)) {
+        if (!executingRef.current.has(order.id)) {
+          const symbolKey = `${order.exchange}:${order.symbol}`
+          const ltp =
+            tickData.get(symbolKey)?.data?.ltp ??
+            tickData.get(order.symbol)?.data?.ltp ??
+            order.entryPrice
+          closeVirtualOrder(order, ltp, 'Auto square-off before market close')
+        }
       }
     }
   }, [

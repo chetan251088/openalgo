@@ -129,6 +129,8 @@ interface AutoTradeState {
   killSwitch: boolean
   lockProfitEnabled: boolean
   lockProfitTriggered: boolean
+  winsCount: number
+  lossesCount: number
   dailyPeakPnl: number
   dailyDrawdown: number
   accountPeakPnl: number
@@ -199,6 +201,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
       killSwitch: false,
       lockProfitEnabled: false,
       lockProfitTriggered: false,
+      winsCount: 0,
+      lossesCount: 0,
       dailyPeakPnl: 0,
       dailyDrawdown: 0,
       accountPeakPnl: 0,
@@ -306,6 +310,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
             autoDrawdown,
             lockProfitTriggered: lockTriggered,
             killSwitch: s.killSwitch,
+            winsCount: pnl >= 0 ? s.winsCount + 1 : s.winsCount,
+            lossesCount: pnl < 0 ? s.lossesCount + 1 : s.lossesCount,
           }
         }),
 
@@ -374,6 +380,8 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           killSwitch: false,
           lockProfitEnabled: false,
           lockProfitTriggered: false,
+          winsCount: 0,
+          lossesCount: 0,
           dailyPeakPnl: 0,
           dailyDrawdown: 0,
           accountPeakPnl: 0,
