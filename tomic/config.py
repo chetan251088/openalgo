@@ -102,6 +102,8 @@ LEGGING_POLICY: Dict[StrategyType, LeggingPolicy] = {
     StrategyType.DITM_CALL:         LeggingPolicy.SINGLE_LEG,       # no hedge leg
     StrategyType.DITM_PUT:          LeggingPolicy.SINGLE_LEG,       # no hedge leg
     StrategyType.CALENDAR_DIAGONAL: LeggingPolicy.HEDGE_FIRST,      # buy back month → sell front
+    StrategyType.GAMMA_CAPTURE:     LeggingPolicy.SINGLE_LEG,       # buy straddle, atomic — buy (not short)
+    StrategyType.SKIP:              LeggingPolicy.SINGLE_LEG,       # no-trade sentinel, never actually routed
 }
 
 
@@ -423,7 +425,7 @@ class ExpiryParams:
     gamma_exit_hhmm: str = "15:10"       # force exit
     max_capital_pct: float = 0.005       # max 0.5% of capital
     max_abs_inr: float = 5000.0          # max ₹5,000 per trade
-    min_option_price: float = 0.5        # only buy if price < ₹X
+    min_option_price: float = 0.5        # only buy if price >= ₹X (skip near-zero premium)
     max_option_price: float = 10.0       # skip if too expensive
     nifty_expiry_weekday: int = 3        # Thursday (0=Mon)
     banknifty_expiry_weekday: int = 2    # Wednesday
