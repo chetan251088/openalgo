@@ -4,7 +4,9 @@ import { Link } from 'react-router-dom'
 import {
   tomicApi,
   type TomicAnalyticsResponse,
+  type TomicDailyPlansResponse,
   type TomicDeadLetter,
+  type TomicMarketContextResponse,
   type TomicPositionsResponse,
   type TomicSignalQualityResponse,
   type TomicStatusResponse,
@@ -91,6 +93,8 @@ export default function TomicDashboard() {
   const [positions, setPositions] = useState<TomicPositionsResponse | null>(null)
   const [analytics, setAnalytics] = useState<TomicAnalyticsResponse | null>(null)
   const [quality, setQuality] = useState<TomicSignalQualityResponse | null>(null)
+  const [marketContext, setMarketContext] = useState<TomicMarketContextResponse | null>(null)
+  const [dailyPlans, setDailyPlans] = useState<TomicDailyPlansResponse | null>(null)
 
   const [deadLettersExpanded, setDeadLettersExpanded] = useState(false)
   const [deadLetters, setDeadLetters] = useState<TomicDeadLetter[]>([])
@@ -103,17 +107,21 @@ export default function TomicDashboard() {
     else setLoading(true)
 
     try {
-      const [statusResp, positionsResp, analyticsResp, qualityResp] = await Promise.allSettled([
+      const [statusResp, positionsResp, analyticsResp, qualityResp, marketCtxResp, dailyPlansResp] = await Promise.allSettled([
         tomicApi.getStatus(),
         tomicApi.getPositions(),
         tomicApi.getAnalytics(),
         tomicApi.getSignalQuality(false),
+        tomicApi.getMarketContext(),
+        tomicApi.getDailyPlans(),
       ])
 
       if (statusResp.status === 'fulfilled') setStatus(statusResp.value)
       if (positionsResp.status === 'fulfilled') setPositions(positionsResp.value)
       if (analyticsResp.status === 'fulfilled') setAnalytics(analyticsResp.value)
       if (qualityResp.status === 'fulfilled') setQuality(qualityResp.value)
+      if (marketCtxResp.status === 'fulfilled') setMarketContext(marketCtxResp.value)
+      if (dailyPlansResp.status === 'fulfilled') setDailyPlans(dailyPlansResp.value)
     } catch {
       if (!silent) {
         showToast.error('Failed to load TOMIC dashboard', 'monitoring')
@@ -667,6 +675,110 @@ export default function TomicDashboard() {
           ))}
           {noActionReasons.length === 0 && (
             <div className="text-sm text-muted-foreground">No blocking reason recorded in latest cycle.</div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">India VIX</CardTitle>
+            <CardDescription>{marketContext?.data?.vix_regime ?? '—'}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{formatNumber(marketContext?.data?.vix)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">PCR</CardTitle>
+            <CardDescription>{marketContext?.data?.pcr_bias ?? '—'}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{formatNumber(marketContext?.data?.pcr)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">NIFTY Trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Badge variant={
+              marketContext?.data?.nifty_trend === 'ABOVE_20MA' ? 'default' :
+              marketContext?.data?.nifty_trend === 'BELOW_20MA' ? 'destructive' : 'secondary'
+            }>
+              {marketContext?.data?.nifty_trend ?? 'NEUTRAL'}
+            </Badge>
+            <p className="text-xs text-muted-foreground mt-1">LTP: {formatNumber(marketContext?.data?.nifty_ltp)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">BANKNIFTY Trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Badge variant={
+              marketContext?.data?.banknifty_trend === 'ABOVE_20MA' ? 'default' :
+              marketContext?.data?.banknifty_trend === 'BELOW_20MA' ? 'destructive' : 'secondary'
+            }>
+              {marketContext?.data?.banknifty_trend ?? 'NEUTRAL'}
+            </Badge>
+            <p className="text-xs text-muted-foreground mt-1">LTP: {formatNumber(marketContext?.data?.banknifty_ltp)}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Daily Trade Plans</CardTitle>
+          <CardDescription>Generated at 9:45 AM — active strategies for today.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {(dailyPlans?.plans ?? []).length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">No plans generated yet.</div>
+          ) : (
+            <div className="border rounded-md overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Instrument</TableHead>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead>VIX</TableHead>
+                    <TableHead>Regime</TableHead>
+                    <TableHead>Short Δ</TableHead>
+                    <TableHead>Wing Δ</TableHead>
+                    <TableHead>Lots</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Rationale</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(dailyPlans?.plans ?? []).map((plan, idx) => (
+                    <TableRow key={`plan-${idx}`}>
+                      <TableCell className="font-medium">{plan.instrument}</TableCell>
+                      <TableCell>
+                        <Badge variant={plan.strategy_type === 'SKIP' ? 'secondary' : 'default'}>
+                          {plan.strategy_type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{formatNumber(plan.vix_at_plan)}</TableCell>
+                      <TableCell>{plan.regime_at_plan}</TableCell>
+                      <TableCell>{formatNumber(plan.short_delta_target)}</TableCell>
+                      <TableCell>{formatNumber(plan.wing_delta_target)}</TableCell>
+                      <TableCell>{formatNumber(plan.lots)}</TableCell>
+                      <TableCell>
+                        <Badge variant={plan.is_active ? 'default' : 'secondary'}>
+                          {plan.is_active ? 'ACTIVE' : 'DONE'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-xs truncate" title={plan.rationale}>
+                        {plan.rationale}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

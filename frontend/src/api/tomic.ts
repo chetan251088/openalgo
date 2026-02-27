@@ -211,6 +211,54 @@ export interface TomicActionResponse {
   message?: string
 }
 
+// Options-selling pipeline: market context + daily trade plans
+export interface TomicMarketContext {
+  vix: number
+  vix_regime: string           // TOO_LOW | NORMAL | ELEVATED | HIGH | EXTREME
+  pcr: number
+  pcr_bias: string             // BULLISH | BEARISH | NEUTRAL
+  nifty_ltp: number
+  banknifty_ltp: number
+  sensex_ltp: number
+  nifty_trend: string          // ABOVE_20MA | BELOW_20MA | NEUTRAL
+  banknifty_trend: string
+  sensex_trend: string
+  prev_day_high: Record<string, number>
+  prev_day_low: Record<string, number>
+  max_pain: Record<string, number>
+  oi_put_wall: Record<string, number>
+  oi_call_wall: Record<string, number>
+  timestamp_mono: number
+}
+
+export interface TomicMarketContextResponse {
+  status: string
+  data?: TomicMarketContext
+  message?: string
+}
+
+export interface TomicDailyPlan {
+  instrument: string
+  strategy_type: string        // IRON_CONDOR | BULL_PUT_SPREAD | BEAR_CALL_SPREAD | SKIP
+  entry_mode: string
+  vix_at_plan: number
+  regime_at_plan: string
+  pcr_at_plan: number
+  short_delta_target: number
+  wing_delta_target: number
+  lots: number
+  expiry_date: string
+  rationale: string
+  is_active: boolean
+  reentry_count: number
+}
+
+export interface TomicDailyPlansResponse {
+  status: string
+  plans: TomicDailyPlan[]
+  message?: string
+}
+
 export const tomicApi = {
   getStatus: async (): Promise<TomicStatusResponse> => {
     const response = await webClient.get<TomicStatusResponse>('/tomic/status')
@@ -316,6 +364,16 @@ export const tomicApi = {
 
   deleteAllDeadLetters: async (): Promise<{ status: string; deleted: number }> => {
     const response = await webClient.delete<{ status: string; deleted: number }>('/tomic/dead-letters')
+    return response.data
+  },
+
+  getMarketContext: async (): Promise<TomicMarketContextResponse> => {
+    const response = await webClient.get<TomicMarketContextResponse>('/tomic/market-context')
+    return response.data
+  },
+
+  getDailyPlans: async (): Promise<TomicDailyPlansResponse> => {
+    const response = await webClient.get<TomicDailyPlansResponse>('/tomic/plan')
     return response.data
   },
 }

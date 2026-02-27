@@ -681,3 +681,43 @@ def get_commands():
     except Exception as e:
         logger.error("get_commands failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Options-selling pipeline: market context + daily trade plans
+# ---------------------------------------------------------------------------
+
+@tomic_bp.route("/market-context", methods=["GET"])
+def get_market_context():
+    """Return the current MarketContext snapshot (VIX, PCR, trends)."""
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "unavailable", "data": {}})
+
+    try:
+        agent = getattr(runtime, "market_context_agent", None)
+        if agent is None:
+            return jsonify({"status": "unavailable", "data": {}, "message": "market_context_agent not initialized"})
+        ctx = agent.read_context()
+        return jsonify({"status": "success", "data": dataclasses.asdict(ctx)})
+    except Exception as e:
+        logger.error("get_market_context failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@tomic_bp.route("/plan", methods=["GET"])
+def get_daily_plans():
+    """Return the active daily trade plans generated at 9:45 AM."""
+    runtime = _get_runtime()
+    if not runtime:
+        return jsonify({"status": "unavailable", "plans": []})
+
+    try:
+        agent = getattr(runtime, "daily_plan_agent", None)
+        if agent is None:
+            return jsonify({"status": "unavailable", "plans": [], "message": "daily_plan_agent not initialized"})
+        summary = agent.get_summary()
+        return jsonify({"status": "success", "plans": summary})
+    except Exception as e:
+        logger.error("get_daily_plans failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
