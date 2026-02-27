@@ -305,6 +305,8 @@ class ExecutionAgent(AgentBase):
 
         if cmd.event_type == EventType.ORDER_REQUEST.value:
             self._execute_order(cmd)
+        elif cmd.event_type == EventType.CLOSE_REQUEST.value:
+            self._execute_close(cmd)
         else:
             self.logger.warning("Unknown command type: %s", cmd.event_type)
             self._command_store.mark_failed(
@@ -631,6 +633,33 @@ class ExecutionAgent(AgentBase):
         resolved = set(self._unhedged_since.keys()) - current
         for k in resolved:
             del self._unhedged_since[k]
+
+    def _execute_close(self, cmd: "CommandRow") -> None:
+        """Handle a CLOSE_REQUEST command from PositionManager."""
+        payload = cmd.payload
+        strategy_tag = payload.get("strategy_tag", "")
+        instrument = payload.get("instrument", "")
+        reason = payload.get("reason", "")
+
+        if not strategy_tag or not instrument:
+            self._command_store.mark_failed(
+                cmd.id, cmd.owner_token,
+                f"CLOSE_REQUEST missing strategy_tag or instrument: {payload}",
+            )
+            return
+
+        key = f"{instrument}|{strategy_tag}"
+        self.logger.info(
+            "CLOSE_REQUEST: closing position key=%s reason=%s", key, reason
+        )
+        try:
+            self._force_close_position(key)
+            self._command_store.mark_done(cmd.id, cmd.owner_token)
+        except Exception as exc:
+            self.logger.error("CLOSE_REQUEST failed for key=%s: %s", key, exc)
+            self._command_store.mark_retry(
+                cmd.id, cmd.owner_token, "network_timeout", str(exc)
+            )
 
     def _force_close_position(self, key: str) -> None:
         """Force close an unhedged position at MARKET."""

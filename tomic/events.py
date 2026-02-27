@@ -35,6 +35,7 @@ class EventType(str, Enum):
     ORDER_REQUEST = "ORDER_REQUEST"
     ORDER_FILL = "ORDER_FILL"
     ORDER_REJECT = "ORDER_REJECT"
+    CLOSE_REQUEST = "CLOSE_REQUEST"
 
 
 class CommandStatus(str, Enum):

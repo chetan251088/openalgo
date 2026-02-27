@@ -8,6 +8,14 @@ Uses mocked infrastructure (no real ZeroMQ, SQLite in tmp_path).
 import pytest
 import time
 from unittest.mock import MagicMock, patch
+
+# Minimal legs fixture for multi-leg strategy signals used in pipeline tests
+_IC_LEGS = [
+    {"instrument": "NIFTY25MAR23400CE", "direction": "BUY", "quantity": 50},
+    {"instrument": "NIFTY25MAR23500CE", "direction": "SELL", "quantity": 50},
+    {"instrument": "NIFTY25MAR23200PE", "direction": "SELL", "quantity": 50},
+    {"instrument": "NIFTY25MAR23100PE", "direction": "BUY", "quantity": 50},
+]
 from tomic.agents.regime_agent import (
     AtomicRegimeState,
     RegimeAgent,
@@ -167,6 +175,7 @@ class TestRegimeFilter:
             "entry_price": 200,
             "stop_price": 190,
             "lot_size": 50,
+            "legs": _IC_LEGS,
         }
         risk_agent._evaluate_signal(signal)
         cmd = command_store.dequeue()
@@ -231,6 +240,7 @@ class TestFullPipeline:
             "instrument_vol": 0.20,
             "win_rate": 0.60,
             "rr_ratio": 2.5,
+            "legs": _IC_LEGS,
         }
         risk_agent.enqueue_signal(signal)
         risk_agent._tick()
@@ -274,6 +284,7 @@ class TestFullPipeline:
             "entry_price": 200,
             "stop_price": 190,
             "lot_size": 50,
+            "legs": _IC_LEGS,
         }
         risk_agent.enqueue_signal(signal)
         risk_agent._tick()
@@ -297,6 +308,7 @@ class TestFullPipeline:
                 "entry_price": 200 + i * 10,
                 "stop_price": 190 + i * 10,
                 "lot_size": 50,
+                "legs": _IC_LEGS,
             }
             risk_agent.enqueue_signal(signal)
 
@@ -332,6 +344,7 @@ class TestFullPipeline:
             "entry_price": 200,
             "stop_price": 190,
             "lot_size": 50,
+            "legs": _IC_LEGS,
         }
         risk_agent.enqueue_signal(signal)
         risk_agent._tick()

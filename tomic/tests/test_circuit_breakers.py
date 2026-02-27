@@ -148,4 +148,4 @@ class TestStatusSummary:
     def test_summary_has_order_count(self, cb):
         cb.record_order()
         summary = cb.get_status_summary()
-        assert summary["orders_last_minute"] >= 1
+        assert summary["breakers"]["ORDER_RATE"]["current"] >= 1

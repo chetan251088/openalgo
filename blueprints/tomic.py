@@ -690,6 +690,9 @@ def get_commands():
 @tomic_bp.route("/market-context", methods=["GET"])
 def get_market_context():
     """Return the current MarketContext snapshot (VIX, PCR, trends)."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
     runtime = _get_runtime()
     if not runtime:
         return jsonify({"status": "unavailable", "data": {}})
@@ -708,6 +711,9 @@ def get_market_context():
 @tomic_bp.route("/plan", methods=["GET"])
 def get_daily_plans():
     """Return the active daily trade plans generated at 9:45 AM."""
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
     runtime = _get_runtime()
     if not runtime:
         return jsonify({"status": "unavailable", "plans": []})

@@ -205,7 +205,6 @@ class PositionManager:
             )
             return
 
-        import json
         payload = {
             "action": "CLOSE_POSITION",
             "strategy_tag": strategy_tag,
@@ -213,8 +212,10 @@ class PositionManager:
             "reason": reason,
         }
         self._command_store.enqueue(
+            event_id=str(uuid.uuid4()),
             event_type="CLOSE_REQUEST",
-            payload=json.dumps(payload),
+            source_agent="position_manager",
+            payload=payload,
             idempotency_key=f"{strategy_tag}:close:{reason}:{int(time.time())}",
             correlation_id=str(uuid.uuid4()),
         )

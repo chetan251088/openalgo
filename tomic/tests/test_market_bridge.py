@@ -311,9 +311,14 @@ def test_market_bridge_default_sniper_symbols_exclude_indiavix(monkeypatch) -> N
 
 
 def test_market_bridge_selects_current_and_next_expiry() -> None:
-    expiries = ["20-FEB-26", "27-FEB-26", "05-MAR-26"]
+    today = datetime.now()
+    d0 = today + timedelta(days=7)
+    d1 = today + timedelta(days=14)
+    d2 = today + timedelta(days=21)
+    expiries = [d0.strftime("%d-%b-%y").upper(), d1.strftime("%d-%b-%y").upper(), d2.strftime("%d-%b-%y").upper()]
+    expected = [d0.strftime("%d%b%y").upper(), d1.strftime("%d%b%y").upper()]
     selected = TomicMarketBridge._select_front_expiries(expiries, max_count=2)
-    assert selected == ["20FEB26", "27FEB26"]
+    assert selected == expected
 
 
 def test_market_bridge_interested_strike_offsets(monkeypatch) -> None:

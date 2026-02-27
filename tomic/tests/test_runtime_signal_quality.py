@@ -52,6 +52,12 @@ def test_runtime_signal_quality_snapshot(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(runtime.sniper_agent, "scan", lambda: [sniper_signal])
     monkeypatch.setattr(runtime.volatility_agent, "scan", lambda: [vol_signal])
+    # Silence options-pipeline agents so this test measures only sniper+vol routing
+    monkeypatch.setattr(runtime.strategy_engine, "get_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        runtime.expiry_specialist, "get_gamma_signals", lambda instruments=None: []
+    )
+    monkeypatch.setattr(runtime, "_maybe_run_morning_plan", lambda: None)
     monkeypatch.setattr(
         runtime,
         "_market_session_state",
