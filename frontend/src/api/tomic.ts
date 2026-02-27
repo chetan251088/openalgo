@@ -157,6 +157,26 @@ export interface TomicActionResponse {
   message?: string
 }
 
+export interface TomicDeadLetter {
+  id: number
+  event_type: string
+  source_agent: string
+  last_error: string
+  attempt_count: number
+  max_attempts: number
+  created_at: string
+  processed_at: string | null
+  payload_preview: string
+}
+
+export interface TomicDeadLettersResponse {
+  status: string
+  total: number
+  limit: number
+  offset: number
+  items: TomicDeadLetter[]
+}
+
 export const tomicApi = {
   getStatus: async (): Promise<TomicStatusResponse> => {
     const response = await webClient.get<TomicStatusResponse>('/tomic/status')
@@ -216,6 +236,26 @@ export const tomicApi = {
     const response = await webClient.get<TomicAuditResponse>('/tomic/audit', {
       params: { limit },
     })
+    return response.data
+  },
+
+  getDeadLetters: async (limit = 50, offset = 0): Promise<TomicDeadLettersResponse> => {
+    const response = await webClient.get<TomicDeadLettersResponse>('/tomic/dead-letters', {
+      params: { limit, offset },
+    })
+    return response.data
+  },
+
+  retryDeadLetter: async (id: number): Promise<unknown> => {
+    const response = await webClient.post<unknown>(`/tomic/dead-letters/${id}/retry`)
+    return response.data
+  },
+
+  retryAllDeadLetters: async (errorClass?: string): Promise<{ status: string; requeued: number }> => {
+    const response = await webClient.post<{ status: string; requeued: number }>(
+      '/tomic/dead-letters/retry-all',
+      errorClass ? { error_class: errorClass } : {}
+    )
     return response.data
   },
 }

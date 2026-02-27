@@ -1,9 +1,10 @@
-import { Activity, PauseCircle, PlayCircle, RefreshCw, ShieldAlert, Square } from 'lucide-react'
+import { Activity, ChevronDown, ChevronRight, PauseCircle, PlayCircle, RefreshCw, RotateCcw, ShieldAlert, Square } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   tomicApi,
   type TomicAnalyticsResponse,
+  type TomicDeadLetter,
   type TomicPositionsResponse,
   type TomicSignalQualityResponse,
   type TomicStatusResponse,
@@ -34,6 +35,49 @@ function resolveMetric(metrics: Record<string, unknown> | undefined, candidates:
   return null
 }
 
+const PERMANENT_ERROR_CLASSES = new Set(['broker_reject', 'validation'])
+
+function parseDeadLetterError(lastError: string): { errorClass: string; errorMessage: string } {
+  if (lastError.startsWith('[')) {
+    const closingIdx = lastError.indexOf(']')
+    if (closingIdx > 0) {
+      return {
+        errorClass: lastError.slice(1, closingIdx),
+        errorMessage: lastError.slice(closingIdx + 1).trimStart(),
+      }
+    }
+  }
+  return { errorClass: 'unknown', errorMessage: lastError }
+}
+
+function formatAge(dateStr: string): string {
+  const now = Date.now()
+  const then = new Date(dateStr).getTime()
+  if (Number.isNaN(then)) return '—'
+  const diffMs = now - then
+  const diffSecs = Math.floor(diffMs / 1000)
+  if (diffSecs < 60) return `${diffSecs}s ago`
+  const diffMins = Math.floor(diffSecs / 60)
+  if (diffMins < 60) return `${diffMins}m ago`
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}
+
+function errorClassBadgeClass(errorClass: string): string {
+  if (errorClass === 'network_timeout' || errorClass === 'broker_rate_limit') {
+    return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'
+  }
+  return ''
+}
+
+function errorClassBadgeVariant(errorClass: string): 'destructive' | 'secondary' | undefined {
+  if (PERMANENT_ERROR_CLASSES.has(errorClass)) return 'destructive'
+  if (errorClass === 'network_timeout' || errorClass === 'broker_rate_limit') return undefined
+  return 'secondary'
+}
+
 const TOMIC_PAGE_LINKS: Array<{ label: string; href: string }> = [
   { label: 'Dashboard', href: '/tomic/dashboard' },
   { label: 'Agents', href: '/tomic/agents' },
@@ -59,6 +103,11 @@ export default function TomicDashboard() {
   const [positions, setPositions] = useState<TomicPositionsResponse | null>(null)
   const [analytics, setAnalytics] = useState<TomicAnalyticsResponse | null>(null)
   const [quality, setQuality] = useState<TomicSignalQualityResponse | null>(null)
+
+  const [deadLettersExpanded, setDeadLettersExpanded] = useState(false)
+  const [deadLetters, setDeadLetters] = useState<TomicDeadLetter[]>([])
+  const [deadLettersLoading, setDeadLettersLoading] = useState(false)
+  const [retryAllBusy, setRetryAllBusy] = useState(false)
 
   const loadData = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true)
@@ -94,6 +143,32 @@ export default function TomicDashboard() {
     return () => clearInterval(timer)
   }, [loadData])
 
+  // Auto-expand dead letters panel when count > 0
+  useEffect(() => {
+    const count = status?.data?.command_dead_letters ?? 0
+    if (count > 0) {
+      setDeadLettersExpanded(true)
+    }
+  }, [status?.data?.command_dead_letters])
+
+  const fetchDeadLetters = useCallback(async () => {
+    setDeadLettersLoading(true)
+    try {
+      const resp = await tomicApi.getDeadLetters(50, 0)
+      setDeadLetters(resp.items ?? [])
+    } catch {
+      showToast.error('Failed to load dead letters', 'monitoring')
+    } finally {
+      setDeadLettersLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (deadLettersExpanded) {
+      void fetchDeadLetters()
+    }
+  }, [deadLettersExpanded, fetchDeadLetters])
+
   const executeAction = useCallback(
     async (action: ActionKind) => {
       setActionBusy(action)
@@ -112,6 +187,29 @@ export default function TomicDashboard() {
     },
     [loadData]
   )
+
+  const handleRetryOne = useCallback(async (id: number) => {
+    try {
+      await tomicApi.retryDeadLetter(id)
+      setDeadLetters((prev) => prev.filter((item) => item.id !== id))
+      showToast.success('Dead letter requeued', 'monitoring')
+    } catch {
+      showToast.error('Failed to retry dead letter', 'monitoring')
+    }
+  }, [])
+
+  const handleRetryAll = useCallback(async () => {
+    setRetryAllBusy(true)
+    try {
+      const result = await tomicApi.retryAllDeadLetters()
+      showToast.success(`Requeued ${result.requeued} dead letter(s)`, 'monitoring')
+      await fetchDeadLetters()
+    } catch {
+      showToast.error('Failed to retry all dead letters', 'monitoring')
+    } finally {
+      setRetryAllBusy(false)
+    }
+  }, [fetchDeadLetters])
 
   const runtime = status?.data
   const loop = runtime?.signal_loop
@@ -315,6 +413,123 @@ export default function TomicDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader
+          className="cursor-pointer select-none"
+          onClick={() => setDeadLettersExpanded((v) => !v)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {deadLettersExpanded ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+              <CardTitle>
+                Dead Letters
+                {(runtime?.command_dead_letters ?? 0) > 0 && (
+                  <Badge variant="destructive" className="ml-2 text-xs">
+                    {runtime?.command_dead_letters}
+                  </Badge>
+                )}
+              </CardTitle>
+            </div>
+            {deadLettersExpanded && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void handleRetryAll()
+                }}
+                disabled={retryAllBusy || deadLetters.length === 0}
+              >
+                <RotateCcw className={`h-3.5 w-3.5 mr-1.5 ${retryAllBusy ? 'animate-spin' : ''}`} />
+                {retryAllBusy ? 'Retrying...' : 'Retry All Transient'}
+              </Button>
+            )}
+          </div>
+          <CardDescription>
+            Failed commands that exceeded retry limits. Transient errors can be requeued.
+          </CardDescription>
+        </CardHeader>
+        {deadLettersExpanded && (
+          <CardContent>
+            {deadLettersLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="h-6 w-6 animate-spin rounded-full border-b-2 border-primary" />
+              </div>
+            ) : deadLetters.length === 0 ? (
+              <div className="text-sm text-muted-foreground py-4 text-center">No dead letters.</div>
+            ) : (
+              <div className="border rounded-md overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-16">ID</TableHead>
+                      <TableHead>Event Type</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Error Class</TableHead>
+                      <TableHead>Error Message</TableHead>
+                      <TableHead className="w-24">Attempts</TableHead>
+                      <TableHead className="w-24">Age</TableHead>
+                      <TableHead className="w-20">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {deadLetters.map((item) => {
+                      const { errorClass, errorMessage } = parseDeadLetterError(item.last_error)
+                      const isPermanent = PERMANENT_ERROR_CLASSES.has(errorClass)
+                      const badgeVariant = errorClassBadgeVariant(errorClass)
+                      const badgeClass = errorClassBadgeClass(errorClass)
+                      const ageStr = formatAge(item.processed_at ?? item.created_at)
+                      return (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-mono text-xs">{item.id}</TableCell>
+                          <TableCell className="text-xs">{item.event_type}</TableCell>
+                          <TableCell className="text-xs">{item.source_agent}</TableCell>
+                          <TableCell>
+                            {badgeVariant ? (
+                              <Badge variant={badgeVariant} className="text-xs">
+                                {errorClass}
+                              </Badge>
+                            ) : (
+                              <Badge className={`text-xs ${badgeClass}`}>
+                                {errorClass}
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-xs max-w-xs truncate" title={errorMessage}>
+                            {errorMessage || '—'}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {item.attempt_count}/{item.max_attempts}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{ageStr}</TableCell>
+                          <TableCell>
+                            {!isPermanent && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => void handleRetryOne(item.id)}
+                              >
+                                <RotateCcw className="h-3 w-3 mr-1" />
+                                Retry
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
