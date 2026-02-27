@@ -723,7 +723,7 @@ def get_daily_plans():
         if agent is None:
             return jsonify({"status": "unavailable", "plans": [], "message": "daily_plan_agent not initialized"})
         summary = agent.get_summary()
-        return jsonify({"status": "success", "plans": summary})
+        return jsonify({"status": "success", "plans": summary.get("plans", []), "date": summary.get("date")})
     except Exception as e:
         logger.error("get_daily_plans failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500

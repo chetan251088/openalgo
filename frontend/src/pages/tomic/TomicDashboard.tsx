@@ -19,6 +19,7 @@ import {
   type TomicAnalyticsResponse,
   type TomicCircuitBreakerDetail,
   type TomicCircuitBreakersStructured,
+  type TomicDailyPlan,
   type TomicDailyPlansResponse,
   type TomicDeadLetter,
   type TomicMarketContextResponse,
@@ -260,6 +261,9 @@ export default function TomicDashboard() {
   const loop       = runtime?.signal_loop
   const agentRows  = useMemo(() => Object.entries(runtime?.agents ?? {}), [runtime?.agents])
   const openPositions = positions?.positions ?? []
+  // normalize: backend may wrap plans inside { date, plans: [] } instead of returning array directly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plansList: TomicDailyPlan[] = (() => { const r = dailyPlans?.plans as any; return Array.isArray(r) ? r : Array.isArray(r?.plans) ? r.plans : [] })()
   const totalPnl = useMemo(
     () => openPositions.reduce((s, p) => s + (Number(p.pnl) || 0), 0),
     [openPositions]
@@ -670,7 +674,7 @@ export default function TomicDashboard() {
                 <CardDescription className="text-xs">Generated at 9:45 AM — active strategies for today.</CardDescription>
               </CardHeader>
               <CardContent className="pb-4 px-4">
-                {(dailyPlans?.plans ?? []).length === 0 ? (
+                {plansList.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-6">No plans generated yet.</p>
                 ) : (
                   <div className="border rounded-md overflow-x-auto">
@@ -690,7 +694,7 @@ export default function TomicDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {(dailyPlans?.plans ?? []).map((plan, idx) => (
+                        {plansList.map((plan, idx) => (
                           <TableRow key={`plan-${idx}`}>
                             <TableCell className="font-semibold text-sm">{plan.instrument}</TableCell>
                             <TableCell>
