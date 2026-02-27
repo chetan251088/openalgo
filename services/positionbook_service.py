@@ -26,11 +26,29 @@ def _extract_position_rows(raw_payload: Any) -> list[dict[str, Any]]:
             raw_payload.get("position"),
             raw_payload.get("result"),
             raw_payload.get("results"),
+            raw_payload.get("net"),
+            raw_payload.get("day"),
+            raw_payload,
         )
         for candidate in candidates:
             if isinstance(candidate, list):
                 return [row for row in candidate if isinstance(row, dict)]
             if isinstance(candidate, dict):
+                nested_candidates = (
+                    candidate.get("net"),
+                    candidate.get("positions"),
+                    candidate.get("position"),
+                    candidate.get("result"),
+                    candidate.get("results"),
+                    candidate.get("data"),
+                    candidate.get("items"),
+                    candidate.get("records"),
+                )
+                for nested in nested_candidates:
+                    if isinstance(nested, list):
+                        return [row for row in nested if isinstance(row, dict)]
+                    if isinstance(nested, dict):
+                        return [nested]
                 return [candidate]
         return []
 
@@ -206,8 +224,36 @@ def get_positionbook_with_auth(
 
         normalized_positions = _extract_position_rows(positions_data)
 
+        # Most broker mappers expect raw payload (dict/list).
+        # Some expect extracted row lists. Try raw first, then fallback to normalized rows.
+        raw_map_error = None
+        try:
+            positions_data = broker_funcs["map_position_data"](positions_data)
+        except Exception as e:
+            raw_map_error = e
+            positions_data = None
+
+        should_try_normalized = (
+            normalized_positions
+            and (
+                raw_map_error is not None
+                or not isinstance(positions_data, list)
+                or (isinstance(positions_data, list) and len(positions_data) == 0)
+            )
+        )
+        if should_try_normalized:
+            try:
+                positions_data = broker_funcs["map_position_data"](normalized_positions)
+                raw_map_error = None
+            except Exception:
+                if raw_map_error is not None:
+                    raise raw_map_error
+                raise
+
+        if positions_data is None:
+            positions_data = []
+
         # Transform data using mapping functions
-        positions_data = broker_funcs["map_position_data"](normalized_positions)
         positions_data = broker_funcs["transform_positions_data"](positions_data)
 
         # Format numeric values to 2 decimal places
