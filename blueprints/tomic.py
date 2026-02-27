@@ -513,9 +513,32 @@ def _command_row_to_dead_letter_dict(row, payload_max: int = 120) -> Dict[str, A
     return d
 
 
-@tomic_bp.route("/dead-letters", methods=["GET"])
-def get_dead_letters():
-    """List DEAD_LETTER commands from the CommandStore."""
+@tomic_bp.route("/dead-letters", methods=["GET", "DELETE"])
+def dead_letters_collection():
+    """GET: list dead-letter commands. DELETE: purge all dead-letter commands."""
+    if request.method == "DELETE":
+        auth_err = _require_auth()
+        if auth_err:
+            return auth_err
+
+        runtime = _get_runtime()
+        if not runtime:
+            return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
+
+        try:
+            store = runtime.command_store
+            count = store.delete_all_dead_letters()
+            _audit_log(
+                "dead_letter.delete_all",
+                f"deleted={count}",
+                category="DEAD_LETTER",
+            )
+            return jsonify({"status": "success", "deleted": count})
+        except Exception as e:
+            logger.error("delete_all_dead_letters failed: %s", e)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    # GET
     limit = min(request.args.get("limit", 50, type=int), 200)
     offset = request.args.get("offset", 0, type=int)
 
@@ -598,30 +621,6 @@ def retry_dead_letter(row_id: int):
         logger.error("retry_dead_letter(%s) failed: %s", row_id, e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
-@tomic_bp.route("/dead-letters", methods=["DELETE"])
-def delete_all_dead_letters():
-    """Permanently delete all dead-letter commands."""
-    auth_err = _require_auth()
-    if auth_err:
-        return auth_err
-
-    runtime = _get_runtime()
-    if not runtime:
-        return jsonify({"status": "error", "message": "TOMIC runtime not initialized"}), 503
-
-    try:
-        store = runtime.command_store
-        count = store.delete_all_dead_letters()
-        _audit_log(
-            "dead_letter.delete_all",
-            f"deleted={count}",
-            category="DEAD_LETTER",
-        )
-        return jsonify({"status": "success", "deleted": count})
-    except Exception as e:
-        logger.error("delete_all_dead_letters failed: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @tomic_bp.route("/dead-letters/<int:row_id>", methods=["DELETE"])
