@@ -111,8 +111,8 @@ class LegResolver:
         Resolve 4-leg Iron Condor:
           BUY  PE (wing)  → wing_delta
           SELL PE (short) → short_delta
-          SELL CE (short) → short_delta
           BUY  CE (wing)  → wing_delta
+          SELL CE (short) → short_delta
         """
         legs = []
 
@@ -121,12 +121,12 @@ class LegResolver:
         wing_put = self.find_strike_by_delta(strikes, prices, spot, dte, "p", wing_delta)
         if short_put and wing_put and wing_put < short_put:
             legs.append(LegResolution(
-                leg_type="SELL_PUT", option_type="PE", direction="SELL",
-                strike=short_put, estimated_price=prices.get(short_put, 0.0),
-            ))
-            legs.append(LegResolution(
                 leg_type="BUY_PUT", option_type="PE", direction="BUY",
                 strike=wing_put, estimated_price=prices.get(wing_put, 0.0),
+            ))
+            legs.append(LegResolution(
+                leg_type="SELL_PUT", option_type="PE", direction="SELL",
+                strike=short_put, estimated_price=prices.get(short_put, 0.0),
             ))
 
         # Call side
@@ -134,12 +134,12 @@ class LegResolver:
         wing_call = self.find_strike_by_delta(strikes, prices, spot, dte, "c", wing_delta)
         if short_call and wing_call and wing_call > short_call:
             legs.append(LegResolution(
-                leg_type="SELL_CALL", option_type="CE", direction="SELL",
-                strike=short_call, estimated_price=prices.get(short_call, 0.0),
-            ))
-            legs.append(LegResolution(
                 leg_type="BUY_CALL", option_type="CE", direction="BUY",
                 strike=wing_call, estimated_price=prices.get(wing_call, 0.0),
+            ))
+            legs.append(LegResolution(
+                leg_type="SELL_CALL", option_type="CE", direction="SELL",
+                strike=short_call, estimated_price=prices.get(short_call, 0.0),
             ))
 
         return legs
