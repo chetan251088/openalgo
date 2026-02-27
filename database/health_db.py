@@ -16,9 +16,12 @@ Follows industry standards (draft-inadarei-api-health-check):
 
 import logging
 import os
+import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -28,18 +31,40 @@ logger = logging.getLogger(__name__)
 
 # Use a separate database for health monitoring
 HEALTH_DATABASE_URL = os.getenv("HEALTH_DATABASE_URL", "sqlite:///db/health.db")
+HEALTH_DB_BUSY_TIMEOUT_MS = max(1000, int(os.getenv("HEALTH_DB_BUSY_TIMEOUT_MS", "5000")))
+HEALTH_DB_LOCK_RETRIES = max(1, int(os.getenv("HEALTH_DB_LOCK_RETRIES", "3")))
+HEALTH_DB_RETRY_DELAY_SECONDS = max(
+    0.05, float(os.getenv("HEALTH_DB_RETRY_DELAY_SECONDS", "0.2"))
+)
 
 # Conditionally create engine based on DB type
 if HEALTH_DATABASE_URL and "sqlite" in HEALTH_DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     health_engine = create_engine(
-        HEALTH_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        HEALTH_DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={
+            "check_same_thread": False,
+            "timeout": HEALTH_DB_BUSY_TIMEOUT_MS / 1000.0,
+        },
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
     health_engine = create_engine(
         HEALTH_DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10
     )
+
+if HEALTH_DATABASE_URL and "sqlite" in HEALTH_DATABASE_URL:
+
+    @event.listens_for(health_engine, "connect")
+    def _configure_sqlite_connection(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA busy_timeout={HEALTH_DB_BUSY_TIMEOUT_MS}")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
 
 health_session = scoped_session(
     sessionmaker(autocommit=False, autoflush=False, bind=health_engine)
@@ -454,20 +479,47 @@ def purge_old_metrics(days=7):
     Purge metrics older than specified days to keep database size manageable.
     Keep alerts forever for historical analysis.
     """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        for attempt in range(1, HEALTH_DB_LOCK_RETRIES + 1):
+            try:
+                # Delete old metrics
+                deleted = (
+                    health_session.query(HealthMetric)
+                    .filter(HealthMetric.timestamp < cutoff)
+                    .delete(synchronize_session=False)
+                )
 
-        # Delete old metrics
-        deleted = (
-            health_session.query(HealthMetric)
-            .filter(HealthMetric.timestamp < cutoff)
-            .delete(synchronize_session=False)
-        )
+                health_session.commit()
+                logger.debug(f"Purged {deleted} old health metrics (older than {days} days)")
+                return deleted
+            except OperationalError as e:
+                health_session.rollback()
 
-        health_session.commit()
-        logger.debug(f"Purged {deleted} old health metrics (older than {days} days)")
-        return deleted
-    except Exception as e:
-        logger.exception(f"Error purging old metrics: {str(e)}")
-        health_session.rollback()
-        return 0
+                error_message = str(getattr(e, "orig", e)).lower()
+                is_lock_error = isinstance(getattr(e, "orig", None), sqlite3.OperationalError) and (
+                    "database is locked" in error_message
+                    or "database table is locked" in error_message
+                )
+
+                if is_lock_error and attempt < HEALTH_DB_LOCK_RETRIES:
+                    sleep_seconds = HEALTH_DB_RETRY_DELAY_SECONDS * attempt
+                    logger.warning(
+                        "Health DB locked while purging old metrics "
+                        "(attempt %s/%s); retrying in %.2fs",
+                        attempt,
+                        HEALTH_DB_LOCK_RETRIES,
+                        sleep_seconds,
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+
+                logger.exception(f"Error purging old metrics: {str(e)}")
+                return 0
+            except Exception as e:
+                logger.exception(f"Error purging old metrics: {str(e)}")
+                health_session.rollback()
+                return 0
+    finally:
+        health_session.remove()
