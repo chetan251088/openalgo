@@ -12,6 +12,39 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { showToast } from '@/utils/toast'
 
+const AUDIT_CATEGORIES = ['All', 'CONTROL', 'DEAD_LETTER', 'RISK', 'EXECUTION', 'SIGNAL'] as const
+type AuditCategory = (typeof AUDIT_CATEGORIES)[number]
+
+function getCategoryBadge(category: string | undefined) {
+  if (!category) return <span className="text-muted-foreground">—</span>
+  switch (category) {
+    case 'CONTROL':
+      return <Badge variant="secondary">{category}</Badge>
+    case 'DEAD_LETTER':
+      return (
+        <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+          {category}
+        </Badge>
+      )
+    case 'RISK':
+      return <Badge variant="destructive">{category}</Badge>
+    case 'EXECUTION':
+      return (
+        <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+          {category}
+        </Badge>
+      )
+    case 'SIGNAL':
+      return (
+        <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+          {category}
+        </Badge>
+      )
+    default:
+      return <Badge variant="secondary">{category}</Badge>
+  }
+}
+
 function asString(value: unknown): string {
   if (value == null) return '—'
   if (typeof value === 'string') return value
@@ -48,36 +81,44 @@ export default function TomicAgents() {
   const [trades, setTrades] = useState<Array<Record<string, unknown>>>([])
   const [auditEntries, setAuditEntries] = useState<TomicAuditEntry[]>([])
   const [quality, setQuality] = useState<TomicSignalQualityResponse | null>(null)
+  const [auditCategory, setAuditCategory] = useState<AuditCategory>('All')
 
-  const loadData = useCallback(async (silent = false) => {
-    if (silent) setRefreshing(true)
-    else setLoading(true)
-    try {
-      const [statusResp, journalResp, auditResp, qualityResp] = await Promise.allSettled([
-        tomicApi.getStatus(),
-        tomicApi.getJournal(60),
-        tomicApi.getAudit(80),
-        tomicApi.getSignalQuality(false),
-      ])
-      if (statusResp.status === 'fulfilled') setStatus(statusResp.value)
-      if (journalResp.status === 'fulfilled') setTrades(journalResp.value.trades ?? [])
-      if (auditResp.status === 'fulfilled') setAuditEntries(auditResp.value.entries ?? [])
-      if (qualityResp.status === 'fulfilled') setQuality(qualityResp.value)
-    } catch {
-      if (!silent) showToast.error('Failed to load TOMIC agent view', 'monitoring')
-    } finally {
-      if (silent) setRefreshing(false)
-      else setLoading(false)
-    }
-  }, [])
+  const loadData = useCallback(
+    async (silent = false, category: AuditCategory = 'All') => {
+      if (silent) setRefreshing(true)
+      else setLoading(true)
+      try {
+        const auditFetch =
+          category !== 'All'
+            ? tomicApi.getAuditByCategory(category, 80)
+            : tomicApi.getAudit(80)
+        const [statusResp, journalResp, auditResp, qualityResp] = await Promise.allSettled([
+          tomicApi.getStatus(),
+          tomicApi.getJournal(60),
+          auditFetch,
+          tomicApi.getSignalQuality(false),
+        ])
+        if (statusResp.status === 'fulfilled') setStatus(statusResp.value)
+        if (journalResp.status === 'fulfilled') setTrades(journalResp.value.trades ?? [])
+        if (auditResp.status === 'fulfilled') setAuditEntries(auditResp.value.entries ?? [])
+        if (qualityResp.status === 'fulfilled') setQuality(qualityResp.value)
+      } catch {
+        if (!silent) showToast.error('Failed to load TOMIC agent view', 'monitoring')
+      } finally {
+        if (silent) setRefreshing(false)
+        else setLoading(false)
+      }
+    },
+    []
+  )
 
   useEffect(() => {
-    void loadData(false)
+    void loadData(false, auditCategory)
     const timer = setInterval(() => {
-      void loadData(true)
+      void loadData(true, auditCategory)
     }, 6000)
     return () => clearInterval(timer)
-  }, [loadData])
+  }, [loadData, auditCategory])
 
   const agentRows = useMemo(
     () => Object.entries(status?.data?.agents ?? {}),
@@ -116,7 +157,7 @@ export default function TomicAgents() {
             Live health, decision traces, and control audit entries.
           </p>
         </div>
-        <Button variant="outline" onClick={() => void loadData(true)} disabled={refreshing}>
+        <Button variant="outline" onClick={() => void loadData(true, auditCategory)} disabled={refreshing}>
           <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
@@ -435,12 +476,26 @@ export default function TomicAgents() {
           <CardTitle>Control Audit Trail</CardTitle>
           <CardDescription>Operator actions and control-plane history.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {AUDIT_CATEGORIES.map((cat) => (
+              <Button
+                key={cat}
+                size="sm"
+                variant={auditCategory === cat ? 'default' : 'outline'}
+                onClick={() => setAuditCategory(cat)}
+                className="h-7 px-3 text-xs"
+              >
+                {cat}
+              </Button>
+            ))}
+          </div>
           <div className="border rounded-md">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Time</TableHead>
+                  <TableHead>Category</TableHead>
                   <TableHead>User</TableHead>
                   <TableHead>Action</TableHead>
                   <TableHead>Details</TableHead>
@@ -451,6 +506,7 @@ export default function TomicAgents() {
                 {auditEntries.slice(0, 40).map((entry) => (
                   <TableRow key={entry.id}>
                     <TableCell>{formatTs(entry.timestamp)}</TableCell>
+                    <TableCell>{getCategoryBadge(entry.category)}</TableCell>
                     <TableCell>{entry.user_id || '—'}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{entry.action}</Badge>
@@ -461,7 +517,7 @@ export default function TomicAgents() {
                 ))}
                 {auditEntries.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground">
+                    <TableCell colSpan={6} className="text-muted-foreground">
                       No audit entries found.
                     </TableCell>
                   </TableRow>

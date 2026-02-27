@@ -2,6 +2,7 @@ import { AlertTriangle, RefreshCw, Shield } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   tomicApi,
+  type TomicCircuitBreakersStructured,
   type TomicMetricsResponse,
   type TomicPositionsResponse,
   type TomicSignalQualityResponse,
@@ -31,6 +32,21 @@ function renderUnknownValue(value: unknown): string {
     return String(value)
   }
   return JSON.stringify(value)
+}
+
+function isStructuredBreakers(cb: unknown): cb is TomicCircuitBreakersStructured {
+  return typeof cb === 'object' && cb !== null && 'breakers' in cb && 'capital' in cb
+}
+
+function prettifyBreakerKey(key: string): string {
+  return key
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
+function formatCapital(value: number): string {
+  return value.toLocaleString('en-IN', { maximumFractionDigits: 0 })
 }
 
 export default function TomicRisk() {
@@ -231,31 +247,77 @@ export default function TomicRisk() {
             <CardDescription>Supervisor-level hard stops and thresholds.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="border rounded-md">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Breaker</TableHead>
-                    <TableHead>State</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {Object.entries(circuitBreakers).map(([key, value]) => (
-                    <TableRow key={key}>
-                      <TableCell>{key}</TableCell>
-                      <TableCell>{renderUnknownValue(value)}</TableCell>
-                    </TableRow>
+            {isStructuredBreakers(circuitBreakers) ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Capital: <span className="font-semibold text-foreground">₹{formatCapital(circuitBreakers.capital)}</span>
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {Object.entries(circuitBreakers.breakers).map(([key, breaker]) => (
+                    <div key={key} className="rounded-md border p-3 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sm">{prettifyBreakerKey(key)}</span>
+                        <Badge variant={breaker.tripped ? 'destructive' : 'default'} className={breaker.tripped ? '' : 'bg-green-600 hover:bg-green-700 text-white'}>
+                          {breaker.tripped ? 'OPEN' : 'CLOSED'}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground space-y-0.5">
+                        {breaker.threshold_pct != null && (
+                          <div>Threshold: {breaker.threshold_pct}% | Current: {breaker.current_pct ?? '—'}%</div>
+                        )}
+                        {breaker.threshold != null && breaker.threshold_pct == null && (
+                          <div>Threshold: {breaker.threshold} | Current: {breaker.current ?? '—'}</div>
+                        )}
+                        {breaker.threshold_x != null && (
+                          <div>Threshold: {breaker.threshold_x}x | Current: {breaker.current_x ?? '—'}x</div>
+                        )}
+                        {breaker.unhedged_count != null && (
+                          <div>Unhedged positions: {breaker.unhedged_count}</div>
+                        )}
+                        {breaker.timeout_s != null && (
+                          <div>Timeout: {breaker.timeout_s}s</div>
+                        )}
+                        {breaker.description && (
+                          <div className="text-muted-foreground/70 italic">{breaker.description}</div>
+                        )}
+                      </div>
+                      {breaker.message && (
+                        <p className="text-xs text-muted-foreground border-t pt-1 mt-1">{breaker.message}</p>
+                      )}
+                    </div>
                   ))}
-                  {Object.keys(circuitBreakers).length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={2} className="text-muted-foreground">
-                        No circuit breaker metrics available.
-                      </TableCell>
-                    </TableRow>
+                  {Object.keys(circuitBreakers.breakers).length === 0 && (
+                    <p className="text-sm text-muted-foreground col-span-2">No circuit breakers configured.</p>
                   )}
-                </TableBody>
-              </Table>
-            </div>
+                </div>
+              </div>
+            ) : (
+              <div className="border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Breaker</TableHead>
+                      <TableHead>State</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(circuitBreakers as Record<string, unknown>).map(([key, value]) => (
+                      <TableRow key={key}>
+                        <TableCell>{key}</TableCell>
+                        <TableCell>{renderUnknownValue(value)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {Object.keys(circuitBreakers as Record<string, unknown>).length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={2} className="text-muted-foreground">
+                          No circuit breaker metrics available.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
 

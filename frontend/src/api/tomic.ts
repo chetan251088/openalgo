@@ -66,10 +66,29 @@ export interface TomicAnalyticsResponse {
   message?: string
 }
 
+export interface TomicCircuitBreakerDetail {
+  tripped: boolean
+  threshold_pct?: number
+  current_pct?: number
+  threshold?: number
+  current?: number
+  threshold_x?: number
+  current_x?: number
+  unhedged_count?: number
+  timeout_s?: number
+  message: string
+  description?: string
+}
+
+export interface TomicCircuitBreakersStructured {
+  capital: number
+  breakers: Record<string, TomicCircuitBreakerDetail>
+}
+
 export interface TomicMetricsResponse {
   status: string
   data?: {
-    circuit_breakers?: Record<string, unknown>
+    circuit_breakers?: TomicCircuitBreakersStructured | Record<string, unknown>
     freshness?: Record<string, unknown>
     ws_data?: Record<string, unknown>
     market_bridge?: Record<string, unknown>
@@ -144,6 +163,7 @@ export interface TomicAuditEntry {
   action: string
   details?: string
   ip_address?: string
+  category?: string
 }
 
 export interface TomicAuditResponse {
@@ -215,6 +235,13 @@ export const tomicApi = {
   getAudit: async (limit = 100): Promise<TomicAuditResponse> => {
     const response = await webClient.get<TomicAuditResponse>('/tomic/audit', {
       params: { limit },
+    })
+    return response.data
+  },
+
+  getAuditByCategory: async (category: string, limit = 100): Promise<TomicAuditResponse> => {
+    const response = await webClient.get<TomicAuditResponse>('/tomic/audit', {
+      params: { category, limit },
     })
     return response.data
   },
