@@ -70,12 +70,21 @@ class StrategyType(str, Enum):
     DITM_CALL = "DITM_CALL"
     DITM_PUT = "DITM_PUT"
     CALENDAR_DIAGONAL = "CALENDAR_DIAGONAL"
+    GAMMA_CAPTURE = "GAMMA_CAPTURE"      # expiry day buy straddle
+    SKIP = "SKIP"                        # no trade conditions
 
 
 class TomicMode(str, Enum):
     SANDBOX = "sandbox"
     SEMI_AUTO = "semi_auto"
     FULL_AUTO = "full_auto"
+
+
+class EntryMode(str, Enum):
+    MORNING_PLAN = "morning_plan"
+    CONTINUOUS = "continuous"
+    EVENT_DRIVEN = "event_driven"
+    EXPIRY_GAMMA = "expiry_gamma"
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +364,73 @@ class UniverseParams:
 
 
 # ---------------------------------------------------------------------------
+# Market Context Parameters
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MarketContextParams:
+    pcr_bullish_above: float = 1.3       # PCR > 1.3 → tilt to Bull Put
+    pcr_bearish_below: float = 0.8       # PCR < 0.8 → tilt to Bear Call
+    pcr_refresh_interval_s: float = 300.0  # refresh every 5 min
+    vix_too_low: float = 12.0            # skip selling below this
+    vix_normal_high: float = 18.0        # upper bound of normal range
+    vix_elevated_high: float = 25.0      # upper bound of elevated range
+    vix_extreme: float = 35.0            # skip above this
+    trend_ma_period: int = 20            # bars for trend MA
+    max_pain_refresh_interval_s: float = 300.0
+
+
+# ---------------------------------------------------------------------------
+# Daily Plan Parameters
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DailyPlanParams:
+    plan_time_hhmm: str = "09:45"       # when to generate morning plan
+    plan_valid_until_hhmm: str = "14:00"  # plan expires at this time
+    instruments: tuple = ("NIFTY", "BANKNIFTY", "SENSEX")
+    short_delta_normal: float = 0.25     # VIX 12-18
+    short_delta_elevated: float = 0.30  # VIX 18-25
+    short_delta_high: float = 0.20      # VIX 25-35
+    wing_delta_normal: float = 0.10
+    wing_delta_elevated: float = 0.12
+    wing_delta_high: float = 0.08
+
+
+# ---------------------------------------------------------------------------
+# Position Manager Parameters
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PositionManagerParams:
+    trail_stop_activate_pct: float = 0.30  # activate trail at 30% profit
+    profit_target_pct: float = 0.50       # close at 50% of max credit
+    stop_loss_multiple: float = 2.0       # close at 2× credit received
+    delta_warning_threshold: float = 0.35
+    delta_adjust_threshold: float = 0.45
+    max_reentries_per_day: int = 2
+    check_interval_s: float = 5.0        # check every 5 seconds
+    intraday_exit_hhmm: str = "15:00"    # force close at 3 PM
+
+
+# ---------------------------------------------------------------------------
+# Expiry Specialist Parameters
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ExpiryParams:
+    gamma_entry_hhmm: str = "14:00"      # start gamma capture
+    gamma_exit_hhmm: str = "15:10"       # force exit
+    max_capital_pct: float = 0.005       # max 0.5% of capital
+    max_abs_inr: float = 5000.0          # max ₹5,000 per trade
+    min_option_price: float = 0.5        # only buy if price < ₹X
+    max_option_price: float = 10.0       # skip if too expensive
+    nifty_expiry_weekday: int = 3        # Thursday (0=Mon)
+    banknifty_expiry_weekday: int = 2    # Wednesday
+    sensex_expiry_weekday: int = 4       # Friday
+
+
+# ---------------------------------------------------------------------------
 # Root Config — aggregates everything
 # ---------------------------------------------------------------------------
 
@@ -378,6 +454,10 @@ class TomicConfig:
     paper: PaperParams = field(default_factory=PaperParams)
     scaling: ScalingParams = field(default_factory=ScalingParams)
     universe: UniverseParams = field(default_factory=UniverseParams)
+    market_context: MarketContextParams = field(default_factory=MarketContextParams)
+    daily_plan: DailyPlanParams = field(default_factory=DailyPlanParams)
+    position_manager: PositionManagerParams = field(default_factory=PositionManagerParams)
+    expiry: ExpiryParams = field(default_factory=ExpiryParams)
 
     @classmethod
     def load(cls, mode: Optional[str] = None) -> "TomicConfig":
