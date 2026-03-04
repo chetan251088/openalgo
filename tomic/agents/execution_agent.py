@@ -117,6 +117,49 @@ class ExecutionAgent(AgentBase):
     # Multi-leg symbol resolution via LegResolver (new options selling flow)
     # -----------------------------------------------------------------------
 
+    def _verify_delta_bounds(
+        self,
+        legs,
+        short_delta_target: float,
+        wing_delta_target: float,
+        tolerance: Optional[float] = None,
+    ) -> bool:
+        """
+        Log a warning if any resolved leg delta deviates too far from target.
+        Returns True if acceptable, False if deviation is critical (>2× tolerance).
+        """
+        if tolerance is None:
+            tolerance = float(self._config.execution.delta_tolerance)
+        critical_mult = float(self._config.execution.delta_critical_multiplier)
+
+        all_ok = True
+        for leg in legs:
+            leg_type = str(getattr(leg, "leg_type", "") or "")
+            actual_delta = float(getattr(leg, "actual_delta", 0.0) or 0.0)
+            strike = float(getattr(leg, "strike", 0.0) or 0.0)
+
+            if leg_type.startswith("SELL"):
+                target = short_delta_target
+            elif leg_type.startswith("BUY"):
+                target = wing_delta_target
+            else:
+                continue
+
+            deviation = abs(abs(actual_delta) - target)
+            if deviation > tolerance * critical_mult:
+                self.logger.warning(
+                    "Delta verification FAILED: %s strike=%.0f actual_delta=%.3f "
+                    "target=%.3f deviation=%.3f",
+                    leg_type, strike, actual_delta, target, deviation,
+                )
+                all_ok = False
+            elif deviation > tolerance:
+                self.logger.warning(
+                    "Delta deviation HIGH: %s strike=%.0f actual_delta=%.3f target=%.3f",
+                    leg_type, strike, actual_delta, target,
+                )
+        return all_ok
+
     def _resolve_legs_for_command(
         self,
         payload: Dict[str, Any],
@@ -146,31 +189,43 @@ class ExecutionAgent(AgentBase):
             return []
 
         resolver = LegResolver(greeks_engine=self._greeks_engine)
+        legs = []
 
         if strategy_type == "IRON_CONDOR":
-            return resolver.resolve_iron_condor(
+            legs = resolver.resolve_iron_condor(
                 strikes=strikes, prices=prices, spot=spot, dte=dte,
                 short_delta=short_delta, wing_delta=wing_delta,
             )
-        if strategy_type == "BULL_PUT_SPREAD":
-            return resolver.resolve_bull_put_spread(
+        elif strategy_type == "BULL_PUT_SPREAD":
+            legs = resolver.resolve_bull_put_spread(
                 strikes=strikes, prices=prices, spot=spot, dte=dte,
                 short_delta=short_delta, wing_delta=wing_delta,
             )
-        if strategy_type == "BEAR_CALL_SPREAD":
-            return resolver.resolve_bear_call_spread(
+        elif strategy_type == "BEAR_CALL_SPREAD":
+            legs = resolver.resolve_bear_call_spread(
                 strikes=strikes, prices=prices, spot=spot, dte=dte,
                 short_delta=short_delta, wing_delta=wing_delta,
             )
-        if strategy_type == "GAMMA_CAPTURE":
+        elif strategy_type == "GAMMA_CAPTURE":
             max_price = float(payload.get("max_option_price",
-                                           self._config.expiry.max_option_price))
-            return resolver.resolve_gamma_capture(
+                                          self._config.expiry.max_option_price))
+            legs = resolver.resolve_gamma_capture(
                 strikes=strikes, prices=prices, spot=spot, max_price=max_price,
             )
+        else:
+            logger.warning("LegResolver: unknown strategy_type=%s", strategy_type)
+            return []
 
-        logger.warning("LegResolver: unknown strategy_type=%s", strategy_type)
-        return []
+        if legs and strategy_type != "GAMMA_CAPTURE":
+            delta_ok = self._verify_delta_bounds(legs, short_delta, wing_delta)
+            if not delta_ok:
+                logger.warning(
+                    "LegResolver: critical delta deviation for %s %s — rejecting legs",
+                    instrument, strategy_type,
+                )
+                return []
+
+        return legs
 
     def _get_spot_price(self, instrument: str) -> float:
         """Get current spot price from WS data manager."""

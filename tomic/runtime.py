@@ -139,6 +139,7 @@ class TomicRuntime:
         self._reject_streaks: Dict[str, int] = {}
         self._last_dead_letter_count = 0
         self._morning_plan_last_date: Optional[date] = None
+        self._vwap_reset_today: bool = False
         self._runtime_started_wall = 0.0
         self._runtime_started_mono = 0.0
         self._feed_disconnected_alert_active = False
@@ -477,6 +478,7 @@ class TomicRuntime:
         while not self._signal_loop_stop.is_set():
             cycle_started = time.monotonic()
             try:
+                self._maybe_reset_vwap()
                 snapshot = self._compute_signal_quality_snapshot(
                     enqueue_signals=True,
                     source="loop",
@@ -504,6 +506,20 @@ class TomicRuntime:
             elapsed = time.monotonic() - cycle_started
             wait_s = max(0.1, self._signal_loop_interval_s - elapsed)
             self._signal_loop_stop.wait(wait_s)
+
+    def _maybe_reset_vwap(self) -> None:
+        """Reset VWAP accumulation at 9:15 AM (market open). Rearms at midnight."""
+        try:
+            tz = self._market_tz
+            now_local = datetime.now(tz=tz) if tz else datetime.now()
+            if now_local.hour == 9 and now_local.minute == 15 and not self._vwap_reset_today:
+                self.regime_agent.reset_vwap()
+                self._vwap_reset_today = True
+                logger.info("TOMIC: VWAP accumulator reset at market open %s", now_local.strftime("%H:%M"))
+            if now_local.hour == 0:
+                self._vwap_reset_today = False  # rearm for next day
+        except Exception as exc:
+            logger.debug("TOMIC _maybe_reset_vwap failed: %s", exc)
 
     def _maybe_run_morning_plan(self) -> None:
         """

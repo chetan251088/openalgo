@@ -72,13 +72,28 @@ function shouldRedirectOnUnauthorized(error: unknown): boolean {
   return true
 }
 
-// Helper to fetch CSRF token
+// CSRF token cache — refreshed every 5 minutes or on 403
+let _csrfToken: string | null = null
+let _csrfTokenExpiry = 0
+const CSRF_TOKEN_TTL_MS = 5 * 60 * 1000
+
+export function invalidateCsrfToken(): void {
+  _csrfToken = null
+  _csrfTokenExpiry = 0
+}
+
 export async function fetchCSRFToken(): Promise<string> {
+  const now = Date.now()
+  if (_csrfToken && now < _csrfTokenExpiry) {
+    return _csrfToken
+  }
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
   })
   const data = await response.json()
-  return data.csrf_token
+  _csrfToken = data.csrf_token as string
+  _csrfTokenExpiry = now + CSRF_TOKEN_TTL_MS
+  return _csrfToken
 }
 
 export const apiClient = axios.create({
@@ -87,6 +102,7 @@ export const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true,
+  timeout: 10000,
 })
 
 // Request interceptor
@@ -160,6 +176,7 @@ authClient.interceptors.request.use(
 export const webClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
+  timeout: 10000,
 })
 
 // Add CSRF token to web client requests
@@ -197,8 +214,8 @@ webClient.interceptors.response.use(
       // Unauthorized - redirect to login
       window.location.href = '/login'
     } else if (status === 403) {
-      // Forbidden - user doesn't have permission for this resource
-      // Create a more descriptive error for the caller to handle
+      // Forbidden or CSRF mismatch — invalidate cached token so next request re-fetches
+      invalidateCsrfToken()
       error.message = 'You do not have permission to access this resource'
     }
     return Promise.reject(error)

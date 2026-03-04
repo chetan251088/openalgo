@@ -137,6 +137,31 @@ class StrategyEngine:
             strength += 10.0   # range-bound = ideal for premium selling
         if plan.reentry_count == 0:
             strength += 5.0    # fresh entry
+
+        # OI wall proximity boost: walls comfortably outside confirm safe range
+        try:
+            ctx = self._market_context_agent.read_context()
+            instrument = str(getattr(plan, "instrument", "") or "").upper()
+            spot = (
+                ctx.nifty_ltp if "NIFTY" in instrument and "BANK" not in instrument
+                else ctx.banknifty_ltp if "BANKNIFTY" in instrument
+                else 0.0
+            )
+            put_wall = ctx.oi_put_wall.get(instrument, 0.0) if hasattr(ctx, "oi_put_wall") else 0.0
+            call_wall = ctx.oi_call_wall.get(instrument, 0.0) if hasattr(ctx, "oi_call_wall") else 0.0
+            min_dist = self._config.strategy_engine.oi_wall_min_distance_pct
+            if spot > 0 and put_wall > 0 and call_wall > 0:
+                put_dist = (spot - put_wall) / spot
+                call_dist = (call_wall - spot) / spot
+                if put_dist >= min_dist and call_dist >= min_dist:
+                    strength += 8.0   # both walls comfortably outside
+                else:
+                    strength += 3.0   # at least one wall present
+            elif spot > 0 and (put_wall > 0 or call_wall > 0):
+                strength += 3.0       # single wall present
+        except Exception:
+            pass  # OI wall boost is best-effort
+
         return min(100.0, strength)
 
     @staticmethod

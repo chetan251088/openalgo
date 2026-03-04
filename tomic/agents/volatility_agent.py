@@ -20,9 +20,10 @@ import logging
 import math
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from tomic.agents.regime_agent import AtomicRegimeState, RegimeSnapshot
 from tomic.config import (
@@ -79,6 +80,8 @@ class VolSnapshot:
     back_iv: float = 0.0      # far-month IV
     term_structure: TermStructure = TermStructure.NORMAL
     timestamp: float = field(default_factory=time.monotonic)
+    iv_percentile: float = 50.0       # 0–100; % of days IV was below current
+    conservative_rank: float = 0.0    # min(iv_rank, iv_percentile) — for sizing
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -95,6 +98,8 @@ class VolSnapshot:
             "front_iv": self.front_iv,
             "back_iv": self.back_iv,
             "term_structure": self.term_structure.value,
+            "iv_percentile": self.iv_percentile,
+            "conservative_rank": self.conservative_rank,
         }
 
 
@@ -220,6 +225,20 @@ def compute_iv_rank(
         return 0.0
     rank = ((current_iv - iv_52w_low) / (iv_52w_high - iv_52w_low)) * 100
     return max(0.0, min(100.0, rank))
+
+
+def compute_iv_percentile(iv_history: List[float], current_iv: float) -> float:
+    """
+    IV Percentile = fraction of historical days where IV was below current. Range 0–100.
+
+    Unlike IV Rank (which uses only the 52-week high/low), percentile counts actual
+    observations — a single spike cannot distort the reading.
+    Returns 50.0 (neutral) when fewer than 10 data points are available.
+    """
+    if len(iv_history) < 10:
+        return 50.0
+    below = sum(1 for v in iv_history if v < current_iv)
+    return round(below / len(iv_history) * 100, 1)
 
 
 def compute_hv(
@@ -597,6 +616,7 @@ class VolatilityAgent:
         self._regime_state = regime_state
         self._price_cache: Dict[str, List[float]] = {}  # underlying → closes
         self._iv_cache: Dict[str, Dict[str, float]] = {}
+        self._iv_history: Dict[str, Deque[float]] = {}  # underlying → rolling 260-day IV
         self._snapshots: Dict[str, VolSnapshot] = {}
         self._signals: List[VolSignal] = []
         self._scan_count: int = 0
@@ -640,6 +660,10 @@ class VolatilityAgent:
             "front_iv": front_iv,
             "back_iv": back_iv,
         }
+        # Append to rolling history for percentile calculation
+        hist = self._iv_history.setdefault(key, deque(maxlen=260))
+        if current_iv > 0:
+            hist.append(current_iv)
 
     def scan(self) -> List[VolSignal]:
         """
@@ -662,6 +686,11 @@ class VolatilityAgent:
                 iv_data["iv_52w_high"],
                 iv_data["iv_52w_low"],
             )
+
+            # IV Percentile and conservative rank
+            iv_hist = list(self._iv_history.get(underlying, []))
+            iv_pct = compute_iv_percentile(iv_hist, iv_data["current_iv"])
+            conservative_rank = min(iv_rank, iv_pct)
 
             # Vol regime
             vol_regime, iv_hv_ratio = classify_vol_regime(
@@ -696,6 +725,8 @@ class VolatilityAgent:
                 front_iv=iv_data.get("front_iv", 0),
                 back_iv=iv_data.get("back_iv", 0),
                 term_structure=term,
+                iv_percentile=iv_pct,
+                conservative_rank=conservative_rank,
             )
             self._snapshots[underlying] = snap
 
@@ -707,6 +738,14 @@ class VolatilityAgent:
                 self._vix_rules,
                 feature_flags=self._feature_flags,
             )
+            # Apply conservative rank to signal strength for credit strategies
+            # to avoid over-confidence when IV rank is inflated by a single spike
+            for sig in new_signals:
+                if sig.direction == "SELL" and conservative_rank > 0:
+                    sig.signal_strength = min(
+                        sig.signal_strength,
+                        40.0 + conservative_rank * 0.6,
+                    )
             self._signals.extend(new_signals)
 
         return self._signals

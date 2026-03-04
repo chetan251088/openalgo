@@ -64,6 +64,10 @@ class RegimeSnapshot:
     congestion: bool
     blowoff: bool
     timestamp_mono: float
+    adx: float = field(default=0.0)            # ADX value (0 = not enough bars)
+    adx_trending: bool = field(default=False)  # True when ADX > adx_trending_threshold
+    vwap: float = field(default=0.0)
+    price_vs_vwap: str = field(default="UNKNOWN")  # ABOVE / BELOW / AT / UNKNOWN
 
 
 class AtomicRegimeState:
@@ -84,6 +88,10 @@ class AtomicRegimeState:
         self._congestion: bool = False
         self._blowoff: bool = False
         self._timestamp_mono: float = 0.0
+        self._adx: float = 0.0
+        self._adx_trending: bool = False
+        self._vwap: float = 0.0
+        self._price_vs_vwap: str = "UNKNOWN"
 
     def update(
         self,
@@ -95,6 +103,10 @@ class AtomicRegimeState:
         impulse_color: str,
         congestion: bool,
         blowoff: bool,
+        adx: float = 0.0,
+        adx_trending: bool = False,
+        vwap: float = 0.0,
+        price_vs_vwap: str = "UNKNOWN",
     ) -> int:
         """Write new state. Returns new version number."""
         with self._lock:
@@ -107,6 +119,10 @@ class AtomicRegimeState:
             self._impulse_color = impulse_color
             self._congestion = congestion
             self._blowoff = blowoff
+            self._adx = adx
+            self._adx_trending = adx_trending
+            self._vwap = vwap
+            self._price_vs_vwap = price_vs_vwap
             self._timestamp_mono = time.monotonic()
             return self._version
 
@@ -124,6 +140,10 @@ class AtomicRegimeState:
                 congestion=self._congestion,
                 blowoff=self._blowoff,
                 timestamp_mono=self._timestamp_mono,
+                adx=self._adx,
+                adx_trending=self._adx_trending,
+                vwap=self._vwap,
+                price_vs_vwap=self._price_vs_vwap,
             )
 
     @property
@@ -349,6 +369,11 @@ def compute_regime_score(
     pcr_bonus: int = 5,
     score_min: int = -20,
     score_max: int = 20,
+    adx: float = 0.0,
+    adx_trending_threshold: float = 25.0,
+    adx_ranging_threshold: float = 20.0,
+    vwap_signal: str = "UNKNOWN",
+    vwap_bonus: int = 2,
 ) -> int:
     """
     Compute composite regime score from -20 to +20.
@@ -382,6 +407,18 @@ def compute_regime_score(
     # PCR bonus (bullish confirmation)
     if pcr is not None and pcr > pcr_threshold and ichimoku_signal == "BULLISH":
         score += pcr_bonus
+
+    # ADX adjustments: strengthen trending signal, suppress directional in ranging
+    if adx > adx_trending_threshold:
+        score += 2 if score > 0 else -2   # strengthen existing directional bias
+    elif 0 < adx < adx_ranging_threshold:
+        score -= 3                          # suppress directional, favour IC / range strategies
+
+    # VWAP confirmation bonus
+    if vwap_signal == "ABOVE" and score > 0:
+        score += vwap_bonus
+    elif vwap_signal == "BELOW" and score < 0:
+        score -= vwap_bonus
 
     # VIX cap: if VIX < 12, cap score at ±score_cap
     if vix < vix_rules.stop_selling_below:
@@ -438,6 +475,69 @@ def _compute_atr(
     return sum(trs) / len(trs) if trs else 0.0
 
 
+def compute_adx(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Tuple[float, float, float]:
+    """
+    Wilder's Average Directional Index.
+
+    Returns (adx, di_plus, di_minus).
+    Returns (0.0, 0.0, 0.0) when fewer than 2×period bars are available.
+    """
+    if len(highs) < period * 2:
+        return 0.0, 0.0, 0.0
+
+    smooth_k = (period - 1) / period  # Wilder's smoothing factor: (n-1)/n
+
+    # Compute TR, +DM, -DM for each bar (starting from index 1)
+    tr_vals: List[float] = []
+    plus_dm_vals: List[float] = []
+    minus_dm_vals: List[float] = []
+
+    for i in range(1, len(highs)):
+        h, l, c_prev = highs[i], lows[i], closes[i - 1]
+        tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
+        tr_vals.append(tr)
+
+        up_move = highs[i] - highs[i - 1]
+        down_move = lows[i - 1] - lows[i]
+        plus_dm = up_move if up_move > down_move and up_move > 0 else 0.0
+        minus_dm = down_move if down_move > up_move and down_move > 0 else 0.0
+        plus_dm_vals.append(plus_dm)
+        minus_dm_vals.append(minus_dm)
+
+    # Seed the smoothed values using first `period` bars
+    s_tr = sum(tr_vals[:period])
+    s_pdm = sum(plus_dm_vals[:period])
+    s_mdm = sum(minus_dm_vals[:period])
+
+    # Wilder smooth the remaining bars
+    dx_vals: List[float] = []
+    for i in range(period, len(tr_vals)):
+        s_tr = s_tr * smooth_k + tr_vals[i]
+        s_pdm = s_pdm * smooth_k + plus_dm_vals[i]
+        s_mdm = s_mdm * smooth_k + minus_dm_vals[i]
+
+        di_plus = 100.0 * s_pdm / s_tr if s_tr > 0 else 0.0
+        di_minus = 100.0 * s_mdm / s_tr if s_tr > 0 else 0.0
+        denom = di_plus + di_minus
+        dx = 100.0 * abs(di_plus - di_minus) / denom if denom > 0 else 0.0
+        dx_vals.append(dx)
+
+    if len(dx_vals) < period:
+        return 0.0, 0.0, 0.0
+
+    # ADX = Wilder EMA of DX over period
+    adx = sum(dx_vals[:period]) / period
+    for dx in dx_vals[period:]:
+        adx = adx * smooth_k + dx * (1.0 - smooth_k)
+
+    return round(adx, 2), round(di_plus, 2), round(di_minus, 2)
+
+
 # ---------------------------------------------------------------------------
 # Regime Agent
 # ---------------------------------------------------------------------------
@@ -471,6 +571,9 @@ class RegimeAgent(AgentBase):
         self._volumes: Deque[float] = deque(maxlen=200)
         self._vix: float = 0.0
         self._pcr: Optional[float] = None
+        # VWAP accumulation — reset daily via reset_vwap()
+        self._vwap_pv_sum: float = 0.0
+        self._vwap_v_sum: float = 0.0
 
     @property
     def regime_state(self) -> AtomicRegimeState:
@@ -489,6 +592,11 @@ class RegimeAgent(AgentBase):
             self._lows.append(low)
             self._closes.append(close)
             self._volumes.append(volume)
+            # Accumulate VWAP: Σ(typical_price × volume)
+            typical = (high + low + close) / 3.0
+            if volume > 0:
+                self._vwap_pv_sum += typical * volume
+                self._vwap_v_sum += volume
 
     def feed_vix(self, vix: float) -> None:
         """Update current VIX value."""
@@ -499,6 +607,12 @@ class RegimeAgent(AgentBase):
         """Update Put-Call Ratio (optional, analytics-dependent)."""
         with self._lock_data:
             self._pcr = pcr
+
+    def reset_vwap(self) -> None:
+        """Reset VWAP accumulation at start of new trading session (9:15 AM)."""
+        with self._lock_data:
+            self._vwap_pv_sum = 0.0
+            self._vwap_v_sum = 0.0
 
     # -------------------------------------------------------------------
     # Agent lifecycle
@@ -549,6 +663,8 @@ class RegimeAgent(AgentBase):
             volumes = list(self._volumes)
             vix = self._vix
             pcr = self._pcr
+            vwap_pv_sum = self._vwap_pv_sum
+            vwap_v_sum = self._vwap_v_sum
 
         if len(closes) < self.config.regime.ichimoku.senkou_b:
             return  # not enough data
@@ -584,6 +700,26 @@ class RegimeAgent(AgentBase):
             volume_multiple=self.config.regime.blowoff_volume_multiple,
         )
 
+        # ADX
+        adx_val, _di_plus, _di_minus = compute_adx(
+            highs, lows, closes,
+            period=self.config.regime.adx_period,
+        )
+        adx_trending = adx_val > self.config.regime.adx_trending_threshold
+
+        # VWAP
+        vwap = vwap_pv_sum / vwap_v_sum if vwap_v_sum > 0 else 0.0
+        close = closes[-1] if closes else 0.0
+        if vwap > 0:
+            if close > vwap * 1.001:
+                price_vs_vwap = "ABOVE"
+            elif close < vwap * 0.999:
+                price_vs_vwap = "BELOW"
+            else:
+                price_vs_vwap = "AT"
+        else:
+            price_vs_vwap = "UNKNOWN"
+
         # VIX flags
         vix_flags = compute_vix_flags(vix, self.config.vix)
 
@@ -600,6 +736,11 @@ class RegimeAgent(AgentBase):
             pcr_bonus=self.config.regime.pcr_bonus,
             score_min=self.config.regime.score_min,
             score_max=self.config.regime.score_max,
+            adx=adx_val,
+            adx_trending_threshold=self.config.regime.adx_trending_threshold,
+            adx_ranging_threshold=self.config.regime.adx_ranging_threshold,
+            vwap_signal=price_vs_vwap,
+            vwap_bonus=self.config.regime.vwap_bonus,
         )
 
         # Phase
@@ -629,6 +770,10 @@ class RegimeAgent(AgentBase):
             impulse_color=impulse["color"],
             congestion=congestion,
             blowoff=blowoff,
+            adx=adx_val,
+            adx_trending=adx_trending,
+            vwap=vwap,
+            price_vs_vwap=price_vs_vwap,
         )
 
         # Publish only on state change
@@ -643,9 +788,11 @@ class RegimeAgent(AgentBase):
             self._last_published_version = new_version
 
             self.logger.info(
-                "Regime v%d: %s score=%d vix=%.1f ichi=%s impulse=%s cong=%s blow=%s",
+                "Regime v%d: %s score=%d vix=%.1f ichi=%s impulse=%s cong=%s blow=%s "
+                "adx=%.1f vwap=%.0f price_vs_vwap=%s",
                 new_version, phase.value, score, vix,
                 ichi["signal"], impulse["color"], congestion, blowoff,
+                adx_val, vwap, price_vs_vwap,
             )
 
     def _teardown(self) -> None:

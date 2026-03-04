@@ -144,6 +144,12 @@ class RegimeParams:
     # Multi-timeframe
     daily_tf: str = "1D"
     intraday_tf: str = "15min"
+    # ADX (Average Directional Index)
+    adx_period: int = 14
+    adx_trending_threshold: float = 25.0    # ADX > 25 → trending market
+    adx_ranging_threshold: float = 20.0     # ADX < 20 → ranging market
+    # VWAP score bonus
+    vwap_bonus: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +279,11 @@ class CircuitBreakerThresholds:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class StrategyEngineParams:
+    oi_wall_min_distance_pct: float = 0.03   # OI walls must be ≥ 3% from spot for full boost
+
+
+@dataclass(frozen=True)
 class ExecutionParams:
     smart_order_delay: float = 0.5           # seconds between legs
     slippage_equity_max: float = 0.001       # 0.1% stock price
@@ -285,6 +296,8 @@ class ExecutionParams:
     no_entry_end: str = "09:30"
     auto_square_off: str = "15:15"           # MIS by 3:15 PM
     command_poll_interval: float = 0.5       # 500ms poll — options execution still fast, no need for 100ms
+    delta_tolerance: float = 0.08            # acceptable delta deviation from target
+    delta_critical_multiplier: float = 2.0   # deviation > tolerance × multiplier → reject command
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +462,7 @@ class TomicConfig:
     lifecycle: LifecycleParams = field(default_factory=LifecycleParams)
     black_swan: BlackSwanParams = field(default_factory=BlackSwanParams)
     circuit_breakers: CircuitBreakerThresholds = field(default_factory=CircuitBreakerThresholds)
+    strategy_engine: StrategyEngineParams = field(default_factory=StrategyEngineParams)
     execution: ExecutionParams = field(default_factory=ExecutionParams)
     freshness: FreshnessThresholds = field(default_factory=FreshnessThresholds)
     observability: ObservabilityThresholds = field(default_factory=ObservabilityThresholds)

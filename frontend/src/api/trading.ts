@@ -767,7 +767,7 @@ export const tradingApi = {
 
     if (result == null) {
       if (isMultiBrokerUnifiedMode()) {
-        result = await proxyV1ByRole<PlaceOrderResponse>('execution', 'placeorder', order)
+        result = await proxyV1ByRole<PlaceOrderResponse>('execution', 'placeorder', order, 'POST', { timeoutMs: 8000 })
       } else {
         const response = await apiClient.post<PlaceOrderResponse>('/placeorder', order)
         result = response.data
