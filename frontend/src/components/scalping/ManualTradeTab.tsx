@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useScalpingStore } from '@/stores/scalpingStore'
@@ -45,6 +46,7 @@ export function ManualTradeTab() {
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
@@ -68,9 +70,11 @@ export function ManualTradeTab() {
   const setTpPoints = useScalpingStore((s) => s.setTpPoints)
   const setSlPoints = useScalpingStore((s) => s.setSlPoints)
   const setTrailDistancePoints = useScalpingStore((s) => s.setTrailDistancePoints)
+  const setTrailSlEnabled = useScalpingStore((s) => s.setTrailSlEnabled)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
   const activeSymbol = activeSide === 'CE' ? selectedCESymbol : selectedPESymbol
+  const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
 
   // Ensure apiKey is available — fetch if missing
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
@@ -155,7 +159,7 @@ export function ManualTradeTab() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
-                trailDistancePoints,
+                trailDistancePoints: effectiveTrailDistancePoints,
                 managedBy: 'manual',
               })
             )
@@ -216,7 +220,7 @@ export function ManualTradeTab() {
               entryPrice: limitPrice ?? 0,
               tpPoints,
               slPoints,
-              trailDistancePoints,
+              trailDistancePoints: effectiveTrailDistancePoints,
             })
             if (limitPrice != null) setLimitPrice(limitPrice)
             return
@@ -255,7 +259,7 @@ export function ManualTradeTab() {
                     quantity: snapQty,
                     tpPoints,
                     slPoints,
-                    trailDistancePoints,
+                    trailDistancePoints: effectiveTrailDistancePoints,
                     managedBy: 'manual',
                   })
                 )
@@ -283,7 +287,7 @@ export function ManualTradeTab() {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
-      trailDistancePoints,
+      effectiveTrailDistancePoints,
       paperMode,
       clearVirtualForSymbol,
       triggerOrders,
@@ -538,7 +542,17 @@ export function ManualTradeTab() {
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-amber-400">Trail SL</Label>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-amber-400">Trail SL</Label>
+            <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Checkbox
+                checked={trailSlEnabled}
+                onCheckedChange={(checked) => setTrailSlEnabled(checked === true)}
+                className="h-3.5 w-3.5"
+              />
+              Enable
+            </label>
+          </div>
           <Input
             type="number"
             min={0}
@@ -546,6 +560,7 @@ export function ManualTradeTab() {
             value={trailDistancePoints}
             onChange={(e) => setTrailDistancePoints(Number.parseFloat(e.target.value) || 0)}
             className="h-7 text-sm"
+            disabled={!trailSlEnabled}
           />
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useScalpingStore } from '@/stores/scalpingStore'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 import type { ScalpingPosition } from '@/types/scalping'
 
 interface BottomBarProps {
@@ -11,6 +12,7 @@ export function BottomBar({ positions, totalPnl, isLivePnl }: BottomBarProps) {
   const activeSide = useScalpingStore((s) => s.activeSide)
   const hotkeysEnabled = useScalpingStore((s) => s.hotkeysEnabled)
   const paperMode = useScalpingStore((s) => s.paperMode)
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
 
   return (
     <div className="flex items-center justify-between px-3 py-1 border-t bg-card text-xs shrink-0">
@@ -85,8 +87,12 @@ export function BottomBar({ positions, totalPnl, isLivePnl }: BottomBarProps) {
             <span>Close</span>
             <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">X</kbd>
             <span>All</span>
-            <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">W</kbd>
-            <span>Widget</span>
+            {!unifiedMode && (
+              <>
+                <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">W</kbd>
+                <span>Widget</span>
+              </>
+            )}
             <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">Tab</kbd>
             <span>Side</span>
             <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">↑</kbd>

@@ -76,6 +76,7 @@ export function ChartOrderOverlay({
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingEntryAction = useScalpingStore((s) => s.pendingEntryAction)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
@@ -138,6 +139,7 @@ export function ChartOrderOverlay({
 
   const isActive = activeSide === side
   const isLimitOrTrigger = orderType === 'LIMIT' || orderType === 'TRIGGER'
+  const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
 
   const symbolVirtualOrders = useMemo(
     () =>
@@ -530,7 +532,7 @@ export function ChartOrderOverlay({
               quantity: quantity * lotSize,
               tpPoints,
               slPoints,
-              trailDistancePoints,
+              trailDistancePoints: effectiveTrailDistancePoints,
               managedBy: 'manual',
             })
           )
@@ -580,7 +582,7 @@ export function ChartOrderOverlay({
           entryPrice,
           tpPoints,
           slPoints,
-          trailDistancePoints,
+          trailDistancePoints: effectiveTrailDistancePoints,
         })
         setPendingEntryAction(null)
         setLimitPrice(entryPrice)
@@ -601,7 +603,7 @@ export function ChartOrderOverlay({
       lotSize,
       tpPoints,
       slPoints,
-      trailDistancePoints,
+      effectiveTrailDistancePoints,
       product,
       ensureApiKey,
       setVirtualTPSL,
@@ -707,6 +709,7 @@ export function ChartOrderOverlay({
             quantity: quantity * lotSize,
             tpPoints,
             slPoints,
+            trailDistancePoints: effectiveTrailDistancePoints,
           })
         } else {
           addTriggerOrder({
@@ -720,7 +723,7 @@ export function ChartOrderOverlay({
             quantity: quantity * lotSize,
             tpPoints,
             slPoints,
-            trailDistancePoints,
+            trailDistancePoints: effectiveTrailDistancePoints,
             createdAt: Date.now(),
           })
         }
@@ -765,7 +768,7 @@ export function ChartOrderOverlay({
     lotSize,
     tpPoints,
     slPoints,
-    trailDistancePoints,
+    effectiveTrailDistancePoints,
     optionExchange,
     side,
     addTriggerOrder,

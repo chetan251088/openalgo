@@ -8,8 +8,10 @@ import { IndexChartView } from './IndexChartView'
 import { OptionChartView } from './OptionChartView'
 import { FloatingTradeWidget } from './FloatingTradeWidget'
 import { ChartToolbar } from './ChartToolbar'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 
 export function ChartPanel() {
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
   const [showEma9, setShowEma9] = useState(true)
   const [showEma21, setShowEma21] = useState(true)
   const [showSupertrend, setShowSupertrend] = useState(true)
@@ -77,7 +79,7 @@ export function ChartPanel() {
                   />
                 </ResizablePanel>
               </ResizablePanelGroup>
-              <FloatingTradeWidget />
+              {!unifiedMode && <FloatingTradeWidget />}
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>

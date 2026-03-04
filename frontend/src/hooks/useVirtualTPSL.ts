@@ -30,6 +30,7 @@ export function useVirtualTPSL(
   const paperMode = useScalpingStore((s) => s.paperMode)
   const product = useScalpingStore((s) => s.product)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const addSessionPnl = useScalpingStore((s) => s.addSessionPnl)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
@@ -178,6 +179,8 @@ export function useVirtualTPSL(
   useEffect(() => {
     if (!tickData) return
 
+    const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
+
     const closeVirtualOrder = (order: (typeof virtualTPSL)[string], ltp: number, reason: string) => {
       executingRef.current.add(order.id)
       const isBuy = order.action === 'BUY'
@@ -312,7 +315,7 @@ export function useVirtualTPSL(
                         quantity: trigger.quantity,
                         tpPoints: trigger.tpPoints,
                         slPoints: trigger.slPoints,
-                        trailDistancePoints: trigger.trailDistancePoints ?? trailDistancePoints,
+                        trailDistancePoints: trigger.trailDistancePoints ?? effectiveTrailDistancePoints,
                         managedBy: 'trigger',
                       })
                     )
@@ -365,6 +368,7 @@ export function useVirtualTPSL(
     addSessionPnl,
     incrementTradeCount,
     trailDistancePoints,
+    trailSlEnabled,
     autoConfig,
     activePresetId,
     optionsContext,

@@ -14,12 +14,19 @@ function roundToOptionTick(price: number): number {
 
 function shouldTrackTrailing(order: VirtualTPSL): boolean {
   if (order.slPrice == null) return false
-  return (
-    order.managedBy === 'auto' ||
+  if (order.managedBy === 'auto') return true
+  if (
     order.managedBy === 'manual' ||
     order.managedBy === 'hotkey' ||
     order.managedBy === 'trigger'
-  )
+  ) {
+    const trailDistance =
+      typeof order.trailDistancePoints === 'number'
+        ? Math.max(0, order.trailDistancePoints)
+        : DEFAULT_TRAIL_DISTANCE_POINTS
+    return trailDistance > 0
+  }
+  return false
 }
 
 function shouldUseCrossEntryTrail(order: VirtualTPSL, activePresetId: string | null): boolean {
@@ -137,6 +144,12 @@ export function useTrailingMonitor() {
           }
 
           if (shouldUseCrossEntryTrail(liveOrder, activePresetIdRef.current)) {
+            const trailDistance =
+              typeof liveOrder.trailDistancePoints === 'number'
+                ? Math.max(0, liveOrder.trailDistancePoints)
+                : DEFAULT_TRAIL_DISTANCE_POINTS
+            if (trailDistance <= 0) return
+
             const crossedEntry = isBuy ? ltp > liveOrder.entryPrice : ltp < liveOrder.entryPrice
             if (!crossedEntry) return
 
@@ -146,10 +159,6 @@ export function useTrailingMonitor() {
               updateVirtualTPSL(order.id, { trailStage: 'TRAIL' })
             }
 
-            const trailDistance =
-              (typeof liveOrder.trailDistancePoints === 'number' && liveOrder.trailDistancePoints > 0)
-                ? liveOrder.trailDistancePoints
-                : DEFAULT_TRAIL_DISTANCE_POINTS
             const rawSL = isBuy
               ? ltp - trailDistance
               : ltp + trailDistance

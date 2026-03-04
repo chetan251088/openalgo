@@ -1,7 +1,8 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import { useScalpingStore } from '@/stores/scalpingStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 import { tradingApi } from '@/api/trading'
 import { toast } from 'sonner'
 import {
@@ -74,8 +75,10 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
   const paperMode = useScalpingStore((s) => s.paperMode)
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
 
   const setVirtualTPSL = useVirtualOrderStore((s) => s.setVirtualTPSL)
   const triggerOrders = useVirtualOrderStore((s) => s.triggerOrders)
@@ -85,6 +88,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
   const toggleActiveSide = useScalpingStore((s) => s.toggleActiveSide)
   const toggleFloatingWidget = useScalpingStore((s) => s.toggleFloatingWidget)
   const setQuantity = useScalpingStore((s) => s.setQuantity)
+  const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
 
   const apiKey = useAuthStore((s) => s.apiKey)
   const setApiKey = useAuthStore((s) => s.setApiKey)
@@ -116,6 +120,8 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
     toast.error('API key missing. Generate one on /apikey')
     return null
   }, [apiKey, setApiKey])
+
+  const orderExecutingRef = useRef(false)
 
   const placeOrder = useCallback(
     async (
@@ -164,6 +170,8 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         return
       }
 
+      if (orderExecutingRef.current) return
+
       if (paperMode) {
         console.log(`[Paper] ${action} ${side} ${symbol} qty=${quantity * lotSize} @ ${effectiveOrderType}`)
         if (effectiveOrderType === 'MARKET' || effectiveOrderType === 'LIMIT') {
@@ -183,7 +191,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
-                trailDistancePoints,
+                trailDistancePoints: effectiveTrailDistancePoints,
                 managedBy: 'hotkey',
               })
               )
@@ -196,8 +204,9 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         return
       }
 
+      orderExecutingRef.current = true
       const key = await ensureApiKey()
-      if (!key) return
+      if (!key) { orderExecutingRef.current = false; return }
 
       // MARKET or LIMIT — real broker order
       const pricetype = effectiveOrderType === 'LIMIT' ? 'LIMIT' : 'MARKET'
@@ -219,6 +228,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       try {
         console.log(`[Scalping] Placing ${action} ${symbol} qty=${quantity * lotSize} ${pricetype}`)
         const res = await tradingApi.placeOrder(order)
+        orderExecutingRef.current = false
         if (res.status === 'success') {
           const brokerOrderId = extractOrderId(res)
           console.log(`[Scalping] Order placed: ${action} ${symbol} id=${brokerOrderId ?? 'n/a'}`)
@@ -241,7 +251,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
               entryPrice: limitPrice ?? 0,
               tpPoints,
               slPoints,
-              trailDistancePoints,
+              trailDistancePoints: effectiveTrailDistancePoints,
             })
             if (limitPrice != null) setLimitPrice(limitPrice)
             return
@@ -250,40 +260,47 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
           clearPendingLimitPlacement()
 
           if (pricetype === 'MARKET') {
-            const marketPriceHint = await resolveEntryPrice({
-              symbol,
-              exchange: optionExchange,
-              apiKey: null,
-            })
-            const entryPrice = await resolveFilledOrderPrice({
-              symbol,
-              exchange: optionExchange,
-              orderId: brokerOrderId,
-              preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
-              apiKey: key,
-            })
-            if (entryPrice > 0) {
-              setVirtualTPSL(
-                buildVirtualPosition({
-                  symbol,
-                  exchange: optionExchange,
-                  side,
-                  action,
-                  entryPrice,
-                  quantity: quantity * lotSize,
-                  tpPoints,
-                  slPoints,
-                  trailDistancePoints,
-                  managedBy: 'hotkey',
-                })
-              )
-            }
+            const snapSymbol = symbol
+            const snapExchange = optionExchange
+            const snapSide = side
+            const snapKey = key
+            void (async () => {
+              const marketPriceHint = await resolveEntryPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                apiKey: null,
+              })
+              const entryPrice = await resolveFilledOrderPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                orderId: brokerOrderId,
+                preferredPrice: marketPriceHint > 0 ? marketPriceHint : undefined,
+                apiKey: snapKey,
+              })
+              if (entryPrice > 0) {
+                setVirtualTPSL(
+                  buildVirtualPosition({
+                    symbol: snapSymbol,
+                    exchange: snapExchange,
+                    side: snapSide,
+                    action,
+                    entryPrice,
+                    quantity: quantity * lotSize,
+                    tpPoints,
+                    slPoints,
+                    trailDistancePoints: effectiveTrailDistancePoints,
+                    managedBy: 'hotkey',
+                  })
+                )
+              }
+            })()
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
           toast.error(extractErrorMessage(res, 'Order was rejected'))
         }
       } catch (err) {
+        orderExecutingRef.current = false
         console.error('[Scalping] Order failed:', err)
         toast.error(extractErrorMessage(err, 'Order placement failed'))
       }
@@ -300,7 +317,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
-      trailDistancePoints,
+      effectiveTrailDistancePoints,
       paperMode,
       triggerOrders,
       ensureApiKey,
@@ -363,7 +380,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
         }
         case 'w': {
           e.preventDefault()
-          toggleFloatingWidget()
+          if (!unifiedMode) toggleFloatingWidget()
           break
         }
         case 'tab': {
@@ -422,6 +439,7 @@ export function useScalpingHotkeys(opts: UseScalpingHotkeysOptions = {}) {
     toggleActiveSide,
     setActiveSide,
     toggleFloatingWidget,
+    unifiedMode,
     setQuantity,
     selectedCESymbol,
     selectedPESymbol,

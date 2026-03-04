@@ -58,6 +58,7 @@ export default function ScalpingDashboard() {
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
@@ -82,6 +83,7 @@ export default function ScalpingDashboard() {
     totalPnl: liveOpenPnl,
     isLive: isLivePnl,
   } = useScalpingPositions()
+  const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
 
   // Eagerly fetch apiKey on mount so expiry/chain loading don't wait for AuthSync
   useEffect(() => {
@@ -419,9 +421,9 @@ export default function ScalpingDashboard() {
             tpPoints: pendingLimitPlacement.tpPoints > 0 ? pendingLimitPlacement.tpPoints : tpPoints,
             slPoints: pendingLimitPlacement.slPoints > 0 ? pendingLimitPlacement.slPoints : slPoints,
             trailDistancePoints:
-              pendingLimitPlacement.trailDistancePoints > 0
-                ? pendingLimitPlacement.trailDistancePoints
-                : trailDistancePoints,
+              typeof pendingLimitPlacement.trailDistancePoints === 'number'
+                ? Math.max(0, pendingLimitPlacement.trailDistancePoints)
+                : effectiveTrailDistancePoints,
             managedBy: 'manual',
           })
         )
@@ -452,7 +454,7 @@ export default function ScalpingDashboard() {
     setVirtualTPSL,
     tpPoints,
     slPoints,
-    trailDistancePoints,
+    effectiveTrailDistancePoints,
     incrementTradeCount,
     clearPendingLimitPlacement,
     setLimitPrice,

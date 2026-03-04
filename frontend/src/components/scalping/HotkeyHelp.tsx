@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useMultiBrokerStore } from '@/stores/multiBrokerStore'
 
 interface HotkeyHelpProps {
   open: boolean
@@ -23,6 +24,11 @@ const HOTKEYS = [
 ]
 
 export function HotkeyHelp({ open, onClose }: HotkeyHelpProps) {
+  const unifiedMode = useMultiBrokerStore((s) => s.unifiedMode)
+  const visibleHotkeys = unifiedMode
+    ? HOTKEYS.filter(({ key }) => key !== 'W')
+    : HOTKEYS
+
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
@@ -60,7 +66,7 @@ export function HotkeyHelp({ open, onClose }: HotkeyHelpProps) {
         </div>
 
         <div className="space-y-1">
-          {HOTKEYS.map(({ key, description }) => (
+          {visibleHotkeys.map(({ key, description }) => (
             <div key={key} className="flex items-center gap-3 py-0.5">
               <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono min-w-[2.5rem] text-center shrink-0">
                 {key}

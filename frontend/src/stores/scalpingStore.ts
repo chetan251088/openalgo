@@ -42,6 +42,7 @@ interface ScalpingState {
   tpPoints: number
   slPoints: number
   trailDistancePoints: number
+  trailSlEnabled: boolean
   limitPrice: number | null // price for LIMIT/TRIGGER orders (set by chart click)
   pendingEntryAction: OrderAction | null // BUY/SELL arm state for chart placement
   pendingLimitPlacement: {
@@ -114,6 +115,7 @@ interface ScalpingActions {
   setTpPoints: (pts: number) => void
   setSlPoints: (pts: number) => void
   setTrailDistancePoints: (pts: number) => void
+  setTrailSlEnabled: (enabled: boolean) => void
   setLimitPrice: (price: number | null) => void
   setPendingEntryAction: (action: OrderAction | null) => void
   setPendingLimitPlacement: (
@@ -208,6 +210,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       tpPoints: 8,
       slPoints: 5,
       trailDistancePoints: 2,
+      trailSlEnabled: true,
       limitPrice: null,
       pendingEntryAction: null,
       pendingLimitPlacement: null,
@@ -320,6 +323,7 @@ export const useScalpingStore = create<ScalpingStore>()(
       setTpPoints: (pts) => set({ tpPoints: Math.max(0, pts) }),
       setSlPoints: (pts) => set({ slPoints: Math.max(0, pts) }),
       setTrailDistancePoints: (pts) => set({ trailDistancePoints: Math.max(0, pts) }),
+      setTrailSlEnabled: (enabled) => set((s) => (s.trailSlEnabled === enabled ? s : { trailSlEnabled: enabled })),
       setLimitPrice: (price) =>
         set((s) => (s.limitPrice === price ? s : { limitPrice: price })),
       setPendingEntryAction: (action) =>
@@ -450,6 +454,7 @@ export const useScalpingStore = create<ScalpingStore>()(
         tpPoints: state.tpPoints,
         slPoints: state.slPoints,
         trailDistancePoints: state.trailDistancePoints,
+        trailSlEnabled: state.trailSlEnabled,
         paperMode: state.paperMode,
         hotkeysEnabled: state.hotkeysEnabled,
         showFloatingWidget: state.showFloatingWidget,

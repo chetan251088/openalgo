@@ -50,6 +50,7 @@ export function FloatingTradeWidget() {
   const tpPoints = useScalpingStore((s) => s.tpPoints)
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
+  const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
   const orderType = useScalpingStore((s) => s.orderType)
   const limitPrice = useScalpingStore((s) => s.limitPrice)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
@@ -76,6 +77,7 @@ export function FloatingTradeWidget() {
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
 
   const symbol = activeSide === 'CE' ? selectedCESymbol : selectedPESymbol
+  const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
 
   const [executing, setExecuting] = useState(false)
   const [ltp, setLtp] = useState<number | null>(null)
@@ -225,7 +227,7 @@ export function FloatingTradeWidget() {
                 quantity: quantity * lotSize,
                 tpPoints,
                 slPoints,
-                trailDistancePoints,
+                trailDistancePoints: effectiveTrailDistancePoints,
                 managedBy: 'manual',
               })
             )
@@ -286,7 +288,7 @@ export function FloatingTradeWidget() {
               entryPrice: pendingEntryPrice,
               tpPoints,
               slPoints,
-              trailDistancePoints,
+              trailDistancePoints: effectiveTrailDistancePoints,
             })
             if (pendingEntryPrice > 0) setLimitPrice(pendingEntryPrice)
             setExecuting(false)
@@ -295,47 +297,56 @@ export function FloatingTradeWidget() {
 
           clearPendingLimitPlacement()
           incrementTradeCount()
+          setExecuting(false)
 
           if (pricetype === 'MARKET') {
-            const marketPriceHint = await resolveEntryPrice({
-              symbol,
-              exchange: optionExchange,
-              preferredPrice: ltp ?? undefined,
-              apiKey: null,
-            })
-            const entryPrice = await resolveFilledOrderPrice({
-              symbol,
-              exchange: optionExchange,
-              orderId: brokerOrderId,
-              preferredPrice: marketPriceHint > 0 ? marketPriceHint : (ltp ?? undefined),
-              apiKey: key,
-            })
-            if (entryPrice > 0) {
-              setVirtualTPSL(
-                buildVirtualPosition({
-                  symbol,
-                  exchange: optionExchange,
-                  side: activeSide,
-                  action,
-                  entryPrice,
-                  quantity: quantity * lotSize,
-                  tpPoints,
-                  slPoints,
-                  trailDistancePoints,
-                  managedBy: 'manual',
-                })
-              )
-            }
+            const snapSymbol = symbol
+            const snapExchange = optionExchange
+            const snapSide = activeSide
+            const snapKey = key
+            const snapLtp = ltp
+            void (async () => {
+              const marketPriceHint = await resolveEntryPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                preferredPrice: snapLtp ?? undefined,
+                apiKey: null,
+              })
+              const entryPrice = await resolveFilledOrderPrice({
+                symbol: snapSymbol,
+                exchange: snapExchange,
+                orderId: brokerOrderId,
+                preferredPrice: marketPriceHint > 0 ? marketPriceHint : (snapLtp ?? undefined),
+                apiKey: snapKey,
+              })
+              if (entryPrice > 0) {
+                setVirtualTPSL(
+                  buildVirtualPosition({
+                    symbol: snapSymbol,
+                    exchange: snapExchange,
+                    side: snapSide,
+                    action,
+                    entryPrice,
+                    quantity: quantity * lotSize,
+                    tpPoints,
+                    slPoints,
+                    trailDistancePoints: effectiveTrailDistancePoints,
+                    managedBy: 'manual',
+                  })
+                )
+              }
+            })()
           }
         } else {
           console.error(`[Scalping] Order rejected:`, res)
           toast.error(extractErrorMessage(res, 'Order was rejected'))
+          setExecuting(false)
         }
       } catch (err) {
         console.error('[Scalping] Order failed:', err)
         toast.error(extractErrorMessage(err, 'Order placement failed'))
+        setExecuting(false)
       }
-      setExecuting(false)
     },
     [
       symbol,
@@ -349,7 +360,7 @@ export function FloatingTradeWidget() {
       pendingLimitPlacement,
       tpPoints,
       slPoints,
-      trailDistancePoints,
+      effectiveTrailDistancePoints,
       paperMode,
       clearVirtualForSymbol,
       triggerOrders,
@@ -649,7 +660,8 @@ export function FloatingTradeWidget() {
           step={0.5}
           value={trailDistancePoints}
           onChange={(e) => setTrailDistancePoints(Number.parseFloat(e.target.value) || 0)}
-          className="w-10 h-5 text-[10px] text-center bg-transparent border rounded px-0.5"
+          className="w-10 h-5 text-[10px] text-center bg-transparent border rounded px-0.5 disabled:opacity-50"
+          disabled={!trailSlEnabled}
         />
       </div>
 
