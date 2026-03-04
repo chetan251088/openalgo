@@ -28,6 +28,7 @@ export interface PriceableItem {
   quantity?: number
   average_price?: number
   today_realized_pnl?: number  // Sandbox: today's realized P&L from closed partial trades
+  lot_size?: number             // Contract multiplier (e.g. 0.01 for Delta Exchange ETHUSD.P)
 }
 
 /**
@@ -255,14 +256,18 @@ export function useLivePrice<T extends PriceableItem>(
       const todayRealizedPnl = toFiniteNumber(item.today_realized_pnl)
 
       if (currentLtp && avgPrice > 0) {
+        // Contract multiplier: e.g. 0.01 for Delta Exchange ETHUSD.P (1 lot = 0.01 ETH)
+        // Defaults to 1 for all standard brokers where qty is already in underlying units
+        const lotSize = item.lot_size ?? 1
+
         // Calculate unrealized P&L based on position direction
         // Long (qty > 0): profit when ltp > avgPrice
         // Short (qty < 0): profit when ltp < avgPrice
         let unrealizedPnl: number
         if (qty > 0) {
-          unrealizedPnl = (currentLtp - avgPrice) * qty
+          unrealizedPnl = (currentLtp - avgPrice) * qty * lotSize
         } else {
-          unrealizedPnl = (avgPrice - currentLtp) * Math.abs(qty)
+          unrealizedPnl = (avgPrice - currentLtp) * Math.abs(qty) * lotSize
         }
 
         // Total P&L = today's realized (from partial closes) + current unrealized
