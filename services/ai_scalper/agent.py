@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -72,13 +74,17 @@ def _ema_last(candles: list[Dict[str, float]], period: int) -> Optional[float]:
     return ema
 
 
-def _vwap_last(candles: list[Dict[str, float]]) -> Optional[float]:
+def _typical_price_avg_last(candles: list[Dict[str, float]]) -> Optional[float]:
+    """Daily cumulative average of (H+L+C)/3 for closed candles.
+    NOTE: This is NOT volume-weighted — it is a simple Typical Price Average (TPA).
+    True VWAP requires per-candle volume which is not available in this feed.
+    """
     if not candles:
         return None
     cum_tp = 0.0
     count = 0
     current_day = None
-    vwap = None
+    tpa = None
     for candle in candles:
         day = datetime.fromtimestamp(candle["time"]).date()
         if day != current_day:
@@ -88,8 +94,8 @@ def _vwap_last(candles: list[Dict[str, float]]) -> Optional[float]:
         tp = (candle["high"] + candle["low"] + candle["close"]) / 3
         cum_tp += tp
         count += 1
-        vwap = cum_tp / count
-    return vwap
+        tpa = cum_tp / count
+    return tpa
 
 
 def _supertrend_last(candles: list[Dict[str, float]], atr_period: int = 10, mult: float = 3.0) -> Optional[float]:
@@ -218,7 +224,7 @@ class AutoScalperAgent(threading.Thread):
         self.api_key = api_key
         self.ws_url = ws_url
 
-        self.feature_cache = FeatureCache()
+        self.feature_cache = FeatureCache(min_tick=agent_config.min_momentum_tick)
         self.risk_engine = RiskEngine(risk_config)
         self.playbook_manager = PlaybookManager(playbook_config)
         self.execution = ExecutionEngine(execution_config, api_key, agent_config.paper_mode, agent_config.assist_only)
@@ -253,10 +259,14 @@ class AutoScalperAgent(threading.Thread):
         self.candles: Dict[str, CandleTracker] = {"CE": CandleTracker(), "PE": CandleTracker()}
         self.index_candles: list[Dict[str, float]] = []
         self.index_pending: Optional[Dict[str, float]] = None
+        # Tracks recent underlying price ticks for normalized volatility measure.
+        self.underlying_prices: deque = deque(maxlen=20)
         self.index_indicators: Dict[str, Optional[float]] = {
             "ema9": None,
             "ema21": None,
-            "vwap": None,
+            # "tpa" = Typical Price Average (daily avg of (H+L+C)/3).
+            # Named 'tpa' (not 'vwap') because no volume data is available.
+            "tpa": None,
             "supertrend": None,
             "rsi": None,
             "adx": None,
@@ -474,6 +484,7 @@ class AutoScalperAgent(threading.Thread):
             self.feature_cache.update_depth(side, bid, ask, bid_qty, ask_qty)
 
     def _update_underlying_momentum(self, price: float) -> None:
+        self.underlying_prices.append(price)
         last = self.last_underlying_tick
         if last is None:
             self.last_underlying_tick = price
@@ -516,14 +527,14 @@ class AutoScalperAgent(threading.Thread):
         if now - self.index_indicator_ts < 0.25:
             return
         self.index_indicator_ts = now
+        # Use only closed candles. index_pending is the still-forming current candle;
+        # including it causes indicators to flicker as OHLC values change mid-candle.
         candles = list(self.index_candles)
-        if self.index_pending is not None:
-            candles.append(self.index_pending)
         if len(candles) < 2:
             return
         self.index_indicators["ema9"] = _ema_last(candles, 9)
         self.index_indicators["ema21"] = _ema_last(candles, 21)
-        self.index_indicators["vwap"] = _vwap_last(candles)
+        self.index_indicators["tpa"] = _typical_price_avg_last(candles)
         self.index_indicators["supertrend"] = _supertrend_last(candles, 10, 3.0)
         self.index_indicators["rsi"] = _rsi_last(candles, 14)
         adx, di_plus, di_minus = _adx_last(candles, 14)
@@ -567,18 +578,18 @@ class AutoScalperAgent(threading.Thread):
             else:
                 signals.append("EMA?")
         if self.agent_config.index_vwap_enabled:
-            vwap = self.index_indicators.get("vwap")
+            tpa = self.index_indicators.get("tpa")
             buffer_pts = float(self.agent_config.index_vwap_buffer or 0.0)
-            if price is not None and vwap is not None:
+            if price is not None and tpa is not None:
                 ready += 1
-                if price > vwap + buffer_pts:
-                    add_signal("VWAP", 1)
-                elif price < vwap - buffer_pts:
-                    add_signal("VWAP", -1)
+                if price > tpa + buffer_pts:
+                    add_signal("TPA", 1)
+                elif price < tpa - buffer_pts:
+                    add_signal("TPA", -1)
                 else:
-                    add_signal("VWAP", 0)
+                    add_signal("TPA", 0)
             else:
-                signals.append("VWAP?")
+                signals.append("TPA?")
         if self.agent_config.index_rsi_enabled:
             rsi = self.index_indicators.get("rsi")
             bull = float(self.agent_config.index_rsi_bull or 55.0)
@@ -1290,11 +1301,21 @@ class AutoScalperAgent(threading.Thread):
         spread = self.feature_cache.get_spread(side)
         if spread is None:
             return True
-        base = self.risk_config.spread_max_sensex if "SENSEX" in self.agent_config.underlying.upper() else self.risk_config.spread_max_nifty
-        if is_expiry_day(self.agent_config.expiry):
-            now = datetime.now()
-            if now.hour >= 14:
-                base *= 1.5
+        ltp = self.feature_cache.sides[side].last_price
+        if ltp and ltp > 0:
+            # Relative check: spread as a fraction of option LTP.
+            # 0.5% is the normal tolerance; widen to 0.8% on expiry day post-14:00
+            # when spreads legitimately blow out on low-premium OTM strikes.
+            max_pct = 0.008 if (
+                is_expiry_day(self.agent_config.expiry) and datetime.now().hour >= 14
+            ) else 0.005
+            return (spread / ltp) <= max_pct
+        # LTP not yet populated — fall back to the absolute limits from config.
+        base = (
+            self.risk_config.spread_max_sensex
+            if "SENSEX" in self.agent_config.underlying.upper()
+            else self.risk_config.spread_max_nifty
+        )
         return spread <= base
 
     def _imbalance_ok(self, side: str) -> bool:
@@ -1315,8 +1336,29 @@ class AutoScalperAgent(threading.Thread):
     def _symbol_for_side(self, side: str) -> Optional[str]:
         return self.agent_config.ce_symbol if side == "CE" else self.agent_config.pe_symbol
 
+    def _underlying_volatility(self) -> float:
+        """Average absolute tick-move of the underlying, normalised by the roll step.
+
+        Returns a dimensionless value where 1.0 means the underlying is moving
+        exactly one roll-step (50 pts for NIFTY, 100 for SENSEX) per tick on
+        average.  Values >= 1.2 trigger the 'trend' playbook; values < 1.2 fall
+        back to 'chop'.  Using the underlying instead of option price std-dev
+        gives a consistent regime signal across all strikes and premium levels.
+        """
+        prices = list(self.underlying_prices)
+        if len(prices) < 2:
+            return 0.0
+        step = (
+            self.agent_config.auto_roll_sensex
+            if "SENSEX" in (self.agent_config.underlying or "").upper()
+            else self.agent_config.auto_roll_nifty
+        )
+        step = max(step, 1.0)
+        moves = [abs(prices[i] - prices[i - 1]) for i in range(1, len(prices))]
+        return (sum(moves) / len(moves)) / step
+
     def _update_playbook(self) -> None:
-        vol = max(self.feature_cache.get_volatility("CE"), self.feature_cache.get_volatility("PE"))
+        vol = self._underlying_volatility()
         playbook = self.playbook_manager.update(vol, self.agent_config.expiry)
         self._set_status(playbook=playbook.name)
         self._maybe_request_advice(vol)

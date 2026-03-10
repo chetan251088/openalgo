@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PanelImperativeHandle } from 'react-resizable-panels'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -22,6 +23,7 @@ import { useVirtualOrderStore } from '@/stores/virtualOrderStore'
 import { useAuthStore } from '@/stores/authStore'
 import { tradingApi } from '@/api/trading'
 import { buildVirtualPosition, resolveFilledOrderPrice } from '@/lib/scalpingVirtualPosition'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 const VIRTUAL_POSITION_SYNC_GRACE_MS = 15000
@@ -43,6 +45,10 @@ export default function ScalpingDashboard() {
   const [showHelp, setShowHelp] = useState(false)
   const [chartFocusMode, setChartFocusMode] = useState(false)
   const pendingLimitAttachRef = useRef(false)
+  const chainPanelRef = useRef<PanelImperativeHandle | null>(null)
+  const controlPanelRef = useRef<PanelImperativeHandle | null>(null)
+  const didInitChainPanelRef = useRef(false)
+  const didInitControlPanelRef = useRef(false)
 
   const toggleHelp = useCallback(() => setShowHelp((v) => !v), [])
   const closeHelp = useCallback(() => setShowHelp(false), [])
@@ -59,9 +65,13 @@ export default function ScalpingDashboard() {
   const slPoints = useScalpingStore((s) => s.slPoints)
   const trailDistancePoints = useScalpingStore((s) => s.trailDistancePoints)
   const trailSlEnabled = useScalpingStore((s) => s.trailSlEnabled)
+  const chainCollapsed = useScalpingStore((s) => s.chainCollapsed)
+  const controlCollapsed = useScalpingStore((s) => s.controlCollapsed)
   const incrementTradeCount = useScalpingStore((s) => s.incrementTradeCount)
   const setLimitPrice = useScalpingStore((s) => s.setLimitPrice)
   const setPendingEntryAction = useScalpingStore((s) => s.setPendingEntryAction)
+  const setChainCollapsed = useScalpingStore((s) => s.setChainCollapsed)
+  const setControlCollapsed = useScalpingStore((s) => s.setControlCollapsed)
   const pendingLimitPlacement = useScalpingStore((s) => s.pendingLimitPlacement)
   const clearPendingLimitPlacement = useScalpingStore((s) => s.clearPendingLimitPlacement)
   const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
@@ -84,6 +94,50 @@ export default function ScalpingDashboard() {
     isLive: isLivePnl,
   } = useScalpingPositions()
   const effectiveTrailDistancePoints = trailSlEnabled ? trailDistancePoints : 0
+
+  useEffect(() => {
+    if (chartFocusMode) return
+    if (!didInitChainPanelRef.current) {
+      didInitChainPanelRef.current = true
+      return
+    }
+
+    const panel = chainPanelRef.current
+    if (!panel) return
+
+    const rafId = window.requestAnimationFrame(() => {
+      try {
+        if (chainCollapsed) panel.collapse()
+        else panel.expand()
+      } catch (error) {
+        console.warn('[Scalping] Chain panel sync skipped:', error)
+      }
+    })
+
+    return () => window.cancelAnimationFrame(rafId)
+  }, [chainCollapsed, chartFocusMode])
+
+  useEffect(() => {
+    if (chartFocusMode) return
+    if (!didInitControlPanelRef.current) {
+      didInitControlPanelRef.current = true
+      return
+    }
+
+    const panel = controlPanelRef.current
+    if (!panel) return
+
+    const rafId = window.requestAnimationFrame(() => {
+      try {
+        if (controlCollapsed) panel.collapse()
+        else panel.expand()
+      } catch (error) {
+        console.warn('[Scalping] Control panel sync skipped:', error)
+      }
+    })
+
+    return () => window.cancelAnimationFrame(rafId)
+  }, [controlCollapsed, chartFocusMode])
 
   // Eagerly fetch apiKey on mount so expiry/chain loading don't wait for AuthSync
   useEffect(() => {
@@ -190,7 +244,7 @@ export default function ScalpingDashboard() {
     }
   }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 
-  // Reversal: close current position, enter opposite direction
+  // Reversal: close current position, enter opposite side
   const handleReversal = useCallback(
     async (side: 'CE' | 'PE', symbol: string) => {
       if (paperMode) {
@@ -198,6 +252,13 @@ export default function ScalpingDashboard() {
         return
       }
       if (!apiKey) return
+
+      // Determine the opposite side's symbol (CE→PE or PE→CE)
+      const oppositeSymbol = side === 'CE' ? selectedPESymbol : selectedCESymbol
+      if (!oppositeSymbol) {
+        toast.error(`Opposite ${side === 'CE' ? 'PE' : 'CE'} symbol not selected — cannot reverse`)
+        return
+      }
 
       try {
         const knownPosition = livePositions.find(
@@ -214,14 +275,15 @@ export default function ScalpingDashboard() {
           return
         }
 
-        // Enter opposite direction (if you were long, sell; if short, buy)
-        // For scalping reversal, we sell to reverse a long
+        // Enter the opposite side preserving the same action direction
+        // (BUY CE → BUY PE, SELL CE → SELL PE)
+        const reversalAction = knownPosition?.action ?? 'BUY'
         const openRes = await tradingApi.placeOrder({
           apikey: apiKey,
           strategy: 'Scalping',
           exchange: optionExchange,
-          symbol,
-          action: 'SELL',
+          symbol: oppositeSymbol,
+          action: reversalAction,
           quantity: quantity * lotSize,
           pricetype: 'MARKET',
           product,
@@ -236,13 +298,13 @@ export default function ScalpingDashboard() {
           return
         }
 
-        console.log(`[Scalping] Reversed ${side} ${symbol}`)
+        console.log(`[Scalping] Reversed ${side}→${side === 'CE' ? 'PE' : 'CE'} ${oppositeSymbol}`)
       } catch (err) {
         console.error('[Scalping] Reversal failed:', err)
         toast.error(extractErrorMessage(err, 'Reversal failed'))
       }
     },
-    [paperMode, apiKey, optionExchange, product, quantity, lotSize, livePositions]
+    [paperMode, apiKey, optionExchange, product, quantity, lotSize, livePositions, selectedCESymbol, selectedPESymbol]
   )
 
   // Wire up keyboard hotkeys
@@ -291,7 +353,7 @@ export default function ScalpingDashboard() {
     triggerOrders,
   ])
 
-  const { data: tickData } = useMarketData({
+  const { data: tickData, isFallbackMode } = useMarketData({
     symbols: tickSymbols,
     mode: imbalanceFilterEnabled ? 'Quote' : 'LTP',
     enabled: tickSymbols.length > 0,
@@ -477,6 +539,7 @@ export default function ScalpingDashboard() {
         isLivePnl={isLivePnl}
         chartFocusMode={chartFocusMode}
         onToggleChartFocusMode={toggleChartFocusMode}
+        isFallbackMode={isFallbackMode}
       />
 
       <div className="flex-1 min-h-0 min-w-0">
@@ -487,22 +550,72 @@ export default function ScalpingDashboard() {
         ) : (
           <ResizablePanelGroup orientation="horizontal" className="h-full w-full min-w-0">
             {/* Left: Option Chain */}
-            <ResizablePanel defaultSize="20%" minSize="12%" maxSize="36%">
-              <OptionChainPanel />
+            <ResizablePanel
+              id="scalping-chain-panel"
+              panelRef={chainPanelRef}
+              defaultSize="18%"
+              minSize="14%"
+              maxSize="28%"
+              collapsible
+              collapsedSize="4%"
+              className={cn(chainCollapsed && 'min-w-[46px]')}
+            >
+              {chainCollapsed ? (
+                <div className="flex h-full flex-col items-center justify-start border-r bg-card/60 px-1 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setChainCollapsed(false)}
+                    className="flex h-full w-full flex-col items-center justify-center gap-3 rounded-md border border-border/60 bg-background/70 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground"
+                    title="Expand option chain"
+                  >
+                    <span className="[writing-mode:vertical-rl] rotate-180">
+                      Chain
+                    </span>
+                    <span className="text-sm leading-none">{'>'}</span>
+                  </button>
+                </div>
+              ) : (
+                <OptionChainPanel />
+              )}
             </ResizablePanel>
 
             <ResizableHandle withHandle className="bg-border/70" />
 
             {/* Center: Charts */}
-            <ResizablePanel defaultSize="50%" minSize="30%">
+            <ResizablePanel defaultSize="56%" minSize="36%">
               <ChartPanel />
             </ResizablePanel>
 
             <ResizableHandle withHandle className="bg-border/70" />
 
             {/* Right: Control Panel */}
-            <ResizablePanel defaultSize="30%" minSize="18%" maxSize="42%">
-              <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
+            <ResizablePanel
+              id="scalping-control-panel"
+              panelRef={controlPanelRef}
+              defaultSize="26%"
+              minSize="20%"
+              maxSize="34%"
+              collapsible
+              collapsedSize="4%"
+              className={cn(controlCollapsed && 'min-w-[46px]')}
+            >
+              {controlCollapsed ? (
+                <div className="flex h-full flex-col items-center justify-start border-l bg-card/60 px-1 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setControlCollapsed(false)}
+                    className="flex h-full w-full flex-col items-center justify-center gap-3 rounded-md border border-border/60 bg-background/70 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground"
+                    title="Expand control panel"
+                  >
+                    <span className="[writing-mode:vertical-rl]">
+                      Control
+                    </span>
+                    <span className="text-sm leading-none">{'<'}</span>
+                  </button>
+                </div>
+              ) : (
+                <ControlPanel liveOpenPnl={liveOpenPnl} isLivePnl={isLivePnl} />
+              )}
             </ResizablePanel>
           </ResizablePanelGroup>
         )}

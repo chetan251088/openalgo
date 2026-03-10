@@ -75,6 +75,12 @@ export interface AutoTradeConfigFields {
   ivSpikeExitEnabled: boolean
   ivSpikeThreshold: number
 
+  // Unified FLOW + Footprints + OI signal
+  unifiedFlowSignalEnabled: boolean
+  unifiedFlowMinScore: number
+  unifiedFlowScoreWeight: number
+  unifiedFlowHardBlock: boolean
+
   // Time-of-day
   respectHotZones: boolean
   sensitivityMultiplier: number
@@ -144,6 +150,11 @@ export const DEFAULT_CONFIG: AutoTradeConfigFields = {
   gexWallFilterEnabled: true,
   ivSpikeExitEnabled: true,
   ivSpikeThreshold: 5,
+
+  unifiedFlowSignalEnabled: true,
+  unifiedFlowMinScore: 0.2,
+  unifiedFlowScoreWeight: 1.0,
+  unifiedFlowHardBlock: true,
 
   respectHotZones: true,
   sensitivityMultiplier: 1.0,

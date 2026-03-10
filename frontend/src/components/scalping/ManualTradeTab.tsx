@@ -419,11 +419,11 @@ export function ManualTradeTab() {
   }, [paperMode, clearVirtualOrders, setLimitPrice, setPendingEntryAction, clearPendingLimitPlacement])
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="p-3 space-y-3">
       {/* Active symbol display */}
-      <div className="text-center">
-        <span className="text-xs text-muted-foreground">Active Side</span>
-        <div className="text-sm font-bold">
+      <div className="space-y-1 text-center">
+        <span className="text-[11px] text-muted-foreground">Active Side</span>
+        <div className="text-sm font-bold leading-none">
           <span
             className={
               activeSide === 'CE' ? 'text-green-500' : 'text-red-500'
@@ -439,10 +439,10 @@ export function ManualTradeTab() {
       </div>
 
       {/* Buy / Sell buttons */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex items-center justify-center gap-2">
         <Button
           size="sm"
-          className="bg-green-600 hover:bg-green-700 text-white font-bold"
+          className="h-8 min-w-[88px] px-4 bg-green-600 hover:bg-green-700 text-white font-bold"
           onClick={() => placeOrder('BUY')}
           disabled={!activeSymbol}
         >
@@ -450,7 +450,7 @@ export function ManualTradeTab() {
         </Button>
         <Button
           size="sm"
-          className="bg-red-600 hover:bg-red-700 text-white font-bold"
+          className="h-8 min-w-[88px] px-4 bg-red-600 hover:bg-red-700 text-white font-bold"
           onClick={() => placeOrder('SELL')}
           disabled={!activeSymbol}
         >
@@ -459,7 +459,7 @@ export function ManualTradeTab() {
       </div>
 
       {/* Quantity stepper */}
-      <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-card/20 px-2.5 py-2">
         <Label className="text-xs">Lots</Label>
         <div className="flex items-center gap-1">
           <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={decrementQuantity}>
@@ -470,87 +470,89 @@ export function ManualTradeTab() {
             min={1}
             value={quantity}
             onChange={(e) => setQuantity(Number.parseInt(e.target.value) || 1)}
-            className="h-7 text-center text-sm w-16"
+            className="h-7 w-14 text-center text-sm"
           />
           <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={incrementQuantity}>
             +
           </Button>
-          <span className="text-xs text-muted-foreground ml-1">
+          <span className="ml-1 text-[11px] text-muted-foreground">
             = {quantity * lotSize} qty
           </span>
         </div>
       </div>
 
-      {/* Order type toggle */}
-      <div className="space-y-1">
-        <Label className="text-xs">Order Type</Label>
-        <div className="flex gap-1">
-          {(['MARKET', 'LIMIT', 'TRIGGER'] as const).map((t) => (
-            <Button
-              key={t}
-              variant={orderType === t ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 text-xs flex-1"
-              onClick={() => setOrderType(t)}
-            >
-              {t}
-            </Button>
-          ))}
+      <div className="grid grid-cols-2 gap-2">
+        {/* Order type toggle */}
+        <div className="space-y-1">
+          <Label className="text-[11px]">Type</Label>
+          <div className="grid grid-cols-3 gap-1">
+            {(['MARKET', 'LIMIT', 'TRIGGER'] as const).map((t) => (
+              <Button
+                key={t}
+                variant={orderType === t ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-0 text-[10px]"
+                onClick={() => setOrderType(t)}
+              >
+                {t}
+              </Button>
+            ))}
+          </div>
         </div>
-      </div>
 
-      {/* Product toggle */}
-      <div className="space-y-1">
-        <Label className="text-xs">Product</Label>
-        <div className="flex gap-1">
-          {(['MIS', 'NRML'] as const).map((p) => (
-            <Button
-              key={p}
-              variant={product === p ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 text-xs flex-1"
-              onClick={() => setProduct(p)}
-            >
-              {p}
-            </Button>
-          ))}
+        {/* Product toggle */}
+        <div className="space-y-1">
+          <Label className="text-[11px]">Product</Label>
+          <div className="grid grid-cols-2 gap-1">
+            {(['MIS', 'NRML'] as const).map((p) => (
+              <Button
+                key={p}
+                variant={product === p ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-0 text-[10px]"
+                onClick={() => setProduct(p)}
+              >
+                {p}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* TP / SL / Trail points */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-1.5 rounded-lg border border-border/60 bg-card/20 p-2">
         <div className="space-y-1">
-          <Label className="text-xs text-green-500">TP Points</Label>
+          <Label className="text-[10px] text-green-500">TP</Label>
           <Input
             type="number"
             min={0}
             step={5}
             value={tpPoints}
             onChange={(e) => setTpPoints(Number.parseFloat(e.target.value) || 0)}
-            className="h-7 text-sm"
+            className="h-7 px-2 text-center text-sm"
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-red-500">SL Points</Label>
+          <Label className="text-[10px] text-red-500">SL</Label>
           <Input
             type="number"
             min={0}
             step={5}
             value={slPoints}
             onChange={(e) => setSlPoints(Number.parseFloat(e.target.value) || 0)}
-            className="h-7 text-sm"
+            className="h-7 px-2 text-center text-sm"
           />
         </div>
         <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs text-amber-400">Trail SL</Label>
-            <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          <div className="flex items-center justify-between gap-1">
+            <Label className="text-[10px] text-amber-400">Trail</Label>
+            <label className="flex items-center gap-1 text-[9px] text-muted-foreground">
               <Checkbox
                 checked={trailSlEnabled}
                 onCheckedChange={(checked) => setTrailSlEnabled(checked === true)}
-                className="h-3.5 w-3.5"
+                className="h-3 w-3"
               />
-              Enable
+              On
             </label>
           </div>
           <Input
@@ -559,33 +561,33 @@ export function ManualTradeTab() {
             step={0.5}
             value={trailDistancePoints}
             onChange={(e) => setTrailDistancePoints(Number.parseFloat(e.target.value) || 0)}
-            className="h-7 text-sm"
+            className="h-7 px-2 text-center text-sm"
             disabled={!trailSlEnabled}
           />
         </div>
       </div>
 
-      <div className="border-t pt-3 space-y-2">
+      <div className="border-t pt-2">
         {/* Close active side */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-xs"
-          onClick={closePosition}
-          disabled={!activeSymbol}
-        >
-          Close {activeSide} Position
-        </Button>
-
-        {/* Close all */}
-        <Button
-          variant="destructive"
-          size="sm"
-          className="w-full text-xs"
-          onClick={closeAll}
-        >
-          Close All Positions
-        </Button>
+        <div className="flex justify-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 min-w-[128px] px-3 text-xs"
+            onClick={closePosition}
+            disabled={!activeSymbol}
+          >
+            Close {activeSide} Position
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-8 min-w-[128px] px-3 text-xs"
+            onClick={closeAll}
+          >
+            Close All Positions
+          </Button>
+        </div>
       </div>
     </div>
   )

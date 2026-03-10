@@ -59,6 +59,21 @@ interface VolumeSignalSnapshot {
   sideDominanceRatio: number | null
 }
 
+export type FlowBiasAction = 'BUY_CE' | 'BUY_PE' | 'HOLD'
+export type UnifiedSignalConfidence = 'LOW' | 'MED' | 'HIGH'
+
+export interface UnifiedFlowSignal {
+  action: FlowBiasAction
+  label: string
+  confidence: UnifiedSignalConfidence
+  score: number
+  components: {
+    flow: number
+    footprints: number
+    context: number
+  }
+}
+
 // --- Momentum ---
 
 export function calculateMomentum(
@@ -266,6 +281,93 @@ export function checkImbalanceFilter(
   return { allowed: true, reason: 'Depth OK' }
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function calculateFootprintBias(
+  footprints: Array<{ buy: number; sell: number; delta: number; total: number }>
+): number {
+  if (!footprints.length) return 0
+
+  let weighted = 0
+  let weightSum = 0
+  for (let i = 0; i < footprints.length; i += 1) {
+    const row = footprints[i]
+    const weight = 0.55 + (i / Math.max(1, footprints.length - 1)) * 0.45
+    const rowScore = clamp(row.delta / Math.max(1, row.total), -1, 1)
+    weighted += rowScore * weight
+    weightSum += weight
+  }
+  if (weightSum <= 0) return 0
+  return clamp((weighted / weightSum) * 1.1, -1, 1)
+}
+
+function calculateContextBias(context: OptionsContext | null): number {
+  if (!context) return 0
+
+  const pcrCentered = clamp((1 - context.pcr) * 1.5, -1, 1)
+  const oiTotal = Math.abs(context.oiChangeCE) + Math.abs(context.oiChangePE)
+  const oiBias =
+    oiTotal > 0 ? clamp((context.oiChangePE - context.oiChangeCE) / oiTotal, -1, 1) : 0
+  const maxPainBias = clamp((-context.spotVsMaxPain) / 180, -0.55, 0.55)
+
+  let combined = pcrCentered * 0.5 + oiBias * 0.35 + maxPainBias * 0.15
+  const gexDamp =
+    Math.abs(context.netGEX) >= 1_000_000 ? 0.75 : Math.abs(context.netGEX) >= 300_000 ? 0.85 : 1
+  combined *= gexDamp
+
+  return clamp(combined, -1, 1)
+}
+
+export function calculateUnifiedFlowSignal(
+  side: ActiveSide,
+  flow: { buyFlow: number; sellFlow: number; delta: number; cumulativeDelta: number },
+  footprints: Array<{ buy: number; sell: number; delta: number; total: number }>,
+  context: OptionsContext | null
+): UnifiedFlowSignal {
+  const totalFlow = Math.max(0, flow.buyFlow + flow.sellFlow)
+  let flowScore = totalFlow > 0 ? clamp((flow.delta / Math.max(1, totalFlow)) * 1.35, -1, 1) : 0
+  const cumulativeAligned =
+    flow.delta !== 0 &&
+    flow.cumulativeDelta !== 0 &&
+    Math.sign(flow.delta) === Math.sign(flow.cumulativeDelta)
+  flowScore = clamp(flowScore * (cumulativeAligned ? 1.05 : 0.85), -1, 1)
+
+  const sideDirection = side === 'CE' ? 1 : -1
+  flowScore *= sideDirection
+  const footprintScore = calculateFootprintBias(footprints) * sideDirection
+  const contextScore = calculateContextBias(context)
+  const combined = clamp(flowScore * 0.45 + footprintScore * 0.3 + contextScore * 0.25, -1, 1)
+  const magnitude = Math.abs(combined)
+
+  let action: FlowBiasAction = 'HOLD'
+  if (magnitude >= 0.16) {
+    action = combined > 0 ? 'BUY_CE' : 'BUY_PE'
+  }
+
+  const confidence: UnifiedSignalConfidence =
+    magnitude >= 0.56 ? 'HIGH' : magnitude >= 0.34 ? 'MED' : 'LOW'
+  const label =
+    action === 'BUY_CE'
+      ? `BUY CE (${confidence})`
+      : action === 'BUY_PE'
+        ? `BUY PE (${confidence})`
+        : `HOLD (${confidence})`
+
+  return {
+    action,
+    label,
+    confidence,
+    score: combined,
+    components: {
+      flow: flowScore,
+      footprints: footprintScore,
+      context: contextScore,
+    },
+  }
+}
+
 // --- Entry Decision ---
 
 export function shouldEnterTrade(
@@ -298,7 +400,8 @@ export function shouldEnterTrade(
   depthInfo?: { totalBid: number; totalAsk: number },
   recentPrices: number[] = [],
   volumeFlow?: VolumeSignalSnapshot,
-  regime?: MarketRegime
+  regime?: MarketRegime,
+  unifiedSignal?: UnifiedFlowSignal | null
 ): EntryDecision {
   let score = 0
   const reasons: string[] = []
@@ -676,6 +779,56 @@ export function shouldEnterTrade(
   addCheck('options-context', 'Options context filter', ctxFilter.allowed, ctxFilter.reason)
   if (!ctxFilter.allowed) {
     return block(ctxFilter.reason, 'options-context')
+  }
+
+  // Unified FLOW + Footprints + OI signal gate
+  if (config.unifiedFlowSignalEnabled) {
+    if (unifiedSignal) {
+      const expectedAction: FlowBiasAction = side === 'CE' ? 'BUY_CE' : 'BUY_PE'
+      const scoreAbs = Math.abs(unifiedSignal.score)
+      const strongSignal = scoreAbs >= Math.max(0.05, config.unifiedFlowMinScore)
+      const directionMatch =
+        !strongSignal ||
+        unifiedSignal.action === expectedAction ||
+        unifiedSignal.action === 'HOLD'
+
+      addCheck(
+        'unified-flow',
+        'Unified flow signal',
+        directionMatch,
+        `${unifiedSignal.label} s:${unifiedSignal.score >= 0 ? '+' : ''}${unifiedSignal.score.toFixed(2)}`
+      )
+
+      if (
+        config.unifiedFlowHardBlock &&
+        strongSignal &&
+        unifiedSignal.action !== 'HOLD' &&
+        unifiedSignal.action !== expectedAction
+      ) {
+        return block(`Unified flow opposes ${side}: ${unifiedSignal.label}`, 'unified-flow')
+      }
+
+      const weight = Math.max(0, config.unifiedFlowScoreWeight)
+      if (weight > 0 && strongSignal) {
+        if (unifiedSignal.action === expectedAction) {
+          const bonus = scoreAbs * weight * 2
+          score += bonus
+          reasons.push(`Uni ${unifiedSignal.confidence}`)
+        } else if (unifiedSignal.action === 'HOLD') {
+          const penalty = Math.min(1.5, scoreAbs * weight)
+          score -= penalty
+          reasons.push('UniHold')
+        } else {
+          const penalty = scoreAbs * weight * 1.5
+          score -= penalty
+          reasons.push('UniOpp')
+        }
+      }
+    } else {
+      addCheck('unified-flow', 'Unified flow signal', true, 'NA')
+    }
+  } else {
+    addCheck('unified-flow', 'Unified flow signal', true, 'OFF')
   }
 
   addCheck('score-gate', 'Final score gate', score >= adjustedMinScore, `${score.toFixed(1)}/${adjustedMinScore.toFixed(1)}`)

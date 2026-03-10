@@ -22,24 +22,29 @@ class SideFeatures:
 
 
 class FeatureCache:
-    def __init__(self) -> None:
+    def __init__(self, min_tick: float = 0.25) -> None:
         self.sides: Dict[str, SideFeatures] = {"CE": SideFeatures(), "PE": SideFeatures()}
+        # Minimum price move (in points) required to count a tick as directional.
+        # Prevents noise from sub-tick oscillations triggering false momentum counts.
+        self.min_tick = max(0.0, min_tick)
 
     def update_tick(self, side: str, price: float, ts: float) -> None:
         features = self.sides[side]
         if features.last_price:
-            if price > features.last_price:
-                if features.momentum_dir == "up":
-                    features.momentum_count += 1
+            move = price - features.last_price
+            if abs(move) >= self.min_tick:
+                if move > 0:
+                    if features.momentum_dir == "up":
+                        features.momentum_count += 1
+                    else:
+                        features.momentum_dir = "up"
+                        features.momentum_count = 1
                 else:
-                    features.momentum_dir = "up"
-                    features.momentum_count = 1
-            elif price < features.last_price:
-                if features.momentum_dir == "down":
-                    features.momentum_count += 1
-                else:
-                    features.momentum_dir = "down"
-                    features.momentum_count = 1
+                    if features.momentum_dir == "down":
+                        features.momentum_count += 1
+                    else:
+                        features.momentum_dir = "down"
+                        features.momentum_count = 1
         features.last_price = price
         features.last_tick_ts = ts
         features.prices.append(price)

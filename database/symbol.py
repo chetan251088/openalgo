@@ -1,7 +1,19 @@
 import os
 from typing import List
 
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, and_, create_engine, or_
+from sqlalchemy import (
+    Column,
+    Float,
+    Index,
+    Integer,
+    Sequence,
+    String,
+    and_,
+    create_engine,
+    inspect,
+    or_,
+    text,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -347,3 +359,26 @@ def init_db():
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Master Contract DB", logger)
+    _migrate_add_contract_value_column()
+
+
+def _migrate_add_contract_value_column():
+    """Add contract_value column to symtoken table if missing in existing databases."""
+    try:
+        inspector = inspect(engine)
+
+        if "symtoken" not in inspector.get_table_names():
+            return
+
+        columns = {column["name"] for column in inspector.get_columns("symtoken")}
+        if "contract_value" in columns:
+            return
+
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE symtoken ADD COLUMN contract_value FLOAT"))
+            conn.commit()
+
+        logger.info("Migration: Added 'contract_value' column to symtoken table")
+    except Exception as e:
+        # Do not block startup if migration check fails
+        logger.debug(f"Migration check for symtoken.contract_value: {e}")

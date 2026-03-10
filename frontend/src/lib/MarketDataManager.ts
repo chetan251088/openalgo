@@ -132,7 +132,7 @@ export class MarketDataManager {
   private fallbackPollingRate: number = 5000 // Poll every 5 seconds in fallback mode
   private apiKey: string | null = null
   private consecutiveFailures: number = 0
-  private maxConsecutiveFailures: number = 3 // Switch to fallback after 3 consecutive connection failures
+  private maxConsecutiveFailures: number = 10 // Switch to fallback after 10 consecutive connection failures
   private feedMode: DataFeedMode = 'auto'
   private customWsTargets: string[] = []
   private customWsTargetApiKeys: string[] = []

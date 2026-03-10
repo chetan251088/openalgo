@@ -1,10 +1,45 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, Component, type ReactNode } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { Providers } from '@/app/providers'
 import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: '24px', fontFamily: 'monospace', color: '#f87171', background: '#0f0f0f', minHeight: '100vh' }}>
+          <h2 style={{ color: '#fca5a5', marginBottom: '12px' }}>App Error</h2>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '12px' }}>
+            {this.state.error.message}
+            {'\n\n'}
+            {this.state.error.stack}
+          </pre>
+          <button
+            type="button"
+            onClick={() => this.setState({ error: null })}
+            style={{ marginTop: '16px', padding: '8px 16px', cursor: 'pointer' }}
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // Lazy load all pages for code splitting
 // Public pages
@@ -121,10 +156,11 @@ const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
 function App() {
   return (
-    <Providers>
-      <BrowserRouter>
-        <AuthSync>
-          <Suspense fallback={<PageLoader />}>
+    <AppErrorBoundary>
+      <Providers>
+        <BrowserRouter>
+          <AuthSync>
+            <Suspense fallback={<PageLoader />}>
             <Routes>
               {/* Public routes */}
               <Route path="/" element={<Home />} />
@@ -250,10 +286,11 @@ function App() {
               {/* 404 Not Found */}
               <Route path="*" element={<NotFound />} />
             </Routes>
-          </Suspense>
-        </AuthSync>
-      </BrowserRouter>
-    </Providers>
+            </Suspense>
+          </AuthSync>
+        </BrowserRouter>
+      </Providers>
+    </AppErrorBoundary>
   )
 }
 

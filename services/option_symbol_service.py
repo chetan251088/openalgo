@@ -216,6 +216,19 @@ def construct_option_symbol(
     return option_symbol
 
 
+def construct_crypto_option_symbol(
+    base_symbol: str, expiry_date: str, strike: float, option_type: str
+) -> str:
+    """
+    Construct CRYPTO option symbol in canonical OpenAlgo format.
+
+    Kept as a compatibility wrapper for services that still import this helper.
+    Current CRYPTO options use the same DDMMMYY + strike + CE/PE layout as
+    construct_option_symbol().
+    """
+    return construct_option_symbol(base_symbol, expiry_date, strike, option_type)
+
+
 def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any] | None:
     """
     Find the option symbol in the database and return its details.

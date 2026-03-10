@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import {
   CandlestickSeries,
   ColorType,
@@ -7,6 +7,7 @@ import {
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type UTCTimestamp,
@@ -19,7 +20,7 @@ import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import { useCandleBuilder } from '@/hooks/useCandleBuilder'
 import { useMarketData } from '@/hooks/useMarketData'
 import { ChartOrderOverlay } from './ChartOrderOverlay'
-import type { ActiveSide } from '@/types/scalping'
+import type { ActiveSide, OptionsContext } from '@/types/scalping'
 import type { Candle } from '@/lib/candleUtils'
 import { cn } from '@/lib/utils'
 import {
@@ -44,14 +45,18 @@ const ORDER_FLOW_WINDOW_MS = 30_000
 const ORDER_FLOW_EMIT_THROTTLE_MS = 120
 const ORDER_FLOW_STALE_MS = 5_000
 const ORDER_FLOW_FALLBACK_STALE_MS = 12_000
+const FOOTPRINT_DEFAULT_LOOKBACK_BARS = 36
 
 interface OptionChartViewProps {
   side: ActiveSide
+  prominence: 'primary' | 'secondary'
   showEma9: boolean
   showEma21: boolean
   showSupertrend: boolean
   showVwap: boolean
   showOrderFlow: boolean
+  showFootprints: boolean
+  footprintDensity: 'sparse' | 'balanced' | 'all'
 }
 
 function toLineData(points: IndicatorPoint[]) {
@@ -128,8 +133,21 @@ function formatFlowNumber(value: number): string {
   return '0'
 }
 
+function formatSignedFlowNumber(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '0'
+  return `${value > 0 ? '+' : ''}${formatFlowNumber(value)}`
+}
+
+function getLastIndicatorValue(points: IndicatorPoint[]): number | null {
+  if (points.length === 0) return null
+  const value = points[points.length - 1]?.value
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 type FlowDominance = 'BUY' | 'SELL' | 'BAL'
 type FlowBiasAction = 'BUY_CE' | 'BUY_PE' | 'HOLD'
+type UnifiedSignalConfidence = 'LOW' | 'MED' | 'HIGH'
+type FootprintDensity = 'sparse' | 'balanced' | 'all'
 
 interface OrderFlowStats {
   buyFlow: number
@@ -149,6 +167,48 @@ interface FlowTickBucket {
   sell: number
 }
 
+interface CandleFootprintAccumulator {
+  buy: number
+  sell: number
+}
+
+interface CandleFootprint {
+  time: UTCTimestamp
+  buy: number
+  sell: number
+  delta: number
+  total: number
+  high: number
+  low: number
+  source: 'FLOW' | 'EST'
+}
+
+interface RenderableFootprint extends CandleFootprint {
+  x: number
+  y: number
+  yTop: number
+  height: number
+  alpha: number
+}
+
+interface FlowStatItem {
+  label: string
+  value: string
+  tone?: 'positive' | 'negative' | 'neutral' | 'accent'
+}
+
+interface UnifiedFlowSignal {
+  action: FlowBiasAction
+  label: string
+  confidence: UnifiedSignalConfidence
+  score: number
+  components: {
+    flow: number
+    footprints: number
+    context: number
+  }
+}
+
 interface ChartSignalMarker {
   time: UTCTimestamp
   position: 'aboveBar' | 'belowBar'
@@ -166,6 +226,7 @@ interface FlowState {
   lastTickAt: number
   cumulativeDelta: number
   buckets: FlowTickBucket[]
+  candleFlow: Map<number, CandleFootprintAccumulator>
   lastEmitAt: number
 }
 
@@ -179,6 +240,15 @@ const EMPTY_ORDER_FLOW: OrderFlowStats = {
   spread: null,
   flowSource: 'EST',
   lastUpdate: 0,
+}
+
+const FOOTPRINT_DENSITY_CONFIG: Record<
+  FootprintDensity,
+  { maxVisibleBars: number; minSpacingPx: number }
+> = {
+  sparse: { maxVisibleBars: 36, minSpacingPx: 28 },
+  balanced: { maxVisibleBars: 96, minSpacingPx: 14 },
+  all: { maxVisibleBars: 1200, minSpacingPx: 0 },
 }
 
 function parseFlowLtp(payload: Record<string, unknown>): number | null {
@@ -264,38 +334,103 @@ function parseDepthLevelQuantity(level: unknown): number {
   return quantity != null && quantity > 0 ? quantity : 0
 }
 
-function deriveFlowBias(side: ActiveSide, flow: OrderFlowStats): { action: FlowBiasAction; label: string } {
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function parseVisibleRangeTime(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (!value || typeof value !== 'object') return null
+  const row = value as Record<string, unknown>
+  return parseNumeric(row.timestamp) ?? parseNumeric(row.time) ?? null
+}
+
+function calculateFootprintBias(footprints: CandleFootprint[]): number {
+  if (!footprints.length) return 0
+
+  let weighted = 0
+  let weightSum = 0
+  for (let i = 0; i < footprints.length; i += 1) {
+    const row = footprints[i]
+    const weight = 0.55 + (i / Math.max(1, footprints.length - 1)) * 0.45
+    const rowScore = clamp(row.delta / Math.max(1, row.total), -1, 1)
+    weighted += rowScore * weight
+    weightSum += weight
+  }
+  if (weightSum <= 0) return 0
+  return clamp((weighted / weightSum) * 1.1, -1, 1)
+}
+
+function calculateContextBias(context: OptionsContext | null): number {
+  if (!context) return 0
+
+  // PCR: lower PCR tends to support upside (CE), higher PCR supports downside (PE)
+  const pcrCentered = clamp((1 - context.pcr) * 1.5, -1, 1)
+
+  // OI shift: PE-heavy OI build interpreted as support (CE bias), CE-heavy as resistance (PE bias)
+  const oiTotal = Math.abs(context.oiChangeCE) + Math.abs(context.oiChangePE)
+  const oiBias =
+    oiTotal > 0 ? clamp((context.oiChangePE - context.oiChangeCE) / oiTotal, -1, 1) : 0
+
+  // Spot vs MaxPain: below max-pain => slight CE bias, above => slight PE bias
+  const maxPainBias = clamp((-context.spotVsMaxPain) / 180, -0.55, 0.55)
+
+  let combined = pcrCentered * 0.5 + oiBias * 0.35 + maxPainBias * 0.15
+
+  // Very high absolute GEX often dampens directional follow-through; reduce conviction.
+  const gexDamp =
+    Math.abs(context.netGEX) >= 1_000_000 ? 0.75 : Math.abs(context.netGEX) >= 300_000 ? 0.85 : 1
+  combined *= gexDamp
+
+  return clamp(combined, -1, 1)
+}
+
+function deriveUnifiedFlowSignal(
+  side: ActiveSide,
+  flow: OrderFlowStats,
+  footprints: CandleFootprint[],
+  context: OptionsContext | null
+): UnifiedFlowSignal {
   const totalFlow = Math.max(0, flow.buyFlow + flow.sellFlow)
-  if (totalFlow <= 0) return { action: 'HOLD', label: 'HOLD FOR NOW' }
+  const sideDirection = side === 'CE' ? 1 : -1
+  const flowScore =
+    totalFlow > 0 ? clamp((flow.delta / Math.max(1, totalFlow)) * 1.35, -1, 1) : 0
+  const normalizedFlowScore = flowScore * sideDirection
+  const footprintScore = calculateFootprintBias(footprints) * sideDirection
+  const contextScore = calculateContextBias(context)
 
-  const imbalance = Math.abs(flow.delta) / Math.max(1, totalFlow)
-  const directionAligned =
-    flow.delta === 0
-      ? false
-      : Math.sign(flow.delta) === Math.sign(flow.cumulativeDelta) &&
-        Math.abs(flow.cumulativeDelta) >= Math.abs(flow.delta) * 0.35
+  const combined = clamp(
+    normalizedFlowScore * 0.45 + footprintScore * 0.3 + contextScore * 0.25,
+    -1,
+    1
+  )
+  const magnitude = Math.abs(combined)
 
-  const minActivity = flow.flowSource === 'VOL' ? 1_000 : 250
-  const minImbalance = flow.flowSource === 'VOL' ? 0.12 : 0.22
-
-  if (!directionAligned || totalFlow < minActivity || imbalance < minImbalance) {
-    return { action: 'HOLD', label: 'HOLD FOR NOW' }
+  let action: FlowBiasAction = 'HOLD'
+  if (magnitude >= 0.16) {
+    action = combined > 0 ? 'BUY_CE' : 'BUY_PE'
   }
 
-  const sideBuying = flow.delta > 0 && flow.cumulativeDelta > 0
-  const sideSelling = flow.delta < 0 && flow.cumulativeDelta < 0
+  const confidence: UnifiedSignalConfidence =
+    magnitude >= 0.56 ? 'HIGH' : magnitude >= 0.34 ? 'MED' : 'LOW'
+  const label =
+    action === 'BUY_CE'
+      ? `BUY CE (${confidence})`
+      : action === 'BUY_PE'
+        ? `BUY PE (${confidence})`
+        : `HOLD (${confidence})`
 
-  if (sideBuying) {
-    return side === 'CE'
-      ? { action: 'BUY_CE', label: 'BUY CE NOW' }
-      : { action: 'BUY_PE', label: 'BUY PE NOW' }
+  return {
+    action,
+    label,
+    confidence,
+    score: combined,
+    components: {
+      flow: normalizedFlowScore,
+      footprints: footprintScore,
+      context: contextScore,
+    },
   }
-  if (sideSelling) {
-    return side === 'CE'
-      ? { action: 'BUY_PE', label: 'BUY PE NOW' }
-      : { action: 'BUY_CE', label: 'BUY CE NOW' }
-  }
-  return { action: 'HOLD', label: 'HOLD FOR NOW' }
 }
 
 function normalizeCandleTime(value: unknown): UTCTimestamp | null {
@@ -422,11 +557,14 @@ function normalizeRuntimeCandles(candles: Candle[]): Candle[] {
 
 export function OptionChartView({
   side,
+  prominence,
   showEma9,
   showEma21,
   showSupertrend,
   showVwap,
   showOrderFlow,
+  showFootprints,
+  footprintDensity,
 }: OptionChartViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -435,6 +573,10 @@ export function OptionChartView({
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const supertrendSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema9PriceLineRef = useRef<IPriceLine | null>(null)
+  const ema21PriceLineRef = useRef<IPriceLine | null>(null)
+  const supertrendPriceLineRef = useRef<IPriceLine | null>(null)
+  const vwapPriceLineRef = useRef<IPriceLine | null>(null)
   const candlesRef = useRef<Candle[]>([])
   const cacheRef = useRef<Map<string, Candle[]>>(new Map())
   const currentCacheKeyRef = useRef<string | null>(null)
@@ -448,13 +590,16 @@ export function OptionChartView({
     lastTickAt: 0,
     cumulativeDelta: 0,
     buckets: [],
+    candleFlow: new Map<number, CandleFootprintAccumulator>(),
     lastEmitAt: 0,
   })
   const chartMarkersRef = useRef<ChartSignalMarker[]>([])
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<any> | null>(null)
   const [orderFlow, setOrderFlow] = useState<OrderFlowStats>(EMPTY_ORDER_FLOW)
+  const [footprints, setFootprints] = useState<CandleFootprint[]>([])
   const [flowClock, setFlowClock] = useState(() => Date.now())
+  const [footprintViewportTick, setFootprintViewportTick] = useState(0)
   const indicatorConfigRef = useRef({
     showEma9,
     showEma21,
@@ -475,33 +620,98 @@ export function OptionChartView({
 
   const ghostSignals = useAutoTradeStore((s) => s.ghostSignals)
   const executionSamples = useAutoTradeStore((s) => s.executionSamples)
+  const optionsContext = useAutoTradeStore((s) => s.optionsContext)
 
+  const syncIndicatorPriceLine = useCallback(
+    (
+      seriesRef: MutableRefObject<ISeriesApi<'Line'> | null>,
+      lineRef: MutableRefObject<IPriceLine | null>,
+      enabled: boolean,
+      price: number | null,
+      color: string
+    ) => {
+      const series = seriesRef.current
+      if (!series) return
+
+      if (!enabled || price == null) {
+        if (lineRef.current) {
+          try {
+            series.removePriceLine(lineRef.current)
+          } catch {
+            // no-op
+          }
+          lineRef.current = null
+        }
+        return
+      }
+
+      const options = {
+        price,
+        color,
+        lineWidth: 1 as const,
+        lineStyle: 2 as const,
+        axisLabelVisible: true,
+        title: '',
+      }
+
+      if (lineRef.current) {
+        lineRef.current.applyOptions(options)
+      } else {
+        lineRef.current = series.createPriceLine(options)
+      }
+    },
+    []
+  )
+
+  const clearIndicatorPriceLines = useCallback(() => {
+    const refs = [
+      [ema9SeriesRef, ema9PriceLineRef],
+      [ema21SeriesRef, ema21PriceLineRef],
+      [supertrendSeriesRef, supertrendPriceLineRef],
+      [vwapSeriesRef, vwapPriceLineRef],
+    ] as const
+
+    for (const [seriesRef, lineRef] of refs) {
+      const series = seriesRef.current
+      if (series && lineRef.current) {
+        try {
+          series.removePriceLine(lineRef.current)
+        } catch {
+          // no-op
+        }
+      }
+      lineRef.current = null
+    }
+  }, [])
+
+  const isPrimary = prominence === 'primary'
   const isActive = activeSide === side
+  const orderFlowEnabled = showOrderFlow || (showFootprints && isPrimary)
   const orderFlowSymbols = useMemo(
-    () => (showOrderFlow && symbol ? [{ symbol, exchange: optionExchange }] : []),
-    [showOrderFlow, symbol, optionExchange]
+    () => (orderFlowEnabled && symbol ? [{ symbol, exchange: optionExchange }] : []),
+    [orderFlowEnabled, symbol, optionExchange]
   )
   const { data: orderFlowQuoteData, isFallbackMode: isQuoteFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'Quote',
-    enabled: showOrderFlow && !!symbol,
+    enabled: orderFlowEnabled && !!symbol,
   })
   const { data: orderFlowLtpData, isFallbackMode: isLtpFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'LTP',
-    enabled: showOrderFlow && !!symbol,
+    enabled: orderFlowEnabled && !!symbol,
   })
   const { data: orderFlowDepthData, isFallbackMode: isDepthFallbackMode } = useMarketData({
     symbols: orderFlowSymbols,
     mode: 'Depth',
-    enabled: showOrderFlow && !!symbol,
+    enabled: orderFlowEnabled && !!symbol,
   })
   const flowDataKey = useMemo(
     () =>
-      showOrderFlow && symbol
+      orderFlowEnabled && symbol
         ? `${optionExchange.toUpperCase()}:${symbol.toUpperCase()}`
         : null,
-    [optionExchange, showOrderFlow, symbol]
+    [optionExchange, orderFlowEnabled, symbol]
   )
   const isOrderFlowFallbackMode =
     isQuoteFallbackMode || isLtpFallbackMode || isDepthFallbackMode
@@ -512,20 +722,218 @@ export function OptionChartView({
     const depthTs = orderFlowDepthData.get(flowDataKey)?.lastUpdate ?? 0
     return Math.max(0, quoteTs, ltpTs, depthTs)
   }, [flowDataKey, orderFlowDepthData, orderFlowLtpData, orderFlowQuoteData])
-  const flowBias = useMemo(() => deriveFlowBias(side, orderFlow), [side, orderFlow])
+  const footprintConfig = FOOTPRINT_DENSITY_CONFIG[footprintDensity]
   const isFlowStale = useMemo(() => {
-    if (!showOrderFlow || !symbol || lastFlowTickAt <= 0) return false
+    if (!orderFlowEnabled || !symbol || lastFlowTickAt <= 0) return false
     const staleThreshold = isOrderFlowFallbackMode
       ? ORDER_FLOW_FALLBACK_STALE_MS
       : ORDER_FLOW_STALE_MS
     return flowClock - lastFlowTickAt > staleThreshold
-  }, [flowClock, isOrderFlowFallbackMode, lastFlowTickAt, showOrderFlow, symbol])
+  }, [flowClock, isOrderFlowFallbackMode, lastFlowTickAt, orderFlowEnabled, symbol])
+
+  const refreshFootprints = useCallback(() => {
+    if (!showFootprints || !symbol || !isPrimary) {
+      setFootprints((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+
+    const allCandles = candlesRef.current
+    if (!allCandles.length) {
+      setFootprints((prev) => (prev.length === 0 ? prev : []))
+      return
+    }
+
+    let sourceCandles = allCandles
+    const chart = chartRef.current
+    const visibleRange = chart?.timeScale().getVisibleRange()
+    const visibleFrom = parseVisibleRangeTime(visibleRange?.from)
+    const visibleTo = parseVisibleRangeTime(visibleRange?.to)
+
+    if (visibleFrom != null && visibleTo != null && visibleTo >= visibleFrom) {
+      const visibleCandles = allCandles.filter((c) => {
+        const t = Number(c.time)
+        return t >= visibleFrom && t <= visibleTo
+      })
+      if (visibleCandles.length > 0) sourceCandles = visibleCandles
+    }
+
+    const maxBars = Math.max(0, footprintConfig.maxVisibleBars)
+    if (maxBars > 0 && sourceCandles.length > maxBars) {
+      sourceCandles = sourceCandles.slice(-maxBars)
+    }
+
+    if (sourceCandles.length === 0) {
+      sourceCandles = allCandles.slice(-FOOTPRINT_DEFAULT_LOOKBACK_BARS)
+    }
+
+    const rows: CandleFootprint[] = []
+    const candleFlow = flowStateRef.current.candleFlow
+
+    for (const candle of sourceCandles) {
+      const time = Number(candle.time)
+      const flow = candleFlow.get(time)
+      let buy = flow?.buy ?? 0
+      let sell = flow?.sell ?? 0
+      let source: 'FLOW' | 'EST' = flow ? 'FLOW' : 'EST'
+
+      if ((buy + sell <= 0) && candle.volume > 0) {
+        const range = Math.max(0.0001, candle.high - candle.low)
+        const body = candle.close - candle.open
+        const bodyRatio = Math.min(1, Math.abs(body) / range)
+        const directionalBias = 0.5 + Math.sign(body) * (0.1 + bodyRatio * 0.2)
+        const buyShare = Math.max(0.2, Math.min(0.8, directionalBias))
+        buy = candle.volume * buyShare
+        sell = Math.max(0, candle.volume - buy)
+        source = 'EST'
+      }
+
+      const total = buy + sell
+      if (!Number.isFinite(total) || total <= 0) continue
+
+      rows.push({
+        time: candle.time as UTCTimestamp,
+        buy,
+        sell,
+        delta: buy - sell,
+        total,
+        high: candle.high,
+        low: candle.low,
+        source,
+      })
+    }
+
+    setFootprints(rows)
+  }, [footprintConfig.maxVisibleBars, isPrimary, showFootprints, symbol])
+
+  const renderableFootprints = useMemo(() => {
+    if (!showFootprints || !symbol || footprints.length === 0) return []
+    const chart = chartRef.current
+    const series = candleSeriesRef.current
+    if (!chart || !series) return []
+
+    const positioned: RenderableFootprint[] = []
+    for (const row of footprints) {
+      const x = chart.timeScale().timeToCoordinate(row.time)
+      const yHigh = series.priceToCoordinate(row.high)
+      const yLow = series.priceToCoordinate(row.low)
+      if (x == null || yHigh == null || yLow == null) continue
+
+      const candleHeight = Math.max(12, yLow - yHigh)
+      const y = yHigh + Math.min(22, Math.max(6, candleHeight * 0.08))
+      const intensity = Math.min(1, Math.abs(row.delta) / Math.max(1, row.total))
+      const alpha = 0.14 + intensity * 0.24
+      positioned.push({ ...row, x, y, yTop: yHigh, height: candleHeight, alpha })
+    }
+
+    positioned.sort((a, b) => Number(a.time) - Number(b.time))
+    if (footprintConfig.minSpacingPx <= 0) return positioned
+
+    const filtered: RenderableFootprint[] = []
+    let lastX = -Infinity
+    for (const row of positioned) {
+      if (row.x - lastX < footprintConfig.minSpacingPx) continue
+      filtered.push(row)
+      lastX = row.x
+    }
+
+    return filtered
+  }, [
+    footprintConfig.minSpacingPx,
+    showFootprints,
+    symbol,
+    footprints,
+    footprintViewportTick,
+  ])
+
+  const unifiedFlowSignal = useMemo(
+    () => deriveUnifiedFlowSignal(side, orderFlow, footprints, optionsContext),
+    [side, orderFlow, footprints, optionsContext]
+  )
+  const footprintDisplayMode = useMemo(() => {
+    if (!showFootprints || !symbol || !isPrimary || footprints.length === 0) return 'off'
+    const chartWidth = containerRef.current?.clientWidth ?? 0
+    if (chartWidth <= 0) return 'off'
+    const visibleBars = Math.max(1, footprints.length)
+    const avgSpacing = chartWidth / visibleBars
+    return avgSpacing >= 24 ? 'detail' : 'heat'
+  }, [footprintViewportTick, footprints.length, isPrimary, showFootprints, symbol])
+  const showDetailedFootprints = footprintDisplayMode === 'detail'
+  const showFootprintHeat = footprintDisplayMode === 'heat'
+  const statsItems = useMemo<FlowStatItem[]>(() => {
+    if (!showOrderFlow || !symbol) return []
+
+    const depthValue =
+      orderFlow.depthImbalancePct == null
+        ? isFlowStale
+          ? 'STALE'
+          : 'NA'
+        : `${orderFlow.depthImbalancePct >= 0 ? '+' : ''}${orderFlow.depthImbalancePct.toFixed(0)}%`
+
+    return [
+      {
+        label: 'FLOW',
+        value: `${orderFlow.flowSource} ${formatSignedFlowNumber(orderFlow.delta)}`,
+        tone: orderFlow.delta > 0 ? 'positive' : orderFlow.delta < 0 ? 'negative' : 'neutral',
+      },
+      {
+        label: 'OI',
+        value: `${unifiedFlowSignal.components.context >= 0 ? '+' : ''}${unifiedFlowSignal.components.context.toFixed(2)}`,
+        tone:
+          unifiedFlowSignal.components.context > 0
+            ? 'positive'
+            : unifiedFlowSignal.components.context < 0
+              ? 'negative'
+              : 'neutral',
+      },
+      {
+        label: 'UNI',
+        value: unifiedFlowSignal.label,
+        tone:
+          unifiedFlowSignal.action === 'BUY_CE'
+            ? 'positive'
+            : unifiedFlowSignal.action === 'BUY_PE'
+              ? 'negative'
+              : 'accent',
+      },
+      {
+        label: 'DOM',
+        value: orderFlow.dominance,
+        tone:
+          orderFlow.dominance === 'BUY'
+            ? 'positive'
+            : orderFlow.dominance === 'SELL'
+              ? 'negative'
+              : 'neutral',
+      },
+      {
+        label: 'DEP',
+        value: depthValue,
+        tone:
+          orderFlow.depthImbalancePct == null
+            ? isFlowStale
+              ? 'accent'
+              : 'neutral'
+            : orderFlow.depthImbalancePct >= 0
+              ? 'positive'
+              : 'negative',
+      },
+      {
+        label: 'SPR',
+        value: orderFlow.spread == null ? 'NA' : orderFlow.spread.toFixed(2),
+        tone: 'neutral',
+      },
+    ]
+  }, [isFlowStale, orderFlow, showOrderFlow, symbol, unifiedFlowSignal])
 
   useEffect(() => {
-    if (!showOrderFlow || !symbol) return
+    refreshFootprints()
+  }, [refreshFootprints])
+
+  useEffect(() => {
+    if (!orderFlowEnabled || !symbol) return
     const timer = setInterval(() => setFlowClock(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [showOrderFlow, symbol])
+  }, [orderFlowEnabled, symbol])
 
   useEffect(() => {
     flowStateRef.current = {
@@ -536,13 +944,15 @@ export function OptionChartView({
       lastTickAt: 0,
       cumulativeDelta: 0,
       buckets: [],
+      candleFlow: new Map<number, CandleFootprintAccumulator>(),
       lastEmitAt: 0,
     }
     setOrderFlow(EMPTY_ORDER_FLOW)
-  }, [showOrderFlow, symbol, optionExchange])
+    setFootprints([])
+  }, [orderFlowEnabled, symbol, optionExchange, chartInterval])
 
   useEffect(() => {
-    if (!showOrderFlow || !symbol || !flowDataKey) return
+    if (!orderFlowEnabled || !symbol || !flowDataKey) return
     const quoteTick = orderFlowQuoteData.get(flowDataKey)
     const ltpTick = orderFlowLtpData.get(flowDataKey)
     const depthTick = orderFlowDepthData.get(flowDataKey)
@@ -706,10 +1116,20 @@ export function OptionChartView({
     if (buyAdd > 0 || sellAdd > 0) {
       flowState.buckets.push({ ts: now, buy: buyAdd, sell: sellAdd })
       flowState.cumulativeDelta += buyAdd - sellAdd
+
+      const candleTime = Math.floor(now / 1000 / chartInterval) * chartInterval
+      const current = flowState.candleFlow.get(candleTime) ?? { buy: 0, sell: 0 }
+      current.buy += buyAdd
+      current.sell += sellAdd
+      flowState.candleFlow.set(candleTime, current)
     }
 
     const minTs = now - ORDER_FLOW_WINDOW_MS
     flowState.buckets = flowState.buckets.filter((bucket) => bucket.ts >= minTs)
+    const minCandleTime = Math.floor(now / 1000) - chartInterval * (MAX_CANDLE_CACHE + 2)
+    for (const candleTime of flowState.candleFlow.keys()) {
+      if (candleTime < minCandleTime) flowState.candleFlow.delete(candleTime)
+    }
     const buyFlow = flowState.buckets.reduce((sum, bucket) => sum + bucket.buy, 0)
     const sellFlow = flowState.buckets.reduce((sum, bucket) => sum + bucket.sell, 0)
     const delta = buyFlow - sellFlow
@@ -746,32 +1166,76 @@ export function OptionChartView({
       flowSource: usedVolumeFlow && !usedEstimatedFlow ? 'VOL' : 'EST',
       lastUpdate: now,
     })
-  }, [flowDataKey, orderFlowDepthData, orderFlowLtpData, orderFlowQuoteData, showOrderFlow, symbol])
+
+    refreshFootprints()
+  }, [
+    chartInterval,
+    flowDataKey,
+    orderFlowDepthData,
+    orderFlowEnabled,
+    orderFlowLtpData,
+    orderFlowQuoteData,
+    refreshFootprints,
+    symbol,
+  ])
 
   const refreshIndicators = useCallback(() => {
     const candles = candlesRef.current
     const cfg = indicatorConfigRef.current
+    const colors = getChartColors(isDark)
 
     const closes: IndicatorPoint[] = candles.map((c) => ({
       time: c.time as number,
       value: c.close,
     }))
 
+    const ema9Data = cfg.showEma9 ? calculateEMA(closes, 9) : []
+    const ema21Data = cfg.showEma21 ? calculateEMA(closes, 21) : []
+    const supertrendData = cfg.showSupertrend ? calculateSupertrend(candles, 10, 3).trend : []
+    const vwapData = cfg.showVwap ? calculateVWAP(candles) : []
+
     if (ema9SeriesRef.current) {
-      ema9SeriesRef.current.setData(cfg.showEma9 ? toLineData(calculateEMA(closes, 9)) : [])
+      ema9SeriesRef.current.setData(toLineData(ema9Data))
     }
     if (ema21SeriesRef.current) {
-      ema21SeriesRef.current.setData(cfg.showEma21 ? toLineData(calculateEMA(closes, 21)) : [])
+      ema21SeriesRef.current.setData(toLineData(ema21Data))
     }
     if (supertrendSeriesRef.current) {
-      supertrendSeriesRef.current.setData(
-        cfg.showSupertrend ? toLineData(calculateSupertrend(candles, 10, 3).trend) : []
-      )
+      supertrendSeriesRef.current.setData(toLineData(supertrendData))
     }
     if (vwapSeriesRef.current) {
-      vwapSeriesRef.current.setData(cfg.showVwap ? toLineData(calculateVWAP(candles)) : [])
+      vwapSeriesRef.current.setData(toLineData(vwapData))
     }
-  }, [])
+
+    syncIndicatorPriceLine(
+      ema9SeriesRef,
+      ema9PriceLineRef,
+      cfg.showEma9,
+      getLastIndicatorValue(ema9Data),
+      colors.ema9
+    )
+    syncIndicatorPriceLine(
+      ema21SeriesRef,
+      ema21PriceLineRef,
+      cfg.showEma21,
+      getLastIndicatorValue(ema21Data),
+      colors.ema21
+    )
+    syncIndicatorPriceLine(
+      supertrendSeriesRef,
+      supertrendPriceLineRef,
+      cfg.showSupertrend,
+      getLastIndicatorValue(supertrendData),
+      colors.supertrend
+    )
+    syncIndicatorPriceLine(
+      vwapSeriesRef,
+      vwapPriceLineRef,
+      cfg.showVwap,
+      getLastIndicatorValue(vwapData),
+      colors.vwap
+    )
+  }, [isDark, syncIndicatorPriceLine])
 
   const scheduleIndicatorRefresh = useCallback(() => {
     if (indicatorTimerRef.current !== null) return
@@ -788,7 +1252,9 @@ export function OptionChartView({
     ema21SeriesRef.current?.setData([])
     supertrendSeriesRef.current?.setData([])
     vwapSeriesRef.current?.setData([])
-  }, [])
+    clearIndicatorPriceLines()
+    setFootprints([])
+  }, [clearIndicatorPriceLines])
 
   const applyChartMarkers = useCallback(() => {
     try {
@@ -857,8 +1323,9 @@ export function OptionChartView({
       candlesRef.current = cloneCandles(next)
       candleSeriesRef.current?.setData(toChartCandles(next))
       scheduleIndicatorRefresh()
+      refreshFootprints()
     },
-    [scheduleIndicatorRefresh]
+    [refreshFootprints, scheduleIndicatorRefresh]
   )
 
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
@@ -955,8 +1422,9 @@ export function OptionChartView({
       }
 
       scheduleIndicatorRefresh()
+      refreshFootprints()
     },
-    [scheduleIndicatorRefresh]
+    [refreshFootprints, scheduleIndicatorRefresh]
   )
 
   const { isConnected, isFallbackMode, reset: resetCandles, seed: seedCandles } = useCandleBuilder({
@@ -1210,10 +1678,14 @@ export function OptionChartView({
     ema21SeriesRef.current = ema21
     supertrendSeriesRef.current = supertrend
     vwapSeriesRef.current = vwap
+    const requestFootprintRepaint = () => {
+      setFootprintViewportTick((tick) => tick + 1)
+    }
 
     if (candlesRef.current.length > 0) {
       candleSeries.setData(toChartCandles(candlesRef.current))
       scheduleIndicatorRefresh()
+      requestFootprintRepaint()
     }
 
     // Create the v5 markers plugin and restore any accumulated markers
@@ -1223,6 +1695,9 @@ export function OptionChartView({
       try { markersPlugin.setMarkers(chartMarkersRef.current) } catch { /* no-op */ }
     }
 
+    chart.timeScale().subscribeVisibleTimeRangeChange(requestFootprintRepaint)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(requestFootprintRepaint)
+
     // Resize observer
     const ro = new ResizeObserver(() => {
       if (chartRef.current && container) {
@@ -1230,6 +1705,7 @@ export function OptionChartView({
         const h = container.offsetHeight
         if (w > 0 && h > 0) {
           chartRef.current.applyOptions({ width: w, height: h })
+          requestFootprintRepaint()
         }
       }
     })
@@ -1240,7 +1716,10 @@ export function OptionChartView({
         clearTimeout(indicatorTimerRef.current)
         indicatorTimerRef.current = null
       }
+      clearIndicatorPriceLines()
       ro.disconnect()
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(requestFootprintRepaint)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(requestFootprintRepaint)
       try { markersPluginRef.current?.detach() } catch { /* no-op */ }
       markersPluginRef.current = null
       chart.remove()
@@ -1251,155 +1730,180 @@ export function OptionChartView({
       supertrendSeriesRef.current = null
       vwapSeriesRef.current = null
     }
-  }, [isDark, scheduleIndicatorRefresh])
+  }, [clearIndicatorPriceLines, isDark, scheduleIndicatorRefresh])
 
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: chart click for active side
     <div
       className={cn(
-        'relative h-full w-full min-w-0 min-h-0 overflow-hidden cursor-pointer',
-        isActive && 'ring-1 ring-primary/40'
+        'flex h-full w-full min-w-0 min-h-0 flex-col overflow-hidden bg-background/30',
+        prominence === 'secondary' && 'bg-background/10'
       )}
-      onClick={handleClick}
     >
-      <div ref={containerRef} className="h-full w-full" />
-
-      {/* Order overlay: tracking line, entry/TP/SL lines, draggable overlays */}
-      <ChartOrderOverlay
-        chartRef={chartRef}
-        seriesRef={candleSeriesRef}
-        side={side}
-        containerRef={containerRef}
-      />
-
-      {/* Side label */}
-      <div className="absolute top-1 left-2 flex items-center gap-1.5 pointer-events-none">
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              'text-xs font-bold uppercase tracking-[0.16em]',
+              side === 'CE' ? 'text-emerald-400' : 'text-rose-400'
+            )}
+          >
+            {side}
+          </span>
+          <span className="truncate text-[10px] font-mono text-foreground/90">
+            {symbol ?? 'Select a strike'}
+          </span>
+        </div>
         <span
           className={cn(
-            'text-xs font-bold',
-            side === 'CE' ? 'text-green-500' : 'text-red-500'
+            'shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em]',
+            isActive
+              ? 'border-primary/40 bg-primary/10 text-primary'
+              : 'border-border/60 bg-background/60 text-muted-foreground'
           )}
         >
-          {side}
+          {isActive ? 'Active' : 'Click to focus'}
         </span>
-        {symbol && (
-          <span className="text-[10px] text-muted-foreground font-mono">
-            {symbol}
-          </span>
-        )}
-        {!symbol && (
-          <span className="text-[10px] text-muted-foreground/50">
-            Select a strike
-          </span>
-        )}
       </div>
 
-      {/* Indicator legend */}
-      <div className="absolute top-5 right-2 flex items-center gap-1 pointer-events-none">
-        {showEma9 && <span className="text-[9px] text-amber-500 font-mono">E9</span>}
-        {showEma21 && <span className="text-[9px] text-violet-500 font-mono">E21</span>}
-        {showSupertrend && <span className="text-[9px] text-cyan-500 font-mono">ST</span>}
-        {showVwap && <span className="text-[9px] text-pink-500 font-mono">VW</span>}
-      </div>
-
-      {/* Order-flow overlay */}
-      {showOrderFlow && symbol && (
-        <div className="absolute top-7 left-2 pointer-events-none rounded border border-border/70 bg-background/85 backdrop-blur-[1px] px-2 py-1.5 text-[10px] font-mono leading-tight">
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <span className="text-muted-foreground">FLOW 30s</span>
-            <span className={cn(
-              orderFlow.flowSource === 'VOL' ? 'text-emerald-500' : 'text-amber-500'
-            )}>
-              {orderFlow.flowSource}
+      {statsItems.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-border/50 px-2 py-1">
+          {statsItems.map((item) => (
+            <span
+              key={`${item.label}-${item.value}`}
+              className={cn(
+                'rounded-md border px-1.5 py-0.5 text-[9px] font-mono leading-none',
+                item.tone === 'positive' && 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+                item.tone === 'negative' && 'border-rose-500/25 bg-rose-500/10 text-rose-300',
+                item.tone === 'accent' && 'border-sky-500/25 bg-sky-500/10 text-sky-300',
+                (!item.tone || item.tone === 'neutral') && 'border-border/60 bg-background/60 text-muted-foreground'
+              )}
+            >
+              <span className="text-[8px] uppercase tracking-[0.12em] text-muted-foreground/80">
+                {item.label}
+              </span>{' '}
+              {item.value}
             </span>
+          ))}
+        </div>
+      )}
+
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: chart click for active side */}
+      <div
+        className={cn(
+          'relative min-h-0 flex-1 overflow-hidden cursor-pointer',
+          isActive && 'ring-1 ring-primary/20'
+        )}
+        onClick={handleClick}
+      >
+        <div ref={containerRef} className="h-full w-full" />
+
+        <ChartOrderOverlay
+          chartRef={chartRef}
+          seriesRef={candleSeriesRef}
+          side={side}
+          containerRef={containerRef}
+        />
+
+        {showDetailedFootprints && symbol && renderableFootprints.length > 0 && (
+          <div className="absolute inset-0 pointer-events-none">
+            {renderableFootprints.map((row) => (
+              <div
+                key={`fp-detail-${Number(row.time)}`}
+                className={cn(
+                  'absolute min-w-[52px] rounded border px-1 py-0.5 text-[8px] font-mono leading-tight shadow-sm',
+                  row.delta >= 0 ? 'border-emerald-400/60' : 'border-rose-400/60'
+                )}
+                style={{
+                  left: `${row.x}px`,
+                  top: `${row.y}px`,
+                  transform: 'translate(-50%, 0)',
+                  backgroundColor:
+                    row.delta >= 0
+                      ? `rgba(16, 185, 129, ${row.alpha.toFixed(3)})`
+                      : `rgba(244, 63, 94, ${row.alpha.toFixed(3)})`,
+                }}
+              >
+                <div className="text-white/90">B {formatFlowNumber(row.buy)}</div>
+                <div className="text-white/90">S {formatFlowNumber(row.sell)}</div>
+                <div className={cn(row.delta >= 0 ? 'text-emerald-100' : 'text-rose-100')}>
+                  Δ {formatSignedFlowNumber(row.delta)}
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-            <span className="text-green-500">B {formatFlowNumber(orderFlow.buyFlow)}</span>
-            <span className="text-red-500 text-right">S {formatFlowNumber(orderFlow.sellFlow)}</span>
-            <span className={cn(
-              orderFlow.delta > 0 ? 'text-green-500' : orderFlow.delta < 0 ? 'text-red-500' : 'text-muted-foreground'
-            )}>
-              D {orderFlow.delta >= 0 ? '+' : ''}{formatFlowNumber(orderFlow.delta)}
-            </span>
-            <span className={cn(
-              orderFlow.cumulativeDelta > 0 ? 'text-green-500' : orderFlow.cumulativeDelta < 0 ? 'text-red-500' : 'text-muted-foreground',
-              'text-right'
-            )}>
-              CD {orderFlow.cumulativeDelta >= 0 ? '+' : ''}{formatFlowNumber(orderFlow.cumulativeDelta)}
-            </span>
-            <span className={cn(
-              orderFlow.dominance === 'BUY' ? 'text-green-500' : orderFlow.dominance === 'SELL' ? 'text-red-500' : 'text-muted-foreground'
-            )}>
-              {orderFlow.dominance}
-            </span>
-            <span className={cn(
-              flowBias.action === 'BUY_CE'
-                ? 'text-green-500'
-                : flowBias.action === 'BUY_PE'
-                  ? 'text-red-500'
-                  : 'text-amber-400',
-              'text-right'
-            )}>
-              {flowBias.label}
-            </span>
-            {(orderFlow.depthImbalancePct != null || orderFlow.spread != null) && (
-              <span className={cn(
-                orderFlow.depthImbalancePct == null
-                  ? 'text-muted-foreground'
-                  : orderFlow.depthImbalancePct >= 0
-                    ? 'text-green-500'
-                    : 'text-red-500',
-                'text-right'
-              )}>
-                DEPTH {orderFlow.depthImbalancePct == null ? 'NA' : `${orderFlow.depthImbalancePct >= 0 ? '+' : ''}${orderFlow.depthImbalancePct.toFixed(0)}%`}
-              </span>
-            )}
-            {(orderFlow.depthImbalancePct != null || orderFlow.spread != null) && (
-              <span className="text-muted-foreground col-span-2">
-                SPR {orderFlow.spread == null ? 'NA' : orderFlow.spread.toFixed(2)}
-              </span>
-            )}
-            {orderFlow.depthImbalancePct == null && orderFlow.spread == null && (
+        )}
+
+        {showFootprintHeat && symbol && renderableFootprints.length > 0 && (
+          <div className="absolute inset-0 pointer-events-none">
+            {renderableFootprints.map((row) => (
+              <div
+                key={`fp-heat-${Number(row.time)}`}
+                className="absolute rounded-sm"
+                style={{
+                  left: `${row.x}px`,
+                  top: `${row.yTop}px`,
+                  width: '10px',
+                  height: `${row.height}px`,
+                  transform: 'translateX(-50%)',
+                  backgroundColor:
+                    row.delta >= 0
+                      ? `rgba(16, 185, 129, ${(row.alpha * 0.55).toFixed(3)})`
+                      : `rgba(244, 63, 94, ${(row.alpha * 0.55).toFixed(3)})`,
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {showOrderFlow && symbol && (
+          <div className="absolute left-2 top-2 pointer-events-none">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/82 px-2.5 py-1 text-[10px] font-mono shadow-sm backdrop-blur-[1px]">
               <span
                 className={cn(
-                  'col-span-2 text-right',
-                  isFlowStale ? 'text-amber-500' : 'text-muted-foreground'
+                  unifiedFlowSignal.action === 'BUY_CE'
+                    ? 'text-emerald-400'
+                    : unifiedFlowSignal.action === 'BUY_PE'
+                      ? 'text-rose-400'
+                      : 'text-amber-300'
                 )}
               >
-                {isFlowStale ? 'WS stale / no recent ticks' : 'No L2 quote'}
+                {unifiedFlowSignal.label}
               </span>
-            )}
+              <span className="text-muted-foreground/70">|</span>
+              <span
+                className={cn(
+                  orderFlow.delta > 0
+                    ? 'text-emerald-400'
+                    : orderFlow.delta < 0
+                      ? 'text-rose-400'
+                      : 'text-muted-foreground'
+                )}
+              >
+                Δ {formatSignedFlowNumber(orderFlow.delta)}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Active indicator */}
-      {isActive && (
-        <div className="absolute top-1 right-2 pointer-events-none">
-          <span className="text-[10px] font-medium text-primary">ACTIVE</span>
-        </div>
-      )}
+        {symbol && !isConnected && !isFallbackMode && (
+          <div className="absolute bottom-1 right-2 pointer-events-none">
+            <span className="text-[10px] text-yellow-500">Connecting...</span>
+          </div>
+        )}
+        {symbol && !isConnected && isFallbackMode && (
+          <div className="absolute bottom-1 right-2 pointer-events-none">
+            <span className="text-[10px] text-blue-500">REST fallback</span>
+          </div>
+        )}
 
-      {/* Connection status */}
-      {symbol && !isConnected && !isFallbackMode && (
-        <div className="absolute bottom-1 right-2 pointer-events-none">
-          <span className="text-[10px] text-yellow-500">Connecting...</span>
-        </div>
-      )}
-      {symbol && !isConnected && isFallbackMode && (
-        <div className="absolute bottom-1 right-2 pointer-events-none">
-          <span className="text-[10px] text-blue-500">REST fallback</span>
-        </div>
-      )}
-
-      {/* Placeholder when no symbol selected */}
-      {!symbol && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-xs text-muted-foreground/40">
-            Click a strike in the chain
-          </span>
-        </div>
-      )}
+        {!symbol && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-xs text-muted-foreground/40">
+              Click a strike in the chain
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

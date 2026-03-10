@@ -26,6 +26,7 @@ export function OptionChainPanel() {
   const setActiveSide = useScalpingStore((s) => s.setActiveSide)
   const setLotSize = useScalpingStore((s) => s.setLotSize)
   const setOptionChainSnapshot = useScalpingStore((s) => s.setOptionChainSnapshot)
+  const setChainCollapsed = useScalpingStore((s) => s.setChainCollapsed)
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const atmRowRef = useRef<HTMLDivElement>(null)
@@ -177,6 +178,14 @@ export function OptionChainPanel() {
               Loading...
             </Badge>
           )}
+          <button
+            type="button"
+            onClick={() => setChainCollapsed(true)}
+            className="ml-1 h-6 w-6 rounded-md border border-border/60 bg-background/70 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            title="Collapse option chain"
+          >
+            {'<'}
+          </button>
         </div>
       </div>
 

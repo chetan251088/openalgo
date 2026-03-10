@@ -43,6 +43,10 @@ interface TopBarProps {
   isLivePnl?: boolean
   chartFocusMode?: boolean
   onToggleChartFocusMode?: () => void
+  /** True when the WebSocket feed has failed and the system fell back to
+   *  slow REST polling (~5 s cadence). Live scalping is not reliable in this
+   *  state — display a prominent warning to the user. */
+  isFallbackMode?: boolean
 }
 
 export function TopBar({
@@ -50,6 +54,7 @@ export function TopBar({
   isLivePnl = false,
   chartFocusMode = false,
   onToggleChartFocusMode,
+  isFallbackMode = false,
 }: TopBarProps) {
   const apiKey = useAuthStore((s) => s.apiKey)
   const broker = useAuthStore((s) => s.user?.broker)
@@ -285,6 +290,16 @@ export function TopBar({
             {broker}
           </Badge>
         )
+      )}
+
+      {isFallbackMode && (
+        <Badge
+          variant="outline"
+          className="text-xs h-6 shrink-0 whitespace-nowrap bg-amber-500/20 text-amber-400 border-amber-500/50 animate-pulse"
+          title="WebSocket disconnected — data is updating via slow REST polling. Scalping performance is degraded."
+        >
+          ⚠️ REST FALLBACK
+        </Badge>
       )}
 
       {!paperMode && lastOrderAck && (

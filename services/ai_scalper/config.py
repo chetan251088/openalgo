@@ -133,6 +133,9 @@ class AgentConfig:
     auto_roll_nifty: float = 50.0
     auto_roll_sensex: float = 100.0
     depth_level: int = 5
+    # Minimum price move (points) to count a tick as directional for momentum.
+    # Filters out sub-tick noise that would otherwise inflate momentum counts.
+    min_momentum_tick: float = 0.25
 
 
 def load_execution_config() -> ExecutionConfig:
@@ -198,6 +201,7 @@ def build_agent_config(payload: Dict[str, Any]) -> AgentConfig:
         enable_depth=bool(payload.get("enable_depth", True)),
         enable_spread_filter=bool(payload.get("enable_spread_filter", True)),
         tick_size=float(payload.get("tick_size", 0.05)),
+        min_momentum_tick=float(payload.get("min_momentum_tick", 0.25)),
         trade_mode=str(payload.get("trade_mode", "AUTO")).upper(),
         reverse_trades=bool(payload.get("reverse_trades", False)),
         rr_guard_enabled=bool(payload.get("rr_guard_enabled", True)),

@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-02-24
+Last updated: 2026-03-06
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -218,6 +218,20 @@ Major implemented behavior (high level):
    - `/api/multibroker/ws-config` now returns per-target WS `api_key` for feed failover targets
    - requirement: user must be logged in on each target broker instance once and API key must exist on that instance (`/apikey`)
 35. Re-entry toggle/state hardening:
+36. Chart readability/layout cleanup for scalping dashboard:
+   - left option-chain panel is now collapsible from the chain header and re-openable from a slim rail
+   - main shell now biases more width to charts and trims default right-panel share
+   - CE/PE option area now renders as:
+     - one large primary chart for the active side
+     - one smaller opposite-side preview chart
+   - clicking the smaller preview promotes that side to the primary chart through the existing `activeSide` flow
+   - heavy in-chart diagnostics were removed:
+     - `FLOW + OI`, `UNI`, spread, depth, and dominance now live in a thin strip above each option chart when FLOW is enabled
+     - in-chart text is reduced to a compact signal ribbon (`signal | delta`)
+     - floating indicator badges were removed from inside the plot area
+   - footprint rendering is now limited to the primary chart:
+     - detailed footprint boxes only appear when zoomed in enough
+     - otherwise the chart falls back to a lighter heat-style delta overlay
    - auto-trade config persistence now sanitizes config types against defaults (boolean and number coercion)
    - fixes stale persisted boolean-like strings making toggles appear stuck (including Re-Entry)
    - Re-entry gate now reports explicit `ON/OFF` decision check and enforces `OFF => first entry only` deterministically
@@ -592,3 +606,49 @@ Notes:
 5. Dhan unified execution polling throttle:
    - `useScalpingPositions` now uses broker-aware polling cadence in unified mode.
    - Poll interval is slowed for Dhan execution broker (3s) to reduce Dhan multiquotes `805` rate-limit retries triggered by Dhan positionbook LTP enrichment.
+
+## 16) Footprint Overlay Toggle (2026-03-06)
+
+1. Unified/shared chart toolbar now has `FP` toggle:
+   - file: `frontend/src/components/scalping/ChartToolbar.tsx`
+2. Chart panel now tracks footprint visibility state and passes it to both CE/PE chart views:
+   - file: `frontend/src/components/scalping/ChartPanel.tsx`
+3. Option charts now support a footprint overlay for recent bars (buy/sell/delta blocks):
+   - file: `frontend/src/components/scalping/OptionChartView.tsx`
+4. Data behavior:
+   - Uses live WS flow buckets when available.
+   - Falls back to volume/body-based estimate when direct flow split is unavailable.
+5. Overlay behavior:
+   - Footprints are optional and can be enabled/disabled without page reload.
+   - Spacing filter is applied to avoid unreadable overlap on dense zoom levels.
+6. Footprint density modes:
+   - `FP:LOW` (sparse), `FP:MID` (balanced), `FP:ALL` (near all visible bars).
+   - Modes are toggled from chart toolbar when footprint overlay is enabled.
+7. Unified directional signal in chart overlay:
+   - `FLOW + OI` card now merges:
+     - live order-flow delta,
+     - footprint bias,
+     - options-context bias (PCR, CE/PE OI change, max-pain distance, GEX damping)
+   - Output is shown as `BUY CE`, `BUY PE`, or `HOLD` with confidence.
+
+## 17) Collapsible Control Panel (2026-03-09)
+
+1. Unified scalping dashboard right-side control panel now supports collapse/expand like the option chain:
+   - file: `frontend/src/pages/scalping/ScalpingDashboard.tsx`
+   - file: `frontend/src/components/scalping/ControlPanel.tsx`
+2. Behavior:
+   - collapse button added to the control-panel tab bar
+   - collapsed state uses existing `controlCollapsed` store flag
+   - collapsed panel renders a slim vertical reopen rail on the right edge
+
+## 18) Unified Dashboard Blank-Screen Hardening (2026-03-10)
+
+1. Hardened unified/shared scalping mount flow against route-wide blank screens:
+   - file: `frontend/src/pages/scalping-unified/ScalpingUnifiedDashboard.tsx`
+   - file: `frontend/src/pages/scalping/ScalpingDashboard.tsx`
+   - file: `frontend/src/components/scalping/ChartPanel.tsx`
+2. Changes:
+   - unified wrapper now shows `PageLoader` instead of returning `null` while initializing
+   - removed unnecessary `setReady(false)` cleanup in unified wrapper
+   - panel collapse/expand sync now skips initial mount and runs inside `requestAnimationFrame`
+   - CE/PE layout sync now skips initial mount and is wrapped defensively to avoid route-crashing panel API timing issues

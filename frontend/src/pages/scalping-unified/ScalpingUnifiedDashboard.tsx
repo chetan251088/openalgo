@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import ScalpingDashboard from '@/pages/scalping/ScalpingDashboard'
 import { MarketDataManager } from '@/lib/MarketDataManager'
 import { useMultiBrokerStore, type DataFeedMode } from '@/stores/multiBrokerStore'
+import { PageLoader } from '@/components/ui/page-loader'
 
 export default function ScalpingUnifiedDashboard() {
   const setUnifiedMode = useMultiBrokerStore((s) => s.setUnifiedMode)
@@ -15,7 +16,6 @@ export default function ScalpingUnifiedDashboard() {
     setReady(true)
 
     return () => {
-      setReady(false)
       setUnifiedMode(false)
       manager.disconnect()
     }
@@ -35,6 +35,6 @@ export default function ScalpingUnifiedDashboard() {
     lastFeedRef.current = dataFeed
   }, [dataFeed, ready])
 
-  if (!ready) return null
+  if (!ready) return <PageLoader />
   return <ScalpingDashboard />
 }

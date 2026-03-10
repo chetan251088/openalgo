@@ -7,6 +7,7 @@ import { tradingApi } from '@/api/trading'
 import { telegramApi } from '@/api/telegram'
 import { toast } from 'sonner'
 import {
+  calculateUnifiedFlowSignal,
   calculateMomentum,
   detectRegime,
   shouldEnterTrade,
@@ -37,6 +38,133 @@ interface VolumeSignalSnapshot {
   optionDeltaRatio: number | null
   oppositeDelta: number | null
   sideDominanceRatio: number | null
+}
+
+interface SideFlowBucket {
+  ts: number
+  buy: number
+  sell: number
+}
+
+interface SideCandleFlow {
+  buy: number
+  sell: number
+}
+
+interface SideFlowState {
+  lastLtp: number | null
+  lastVolume: number | null
+  cumulativeDelta: number
+  buckets: SideFlowBucket[]
+  candleFlow: Map<number, SideCandleFlow>
+}
+
+const FLOW_WINDOW_MS = 30_000
+const FLOW_MAX_CANDLES = 720
+const FLOW_FOOTPRINT_LOOKBACK = 48
+
+function createSideFlowState(): SideFlowState {
+  return {
+    lastLtp: null,
+    lastVolume: null,
+    cumulativeDelta: 0,
+    buckets: [],
+    candleFlow: new Map<number, SideCandleFlow>(),
+  }
+}
+
+function updateSideFlowState(
+  state: SideFlowState,
+  nowMs: number,
+  chartIntervalSec: number,
+  ltp: number,
+  cumulativeVolume: number | null
+): {
+  buyFlow: number
+  sellFlow: number
+  delta: number
+  cumulativeDelta: number
+  footprints: Array<{ buy: number; sell: number; delta: number; total: number }>
+} {
+  const prevLtp = state.lastLtp
+  const prevVol = state.lastVolume
+  let buyAdd = 0
+  let sellAdd = 0
+
+  if (prevLtp != null) {
+    if (
+      cumulativeVolume != null &&
+      prevVol != null &&
+      cumulativeVolume >= prevVol &&
+      Number.isFinite(cumulativeVolume)
+    ) {
+      const volumeDelta = Math.max(0, cumulativeVolume - prevVol)
+      if (volumeDelta > 0) {
+        if (ltp > prevLtp) buyAdd = volumeDelta
+        else if (ltp < prevLtp) sellAdd = volumeDelta
+        else {
+          buyAdd = volumeDelta * 0.5
+          sellAdd = volumeDelta * 0.5
+        }
+      }
+    }
+
+    if (buyAdd <= 0 && sellAdd <= 0) {
+      if (ltp > prevLtp) buyAdd = 1
+      else if (ltp < prevLtp) sellAdd = 1
+    }
+  }
+
+  state.lastLtp = ltp
+  if (cumulativeVolume != null && Number.isFinite(cumulativeVolume) && cumulativeVolume >= 0) {
+    state.lastVolume = cumulativeVolume
+  }
+
+  if (buyAdd > 0 || sellAdd > 0) {
+    state.buckets.push({ ts: nowMs, buy: buyAdd, sell: sellAdd })
+    state.cumulativeDelta += buyAdd - sellAdd
+
+    const candleTime = Math.floor(nowMs / 1000 / chartIntervalSec) * chartIntervalSec
+    const current = state.candleFlow.get(candleTime) ?? { buy: 0, sell: 0 }
+    current.buy += buyAdd
+    current.sell += sellAdd
+    state.candleFlow.set(candleTime, current)
+  }
+
+  const minBucketTs = nowMs - FLOW_WINDOW_MS
+  state.buckets = state.buckets.filter((bucket) => bucket.ts >= minBucketTs)
+
+  const minCandleTs = Math.floor(nowMs / 1000) - chartIntervalSec * (FLOW_MAX_CANDLES + 2)
+  for (const candleTs of state.candleFlow.keys()) {
+    if (candleTs < minCandleTs) state.candleFlow.delete(candleTs)
+  }
+
+  const buyFlow = state.buckets.reduce((sum, bucket) => sum + bucket.buy, 0)
+  const sellFlow = state.buckets.reduce((sum, bucket) => sum + bucket.sell, 0)
+  const delta = buyFlow - sellFlow
+
+  const footprints = Array.from(state.candleFlow.entries())
+    .sort((a, b) => a[0] - b[0])
+    .slice(-FLOW_FOOTPRINT_LOOKBACK)
+    .map(([, row]) => {
+      const total = row.buy + row.sell
+      const normalizedTotal = Math.max(0, total)
+      return {
+        buy: Math.max(0, row.buy),
+        sell: Math.max(0, row.sell),
+        delta: row.buy - row.sell,
+        total: normalizedTotal > 0 ? normalizedTotal : 0,
+      }
+    })
+    .filter((row) => row.total > 0)
+
+  return {
+    buyFlow,
+    sellFlow,
+    delta,
+    cumulativeDelta: state.cumulativeDelta,
+    footprints,
+  }
 }
 
 const ADAPTIVE_SCALPER_MAX_EXTRA_LOTS = 2
@@ -157,6 +285,7 @@ export function useAutoTradeEngine(
   const selectedCESymbol = useScalpingStore((s) => s.selectedCESymbol)
   const selectedPESymbol = useScalpingStore((s) => s.selectedPESymbol)
   const optionExchange = useScalpingStore((s) => s.optionExchange)
+  const chartInterval = useScalpingStore((s) => s.chartInterval)
   const quantity = useScalpingStore((s) => s.quantity)
   const lotSize = useScalpingStore((s) => s.lotSize)
   const product = useScalpingStore((s) => s.product)
@@ -209,6 +338,14 @@ export function useAutoTradeEngine(
     CE: { at: 0, sig: '' },
     PE: { at: 0, sig: '' },
   })
+  const sideFlowStateRef = useRef<Record<ActiveSide, SideFlowState>>({
+    CE: createSideFlowState(),
+    PE: createSideFlowState(),
+  })
+  const sideFlowKeyRef = useRef<Record<ActiveSide, string>>({
+    CE: '',
+    PE: '',
+  })
   const lastMissingApiKeyWarnAtRef = useRef(0)
 
   const ensureApiKey = useCallback(async (): Promise<string | null> => {
@@ -225,6 +362,15 @@ export function useAutoTradeEngine(
     }
     return null
   }, [apiKey, setApiKey])
+
+  useEffect(() => {
+    if (enabled) return
+    sideFlowStateRef.current = {
+      CE: createSideFlowState(),
+      PE: createSideFlowState(),
+    }
+    sideFlowKeyRef.current = { CE: '', PE: '' }
+  }, [enabled])
 
   // Process ticks - runs every ~100ms via effect dependencies
   useEffect(() => {
@@ -304,6 +450,32 @@ export function useAutoTradeEngine(
 
       if (!symbol || !ltp || ticks.length < 5) continue
 
+      const flowKey = `${optionExchange}:${symbol}:${chartInterval}`
+      if (sideFlowKeyRef.current[side] !== flowKey) {
+        sideFlowKeyRef.current[side] = flowKey
+        sideFlowStateRef.current[side] = createSideFlowState()
+      }
+      const sideFlowState = sideFlowStateRef.current[side]
+      const sideCumulativeVolume = side === 'CE' ? ceVolume : peVolume
+      const sideFlowSnapshot = updateSideFlowState(
+        sideFlowState,
+        now,
+        chartInterval,
+        ltp,
+        sideCumulativeVolume
+      )
+      const unifiedSignal = calculateUnifiedFlowSignal(
+        side,
+        {
+          buyFlow: sideFlowSnapshot.buyFlow,
+          sellFlow: sideFlowSnapshot.sellFlow,
+          delta: sideFlowSnapshot.delta,
+          cumulativeDelta: sideFlowSnapshot.cumulativeDelta,
+        },
+        sideFlowSnapshot.footprints,
+        effectiveOptionsContext
+      )
+
       let sideUnrealizedPnl = 0
       for (const order of sideOrders) {
         const orderKey = `${order.exchange}:${order.symbol}`
@@ -374,7 +546,15 @@ export function useAutoTradeEngine(
       }
       const decision = shouldEnterTrade(
         side, ltp, config, runtime, momentum, indicators,
-        indexBias, effectiveOptionsContext, sensitivity, spread, depthInfo, ticks, volumeFlow, regime
+        indexBias,
+        effectiveOptionsContext,
+        sensitivity,
+        spread,
+        depthInfo,
+        ticks,
+        volumeFlow,
+        regime,
+        unifiedSignal
       )
 
       // Persist trader-facing "why trade" diagnostics at low frequency.
@@ -631,7 +811,7 @@ export function useAutoTradeEngine(
     optionsContext, regime, consecutiveLosses, tradesCount, realizedPnl,
     lastTradeTime, tradesThisMinute, lastLossTime, lastTradePnl,
     sideEntryCount, sideLastExitAt, replayMode, killSwitch, lockProfitTriggered,
-    ensureApiKey, optionExchange, quantity, lotSize, product, tpPoints, slPoints, paperMode,
+    ensureApiKey, optionExchange, chartInterval, quantity, lotSize, product, tpPoints, slPoints, paperMode,
     selectedStrike, addGhostSignal, recordTrade, recordAutoEntry, pushDecision, pushExecutionSample, setRegime,
     virtualTPSL, setVirtualTPSL,
     underlying, indexExchange,

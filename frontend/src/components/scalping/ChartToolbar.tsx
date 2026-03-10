@@ -19,11 +19,15 @@ interface ChartToolbarProps {
   showSupertrend: boolean
   showVwap: boolean
   showOrderFlow: boolean
+  showFootprints: boolean
+  footprintDensity: 'sparse' | 'balanced' | 'all'
   onToggleEma9: () => void
   onToggleEma21: () => void
   onToggleSupertrend: () => void
   onToggleVwap: () => void
   onToggleOrderFlow: () => void
+  onToggleFootprints: () => void
+  onCycleFootprintDensity: () => void
 }
 
 export function ChartToolbar({
@@ -32,11 +36,15 @@ export function ChartToolbar({
   showSupertrend,
   showVwap,
   showOrderFlow,
+  showFootprints,
+  footprintDensity,
   onToggleEma9,
   onToggleEma21,
   onToggleSupertrend,
   onToggleVwap,
   onToggleOrderFlow,
+  onToggleFootprints,
+  onCycleFootprintDensity,
 }: ChartToolbarProps) {
   const chartInterval = useScalpingStore((s) => s.chartInterval)
   const setChartInterval = useScalpingStore((s) => s.setChartInterval)
@@ -71,6 +79,15 @@ export function ChartToolbar({
       <IndicatorToggle label="VWAP" active={showVwap} color="text-pink-500" onClick={onToggleVwap} />
       <div className="w-px h-3 bg-border/50 mx-0.5" />
       <IndicatorToggle label="FLOW" active={showOrderFlow} color="text-emerald-500" onClick={onToggleOrderFlow} />
+      <IndicatorToggle label="FP" active={showFootprints} color="text-sky-500" onClick={onToggleFootprints} />
+      {showFootprints && (
+        <IndicatorToggle
+          label={`FP:${footprintDensity === 'all' ? 'ALL' : footprintDensity === 'balanced' ? 'MID' : 'LOW'}`}
+          active
+          color="text-sky-400"
+          onClick={onCycleFootprintDensity}
+        />
+      )}
     </div>
   )
 }

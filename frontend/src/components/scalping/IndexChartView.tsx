@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import {
   CandlestickSeries,
   ColorType,
@@ -6,6 +6,7 @@ import {
   LineSeries,
   createChart,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
@@ -46,6 +47,12 @@ function toLineData(points: IndicatorPoint[]) {
     time: p.time as UTCTimestamp,
     value: p.value,
   }))
+}
+
+function getLastIndicatorValue(points: IndicatorPoint[]): number | null {
+  if (points.length === 0) return null
+  const value = points[points.length - 1]?.value
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function getChartColors(isDark: boolean) {
@@ -239,6 +246,10 @@ export function IndexChartView({
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const supertrendSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const ema9PriceLineRef = useRef<IPriceLine | null>(null)
+  const ema21PriceLineRef = useRef<IPriceLine | null>(null)
+  const supertrendPriceLineRef = useRef<IPriceLine | null>(null)
+  const vwapPriceLineRef = useRef<IPriceLine | null>(null)
   const candlesRef = useRef<Candle[]>([])
   const cacheRef = useRef<Map<string, Candle[]>>(new Map())
   const currentCacheKeyRef = useRef<string | null>(null)
@@ -258,30 +269,125 @@ export function IndexChartView({
   const indexExchange = useScalpingStore((s) => s.indexExchange)
   const chartInterval = useScalpingStore((s) => s.chartInterval)
 
+  const syncIndicatorPriceLine = useCallback(
+    (
+      seriesRef: MutableRefObject<ISeriesApi<'Line'> | null>,
+      lineRef: MutableRefObject<IPriceLine | null>,
+      enabled: boolean,
+      price: number | null,
+      color: string
+    ) => {
+      const series = seriesRef.current
+      if (!series) return
+
+      if (!enabled || price == null) {
+        if (lineRef.current) {
+          try {
+            series.removePriceLine(lineRef.current)
+          } catch {
+            // no-op
+          }
+          lineRef.current = null
+        }
+        return
+      }
+
+      const options = {
+        price,
+        color,
+        lineWidth: 1 as const,
+        lineStyle: 2 as const,
+        axisLabelVisible: true,
+        title: '',
+      }
+
+      if (lineRef.current) {
+        lineRef.current.applyOptions(options)
+      } else {
+        lineRef.current = series.createPriceLine(options)
+      }
+    },
+    []
+  )
+
+  const clearIndicatorPriceLines = useCallback(() => {
+    const refs = [
+      [ema9SeriesRef, ema9PriceLineRef],
+      [ema21SeriesRef, ema21PriceLineRef],
+      [supertrendSeriesRef, supertrendPriceLineRef],
+      [vwapSeriesRef, vwapPriceLineRef],
+    ] as const
+
+    for (const [seriesRef, lineRef] of refs) {
+      const series = seriesRef.current
+      if (series && lineRef.current) {
+        try {
+          series.removePriceLine(lineRef.current)
+        } catch {
+          // no-op
+        }
+      }
+      lineRef.current = null
+    }
+  }, [])
+
   const refreshIndicators = useCallback(() => {
     const candles = candlesRef.current
     const cfg = indicatorConfigRef.current
+    const colors = getChartColors(isDark)
 
     const closes: IndicatorPoint[] = candles.map((c) => ({
       time: c.time as number,
       value: c.close,
     }))
 
+    const ema9Data = cfg.showEma9 ? calculateEMA(closes, 9) : []
+    const ema21Data = cfg.showEma21 ? calculateEMA(closes, 21) : []
+    const supertrendData = cfg.showSupertrend ? calculateSupertrend(candles, 10, 3).trend : []
+    const vwapData = cfg.showVwap ? calculateVWAP(candles) : []
+
     if (ema9SeriesRef.current) {
-      ema9SeriesRef.current.setData(cfg.showEma9 ? toLineData(calculateEMA(closes, 9)) : [])
+      ema9SeriesRef.current.setData(toLineData(ema9Data))
     }
     if (ema21SeriesRef.current) {
-      ema21SeriesRef.current.setData(cfg.showEma21 ? toLineData(calculateEMA(closes, 21)) : [])
+      ema21SeriesRef.current.setData(toLineData(ema21Data))
     }
     if (supertrendSeriesRef.current) {
-      supertrendSeriesRef.current.setData(
-        cfg.showSupertrend ? toLineData(calculateSupertrend(candles, 10, 3).trend) : []
-      )
+      supertrendSeriesRef.current.setData(toLineData(supertrendData))
     }
     if (vwapSeriesRef.current) {
-      vwapSeriesRef.current.setData(cfg.showVwap ? toLineData(calculateVWAP(candles)) : [])
+      vwapSeriesRef.current.setData(toLineData(vwapData))
     }
-  }, [])
+
+    syncIndicatorPriceLine(
+      ema9SeriesRef,
+      ema9PriceLineRef,
+      cfg.showEma9,
+      getLastIndicatorValue(ema9Data),
+      colors.ema9
+    )
+    syncIndicatorPriceLine(
+      ema21SeriesRef,
+      ema21PriceLineRef,
+      cfg.showEma21,
+      getLastIndicatorValue(ema21Data),
+      colors.ema21
+    )
+    syncIndicatorPriceLine(
+      supertrendSeriesRef,
+      supertrendPriceLineRef,
+      cfg.showSupertrend,
+      getLastIndicatorValue(supertrendData),
+      colors.supertrend
+    )
+    syncIndicatorPriceLine(
+      vwapSeriesRef,
+      vwapPriceLineRef,
+      cfg.showVwap,
+      getLastIndicatorValue(vwapData),
+      colors.vwap
+    )
+  }, [isDark, syncIndicatorPriceLine])
 
   const scheduleIndicatorRefresh = useCallback(() => {
     if (indicatorTimerRef.current !== null) return
@@ -298,7 +404,8 @@ export function IndexChartView({
     ema21SeriesRef.current?.setData([])
     supertrendSeriesRef.current?.setData([])
     vwapSeriesRef.current?.setData([])
-  }, [])
+    clearIndicatorPriceLines()
+  }, [clearIndicatorPriceLines])
 
   const applyCandles = useCallback(
     (candles: Candle[]) => {
@@ -677,6 +784,7 @@ export function IndexChartView({
         clearTimeout(indicatorTimerRef.current)
         indicatorTimerRef.current = null
       }
+      clearIndicatorPriceLines()
       ro.disconnect()
       chart.remove()
       chartRef.current = null
@@ -686,7 +794,7 @@ export function IndexChartView({
       supertrendSeriesRef.current = null
       vwapSeriesRef.current = null
     }
-  }, [isDark, scheduleIndicatorRefresh])
+  }, [clearIndicatorPriceLines, isDark, scheduleIndicatorRefresh])
 
   return (
     <div className="relative h-full w-full min-w-0 min-h-0 overflow-hidden">
@@ -700,12 +808,6 @@ export function IndexChartView({
         {!isConnected && isFallbackMode && (
           <span className="text-[10px] text-blue-500">REST fallback</span>
         )}
-      </div>
-      <div className="absolute top-1 right-2 flex items-center gap-1 pointer-events-none">
-        {showEma9 && <span className="text-[9px] text-amber-500 font-mono">E9</span>}
-        {showEma21 && <span className="text-[9px] text-violet-500 font-mono">E21</span>}
-        {showSupertrend && <span className="text-[9px] text-cyan-500 font-mono">ST</span>}
-        {showVwap && <span className="text-[9px] text-pink-500 font-mono">VW</span>}
       </div>
     </div>
   )

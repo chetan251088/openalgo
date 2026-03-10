@@ -136,6 +136,13 @@ export function AutoTradeConfig() {
         <NumField label="IV Spike Threshold %" field="ivSpikeThreshold" />
       </Section>
 
+      <Section title="Unified Flow Signal">
+        <BoolField label="Enabled" field="unifiedFlowSignalEnabled" />
+        <NumField label="Min Signal Score" field="unifiedFlowMinScore" step={0.05} />
+        <NumField label="Score Weight" field="unifiedFlowScoreWeight" step={0.1} />
+        <BoolField label="Hard Block Opposite" field="unifiedFlowHardBlock" />
+      </Section>
+
       <Section title="Time-of-Day">
         <BoolField label="Respect Hot Zones" field="respectHotZones" />
         <NumField label="Sensitivity Multiplier" field="sensitivityMultiplier" step={0.1} />
