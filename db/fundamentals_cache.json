@@ -1,0 +1,629 @@
+{
+  "date": "2026-03-15",
+  "generated_at": "2026-03-15T22:20:29.143033",
+  "symbol_count": 40,
+  "cleared_count": 37,
+  "blocked_count": 3,
+  "profiles": {
+    "RELIANCE": {
+      "symbol": "RELIANCE",
+      "roce": 8.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 1868898.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -39.35,
+      "cleared": false,
+      "block_reason": "ROCE 8.0% < 10%",
+      "sector": "NIFTYENERGY",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 2.0,
+        "promoter_min": 40,
+        "fii_sell_max": 4
+      }
+    },
+    "TCS": {
+      "symbol": "TCS",
+      "roce": 78.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 871979.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 8.77,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYIT",
+      "thresholds_used": {
+        "roce_min": 18,
+        "debt_equity_max": 0.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "HDFCBANK": {
+      "symbol": "HDFCBANK",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 1257769.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 1.76,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPVTBANK",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 8.0,
+        "promoter_min": 20,
+        "fii_sell_max": 5
+      }
+    },
+    "INFY": {
+      "symbol": "INFY",
+      "roce": 41.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 506214.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 5.18,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYIT",
+      "thresholds_used": {
+        "roce_min": 18,
+        "debt_equity_max": 0.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "ICICIBANK": {
+      "symbol": "ICICIBANK",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 898486.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -8.88,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPVTBANK",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 8.0,
+        "promoter_min": 20,
+        "fii_sell_max": 5
+      }
+    },
+    "HINDUNILVR": {
+      "symbol": "HINDUNILVR",
+      "roce": 28.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 507856.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -1.84,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "ITC": {
+      "symbol": "ITC",
+      "roce": 37.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 377942.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -1.1,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "SBIN": {
+      "symbol": "SBIN",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 966312.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -14.91,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPSUBANK",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 10.0,
+        "promoter_min": 50,
+        "fii_sell_max": 5
+      }
+    },
+    "BHARTIARTL": {
+      "symbol": "BHARTIARTL",
+      "roce": 8.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 1028603.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -337.96,
+      "cleared": false,
+      "block_reason": "ROCE 8.0% < 12%",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "KOTAKBANK": {
+      "symbol": "KOTAKBANK",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 364886.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -20.14,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPVTBANK",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 8.0,
+        "promoter_min": 20,
+        "fii_sell_max": 5
+      }
+    },
+    "LT": {
+      "symbol": "LT",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "AXISBANK": {
+      "symbol": "AXISBANK",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "MARUTI": {
+      "symbol": "MARUTI",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "SUNPHARMA": {
+      "symbol": "SUNPHARMA",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "TATAMOTORS": {
+      "symbol": "TATAMOTORS",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "BAJFINANCE": {
+      "symbol": "BAJFINANCE",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 531776.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -7.51,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "NTPC": {
+      "symbol": "NTPC",
+      "roce": 12.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 372741.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -21.09,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYENERGY",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 2.0,
+        "promoter_min": 40,
+        "fii_sell_max": 4
+      }
+    },
+    "TATASTEEL": {
+      "symbol": "TATASTEEL",
+      "roce": 13.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 229109.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -43.34,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYMETAL",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 2.0,
+        "promoter_min": 30,
+        "fii_sell_max": 4
+      }
+    },
+    "WIPRO": {
+      "symbol": "WIPRO",
+      "roce": 23.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 207335.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 6.58,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYIT",
+      "thresholds_used": {
+        "roce_min": 18,
+        "debt_equity_max": 0.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "HCLTECH": {
+      "symbol": "HCLTECH",
+      "roce": 43.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 359577.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 12.38,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYIT",
+      "thresholds_used": {
+        "roce_min": 18,
+        "debt_equity_max": 0.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "M&M": {
+      "symbol": "M&M",
+      "roce": 27.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 364298.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -1.36,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "POWERGRID": {
+      "symbol": "POWERGRID",
+      "roce": 13.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 279810.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -12.21,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "ADANIENT": {
+      "symbol": "ADANIENT",
+      "roce": 13.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 226329.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -38.78,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "ONGC": {
+      "symbol": "ONGC",
+      "roce": 15.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 332368.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 1991.86,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYENERGY",
+      "thresholds_used": {
+        "roce_min": 10,
+        "debt_equity_max": 2.0,
+        "promoter_min": 40,
+        "fii_sell_max": 4
+      }
+    },
+    "DRREDDY": {
+      "symbol": "DRREDDY",
+      "roce": 26.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 107881.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -51.64,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "CIPLA": {
+      "symbol": "CIPLA",
+      "roce": 20.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 106123.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 91.27,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "JSWSTEEL": {
+      "symbol": "JSWSTEEL",
+      "roce": 10.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 273696.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -56.52,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYMETAL",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 2.0,
+        "promoter_min": 30,
+        "fii_sell_max": 4
+      }
+    },
+    "DIVISLAB": {
+      "symbol": "DIVISLAB",
+      "roce": 21.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 161308.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -2.51,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "HINDALCO": {
+      "symbol": "HINDALCO",
+      "roce": 13.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 204488.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -40.14,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYMETAL",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 2.0,
+        "promoter_min": 30,
+        "fii_sell_max": 4
+      }
+    },
+    "BAJAJ-AUTO": {
+      "symbol": "BAJAJ-AUTO",
+      "roce": 38.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 247969.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 4.05,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "NESTLEIND": {
+      "symbol": "NESTLEIND",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "BRITANNIA": {
+      "symbol": "BRITANNIA",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "DLF": {
+      "symbol": "DLF",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "INDUSINDBK": {
+      "symbol": "INDUSINDBK",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "COALINDIA": {
+      "symbol": "COALINDIA",
+      "cleared": true,
+      "block_reason": "fetch_error: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"#top\") to be visible\n"
+    },
+    "BANKBARODA": {
+      "symbol": "BANKBARODA",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 145366.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -19.31,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPSUBANK",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 10.0,
+        "promoter_min": 50,
+        "fii_sell_max": 5
+      }
+    },
+    "PNB": {
+      "symbol": "PNB",
+      "roce": null,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 128387.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -45.73,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYPSUBANK",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 10.0,
+        "promoter_min": 50,
+        "fii_sell_max": 5
+      }
+    },
+    "TECHM": {
+      "symbol": "TECHM",
+      "roce": 18.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 130551.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 77.84,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "NIFTYIT",
+      "thresholds_used": {
+        "roce_min": 18,
+        "debt_equity_max": 0.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "APOLLOHOSP": {
+      "symbol": "APOLLOHOSP",
+      "roce": 16.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 108560.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": 8.37,
+      "cleared": true,
+      "block_reason": "",
+      "sector": "unknown",
+      "thresholds_used": {
+        "roce_min": 12,
+        "debt_equity_max": 1.5,
+        "promoter_min": 30,
+        "fii_sell_max": 3
+      }
+    },
+    "GODREJPROP": {
+      "symbol": "GODREJPROP",
+      "roce": 6.0,
+      "pe": null,
+      "debt_equity": null,
+      "market_cap": 47561.0,
+      "promoter_holding": null,
+      "fii_change_qoq": null,
+      "quarterly_profit_growth": -51.31,
+      "cleared": false,
+      "block_reason": "ROCE 6.0% < 8%",
+      "sector": "NIFTYREALTY",
+      "thresholds_used": {
+        "roce_min": 8,
+        "debt_equity_max": 2.0,
+        "promoter_min": 40,
+        "fii_sell_max": 3
+      }
+    }
+  }
+}

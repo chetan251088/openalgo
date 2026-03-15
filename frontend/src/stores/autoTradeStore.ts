@@ -146,6 +146,7 @@ interface AutoTradeActions {
   // Config
   updateConfig: (partial: Partial<AutoTradeConfigFields>) => void
   applyPreset: (presetId: string) => void
+  resetConfig: () => void
 
   // Runtime
   setEnabled: (on: boolean) => void
@@ -226,6 +227,9 @@ export const useAutoTradeStore = create<AutoTradeStore>()(
           activePresetId: presetId,
         })
       },
+
+      resetConfig: () =>
+        set({ config: { ...DEFAULT_CONFIG }, activePresetId: 'balanced' }),
 
       setEnabled: (on) => set({ enabled: on }),
       setMode: (mode) => set({ mode }),

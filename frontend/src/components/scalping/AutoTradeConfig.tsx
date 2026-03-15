@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { useAutoTradeStore } from '@/stores/autoTradeStore'
 import type { AutoTradeConfigFields } from '@/lib/scalpingPresets'
 
@@ -66,8 +68,28 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function AutoTradeConfig() {
+  const resetConfig = useAutoTradeStore((s) => s.resetConfig)
+  const [confirming, setConfirming] = useState(false)
+
+  const handleReset = () => {
+    if (!confirming) { setConfirming(true); return }
+    resetConfig()
+    setConfirming(false)
+  }
+
   return (
     <div className="space-y-0.5">
+      <div className="flex justify-end pb-1">
+        <Button
+          variant={confirming ? 'destructive' : 'outline'}
+          size="sm"
+          className="h-5 text-[10px] px-2"
+          onClick={handleReset}
+          onBlur={() => setConfirming(false)}
+        >
+          {confirming ? 'Confirm reset' : 'Reset to defaults'}
+        </Button>
+      </div>
       <Section title="Entry Conditions">
         <NumField label="Momentum Count" field="entryMomentumCount" />
         <NumField label="Momentum Velocity" field="entryMomentumVelocity" />

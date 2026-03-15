@@ -4,11 +4,12 @@ import time
 import urllib.parse
 from datetime import datetime, timedelta
 
+import httpx
 import pandas as pd
 
 from broker.zerodha.database.master_contract_db import SymToken, db_session
 from database.token_db import get_br_symbol, get_oa_symbol
-from utils.httpx_client import get_httpx_client
+from utils.httpx_client import get_httpx_client, get_httpx_http1_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +59,14 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
     # Keep query params in URL to preserve duplicate keys (e.g., multiple i= for quotes)
     url = f"{base_url}{endpoint}"
 
+    def _send_request(active_client: httpx.Client):
+        if method.upper() == "GET":
+            return active_client.get(url, headers=headers)
+        if method.upper() == "POST":
+            headers["Content-Type"] = "application/json"
+            return active_client.post(url, headers=headers, json=payload)
+        raise ZerodhaAPIError(f"Unsupported HTTP method: {method}")
+
     try:
         # Log the complete request details for debugging
         # logger.info("=== API Request Details ===")
@@ -68,13 +77,18 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
             logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
         # Make the request using the shared client
-        if method.upper() == "GET":
-            response = client.get(url, headers=headers)
-        elif method.upper() == "POST":
-            headers["Content-Type"] = "application/json"
-            response = client.post(url, headers=headers, json=payload)
-        else:
-            raise ZerodhaAPIError(f"Unsupported HTTP method: {method}")
+        try:
+            response = _send_request(client)
+        except httpx.RemoteProtocolError as protocol_error:
+            # Zerodha/Kite sometimes terminates long-lived HTTP/2 streams.
+            # Retry once over a dedicated HTTP/1.1 client before failing.
+            logger.warning(
+                "HTTP/2 protocol error for Zerodha endpoint %s: %s. Retrying once over HTTP/1.1.",
+                endpoint,
+                protocol_error,
+            )
+            fallback_client = get_httpx_http1_client()
+            response = _send_request(fallback_client)
 
         # Log the complete response
         # logger.info("=== API Response Details ===")

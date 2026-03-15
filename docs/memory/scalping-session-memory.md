@@ -1,6 +1,6 @@
 # Scalping Session Memory
 
-Last updated: 2026-03-06
+Last updated: 2026-03-11
 Scope: OpenAlgo React scalping stack and related auto-trade/risk work.
 
 ## 1) What This Memory Is For
@@ -462,6 +462,27 @@ Major implemented behavior (high level):
     - broker responses that mean "no positions" are treated as successful empty positionbook (`status: success, data: []`) instead of hard 500
     - `/api/multibroker/v1` now enriches upstream 5xx JSON with `proxy_broker` and `proxy_path`
     - frontend `proxyV1ByRole` now logs broker/path/status/message for failed proxy attempts (`[MultiBroker] Proxy request failed`)
+82. Unified target API-key safety hardening:
+    - local DB fallback for target-broker API key resolution is now disabled by default
+    - enable fallback only for shared-DB deployments via `MULTI_BROKER_ALLOW_LOCAL_DB_FALLBACK=true`
+    - per-broker API-key cache entries now store a source (`target_instance` or `local_db_fallback`), and legacy unknown-source cache entries are ignored
+    - prevents cross-instance key poisoning that can cause repeated `Invalid openalgo apikey` errors on `/api/multibroker/v1`
+83. Zerodha quote-path HTTP/2 resilience hardening:
+    - Zerodha API request path now catches `httpx.RemoteProtocolError` (`ConnectionTerminated`) and retries once over a dedicated HTTP/1.1 client
+    - shared `utils/httpx_client.py` now exposes a reusable HTTP/1.1 fallback client with pooled connections
+    - reduces transient upstream HTTP/2 stream-reset failures that were bubbling as repeated quote/`/api/multibroker/v1` 500 logs
+84. Place-order 500 hardening for broker transport failures:
+    - `services/place_order_service.py` now safely normalizes broker response status when broker adapters return `res=None` on HTTP exceptions
+    - avoids uncaught `res.status` attribute errors that previously surfaced as generic `/api/v1/placeorder` 500s
+    - error response now includes broker transport messages (`error`, `emsg`, etc.) for clearer frontend diagnostics
+85. Kotak place-order transport fallback hardening:
+    - `broker/kotak/api/order_api.py` place-order path now retries once via dedicated HTTP/1.1 client on `httpx.RemoteProtocolError` (HTTP/2 stream termination)
+    - non-JSON upstream responses are now handled gracefully and returned as structured error payloads
+    - adapter now always returns a response-like object with status code on exceptions, improving downstream status propagation
+86. Zerodha streaming disconnect-log noise reduction:
+    - `broker/zerodha/streaming/zerodha_adapter.py` now distinguishes intentional disconnects from unexpected drops
+    - duplicate disconnect callback invocations during shutdown are suppressed to debug-level
+    - warning-level `❌ WebSocket disconnected` now appears only for unexpected live-session drops
 
 ## 7) Still Important Gaps / Follow-ups
 

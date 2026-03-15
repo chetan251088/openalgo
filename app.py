@@ -271,6 +271,9 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(tomic_bp)  # Register TOMIC multi-agent trading blueprint
 
+    from blueprints.intelligence import intelligence_bp
+    app.register_blueprint(intelligence_bp)  # Register Intelligence service blueprint
+
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
@@ -580,6 +583,16 @@ def setup_environment(app):
                 logger.info("TOMIC runtime bootstrapped in stopped state (manual start required)")
         except Exception as e:
             logger.error(f"Failed to bootstrap TOMIC runtime: {e}")
+
+        # Initialize Intelligence Service (MiroFish + Sector Rotation + OpenScreener)
+        try:
+            from services.intelligence.service import IntelligenceService
+            intelligence_service = IntelligenceService()
+            app.extensions["intelligence_service"] = intelligence_service
+            intelligence_service.start_snapshot_daemon(interval_s=60)
+            logger.info("Intelligence service initialized (gate snapshot daemon started)")
+        except Exception as e:
+            logger.error(f"Failed to initialize Intelligence service: {e}")
 
         # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
         # This must be AFTER database initialization to avoid "no such table" errors

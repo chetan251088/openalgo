@@ -511,6 +511,17 @@ def react_scalping():
     return serve_react_app()
 
 
+# Options Selling and unified command center
+@react_bp.route("/options-selling", strict_slashes=False)
+def react_options_selling():
+    return serve_react_app()
+
+
+@react_bp.route("/command-center", strict_slashes=False)
+def react_command_center():
+    return serve_react_app()
+
+
 # ============================================================
 # Flow Routes - Visual Workflow Automation
 # ============================================================

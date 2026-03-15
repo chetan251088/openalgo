@@ -144,9 +144,9 @@ export const DEFAULT_CONFIG: AutoTradeConfigFields = {
   indexBiasWeight: 0.3,
 
   optionsContextEnabled: true,
-  pcrBullishThreshold: 0.7,
-  pcrBearishThreshold: 1.3,
-  maxPainProximityFilter: 50,
+  pcrBullishThreshold: 0.5,   // only block PE on extreme bullish (PCR < 0.5)
+  pcrBearishThreshold: 1.7,   // NIFTY PCR commonly 1.0–1.6; 1.3 was blocking CE most of the day
+  maxPainProximityFilter: 20, // 50pts filtered entries for hours; 20pts is the real danger zone
   gexWallFilterEnabled: true,
   ivSpikeExitEnabled: true,
   ivSpikeThreshold: 5,
@@ -161,7 +161,10 @@ export const DEFAULT_CONFIG: AutoTradeConfigFields = {
 
   noTradeZoneEnabled: true,
   noTradeZoneRangePts: 15,
-  noTradeZonePeriod: 20,
+  // 150 index-price ticks @ 100ms processing = ~15 seconds.
+  // "NIFTY within 15pts for 15s" = genuinely flat — meaningful filter.
+  // (Previous default of 20 = only 2 seconds, fired constantly.)
+  noTradeZonePeriod: 150,
 
   reEntryEnabled: false,
   reEntryDelaySec: 30,
@@ -327,10 +330,10 @@ export const PRESETS: AutoTradePreset[] = [
       respectHotZones: true,
       sensitivityMultiplier: 1.1,
 
-      // No-trade zone — option price flat zone
+      // No-trade zone — NIFTY index flat zone (checks index prices, not option prices)
       noTradeZoneEnabled: true,
-      noTradeZoneRangePts: 10,
-      noTradeZonePeriod: 15,
+      noTradeZoneRangePts: 15,
+      noTradeZonePeriod: 120,
 
       // Re-entry
       reEntryEnabled: true,

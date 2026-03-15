@@ -145,6 +145,8 @@ const ManualTradeAnalytics = lazy(() => import('@/pages/ManualTradeAnalytics'))
 const TomicDashboard = lazy(() => import('@/pages/tomic/TomicDashboard'))
 const TomicAgents = lazy(() => import('@/pages/tomic/TomicAgents'))
 const TomicRisk = lazy(() => import('@/pages/tomic/TomicRisk'))
+const OptionsSelling = lazy(() => import('@/pages/OptionsSelling'))
+const CommandCenter = lazy(() => import('@/pages/CommandCenter'))
 
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
@@ -255,6 +257,8 @@ function App() {
                 <Route path="/tomic/dashboard" element={<TomicDashboard />} />
                 <Route path="/tomic/agents" element={<TomicAgents />} />
                 <Route path="/tomic/risk" element={<TomicRisk />} />
+                <Route path="/options-selling" element={<OptionsSelling />} />
+                <Route path="/command-center" element={<CommandCenter />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />

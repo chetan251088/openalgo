@@ -38,6 +38,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.connected = False
         self.lock = threading.Lock()
+        self._manual_disconnect_in_progress = False
         self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
         self.token_to_symbol = {}  # {token: (symbol, exchange)}
 
@@ -207,12 +208,16 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             with self.lock:
                 if self.ws_client:
+                    # Mark disconnect intent before stopping the client so callback
+                    # can distinguish expected shutdown from unexpected drop.
+                    self._manual_disconnect_in_progress = True
+                    self.running = False
+
                     # Stop the WebSocket client
                     self.ws_client.stop()
                     self.ws_client = None  # Clear the reference
 
                     # Update state flags
-                    self.running = False
                     self.connected = False
                     self.reconnect_attempts = 0  # Reset reconnect attempts
 
@@ -221,6 +226,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Reset subscriptions tracking
                     self.subscribed_symbols.clear()
                     self.token_to_symbol.clear()
+                    self._manual_disconnect_in_progress = False
 
                 # Always clean up ZMQ resources to ensure proper cleanup
                 self.cleanup_zmq()
@@ -702,13 +708,25 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_connect(self):
         """Handle WebSocket connection"""
         self.connected = True
+        self.running = True
+        self._manual_disconnect_in_progress = False
         self.reconnect_attempts = 0
         self.logger.info("✅ WebSocket connected")
 
     def _on_disconnect(self):
         """Handle WebSocket disconnection"""
+        was_connected = self.connected
         self.connected = False
-        self.logger.warning("❌ WebSocket disconnected")
+        if not was_connected:
+            # Avoid duplicate disconnect noise when callback fires multiple times
+            # during normal shutdown/cleanup.
+            self.logger.debug("WebSocket disconnect callback received while already disconnected")
+            return
+
+        if self._manual_disconnect_in_progress or not self.running:
+            self.logger.info("✅ WebSocket disconnected")
+        else:
+            self.logger.warning("❌ WebSocket disconnected")
 
     def _on_error(self, error):
         """Handle WebSocket errors"""

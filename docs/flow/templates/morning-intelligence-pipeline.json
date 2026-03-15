@@ -1,0 +1,56 @@
+{
+  "name": "Morning Intelligence Pipeline",
+  "description": "Automated morning routine: refresh intelligence at 8:30 AM, generate TOMIC daily plan at 9:45 AM, send via Telegram",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "id": "timer_0830",
+      "type": "timer",
+      "position": {"x": 100, "y": 200},
+      "data": {"schedule": "cron", "cron": "30 8 * * 1-5", "label": "8:30 AM Weekdays"}
+    },
+    {
+      "id": "intel_refresh",
+      "type": "intelligenceRefresh",
+      "position": {"x": 350, "y": 200},
+      "data": {"label": "Refresh All Intelligence", "storeVariable": "morning_intel"}
+    },
+    {
+      "id": "timer_0945",
+      "type": "timer",
+      "position": {"x": 100, "y": 400},
+      "data": {"schedule": "cron", "cron": "45 9 * * 1-5", "label": "9:45 AM Weekdays"}
+    },
+    {
+      "id": "intel_snapshot",
+      "type": "intelligenceSnapshot",
+      "position": {"x": 350, "y": 400},
+      "data": {"label": "Read Intelligence", "storeVariable": "current_intel"}
+    },
+    {
+      "id": "tomic_plan",
+      "type": "tomicSignal",
+      "position": {"x": 600, "y": 400},
+      "data": {
+        "label": "Generate Daily Plan",
+        "instrument": "NIFTY",
+        "strategy": "auto",
+        "direction": "SELL",
+        "autoSelect": true,
+        "snapshotVariable": "current_intel"
+      }
+    },
+    {
+      "id": "telegram_plan",
+      "type": "telegram",
+      "position": {"x": 850, "y": 400},
+      "data": {"label": "Send Plan to Telegram", "message": "Daily trade plan generated. Check TOMIC dashboard."}
+    }
+  ],
+  "edges": [
+    {"id": "e1", "source": "timer_0830", "target": "intel_refresh"},
+    {"id": "e2", "source": "timer_0945", "target": "intel_snapshot"},
+    {"id": "e3", "source": "intel_snapshot", "target": "tomic_plan"},
+    {"id": "e4", "source": "tomic_plan", "target": "telegram_plan"}
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "Intraday Intelligence Monitor",
+  "description": "Polls intelligence every 15 minutes during market hours. Alerts on sector rotation transitions and MiroFish confidence drops.",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "id": "timer_15min",
+      "type": "timer",
+      "position": {"x": 100, "y": 200},
+      "data": {"schedule": "interval", "intervalMinutes": 15, "label": "Every 15 min (9:15-15:30)"}
+    },
+    {
+      "id": "intel_snapshot",
+      "type": "intelligenceSnapshot",
+      "position": {"x": 350, "y": 200},
+      "data": {"label": "Read Intelligence", "storeVariable": "latest_intel"}
+    },
+    {
+      "id": "check_transitions",
+      "type": "condition",
+      "position": {"x": 600, "y": 150},
+      "data": {"label": "Rotation Transition?", "condition": "{{latest_intel.rotation.transitions.length > 0}}"}
+    },
+    {
+      "id": "telegram_transition",
+      "type": "telegram",
+      "position": {"x": 850, "y": 100},
+      "data": {"label": "Alert: Sector Transition", "message": "Sector rotation transition detected. Review positions."}
+    },
+    {
+      "id": "check_confidence",
+      "type": "condition",
+      "position": {"x": 600, "y": 300},
+      "data": {"label": "Low Confidence?", "condition": "{{latest_intel.mirofish.confidence < 0.3}}"}
+    },
+    {
+      "id": "telegram_confidence",
+      "type": "telegram",
+      "position": {"x": 850, "y": 300},
+      "data": {"label": "Alert: Low Confidence", "message": "MiroFish confidence dropped below 30%. Consider tightening stops."}
+    }
+  ],
+  "edges": [
+    {"id": "e1", "source": "timer_15min", "target": "intel_snapshot"},
+    {"id": "e2", "source": "intel_snapshot", "target": "check_transitions"},
+    {"id": "e3", "source": "check_transitions", "target": "telegram_transition", "label": "true"},
+    {"id": "e4", "source": "intel_snapshot", "target": "check_confidence"},
+    {"id": "e5", "source": "check_confidence", "target": "telegram_confidence", "label": "true"}
+  ]
+}

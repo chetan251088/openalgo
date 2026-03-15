@@ -247,8 +247,14 @@ function computeVolumeFlow(cumulativeVolumes: number[], lookbackTicks: number): 
   }
   if (deltas.length < 2) return { latestDelta: null, avgDelta: null, ratio: null }
 
-  const latestDelta = deltas[deltas.length - 1]
-  const baseline = deltas.slice(0, -1)
+  // Smooth over last 3 deltas to avoid false blocks from a single quiet tick.
+  // NSE/BSE sends cumulative day-volume, so a single tick delta can be 0 even
+  // during active sessions (no trade in that 100ms window).
+  const smoothWindow = Math.min(3, deltas.length - 1)
+  const recentDeltas = deltas.slice(-smoothWindow)
+  const latestDelta = recentDeltas.reduce((s, v) => s + v, 0) / recentDeltas.length
+
+  const baseline = deltas.slice(0, -smoothWindow)
   const baselineAvg = baseline.length > 0
     ? baseline.reduce((sum, value) => sum + value, 0) / baseline.length
     : 0
@@ -551,7 +557,10 @@ export function useAutoTradeEngine(
         sensitivity,
         spread,
         depthInfo,
-        ticks,
+        // Pass index prices for the no-trade zone check: "15pts range" is
+        // meaningful for NIFTY (flat index = no momentum), not for option prices
+        // which oscillate 5-15pts even in normal conditions.
+        indexTicksRef.current,
         volumeFlow,
         regime,
         unifiedSignal

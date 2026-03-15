@@ -1272,19 +1272,29 @@ export function OptionChartView({
     const isCE = side === 'CE'
     const markers: ChartSignalMarker[] = []
 
-    // Ghost signals detected by the engine (shown in both ghost and execute modes)
+    // Ghost signals: one arrow per candle (highest-score signal wins).
+    // Multiple signals can fire per candle (every 2-4s); showing all of them
+    // clutters the chart with stacked arrows. Keep only the best one.
+    const bestByCandle = new Map<number, { score: number; marker: ChartSignalMarker }>()
     for (const sig of ghostSignals.slice(-40)) {
       if (sig.side !== side || sig.symbol !== symbol) continue
       const aligned = (Math.floor(sig.timestamp / 1000 / chartInterval) * chartInterval) as UTCTimestamp
-      markers.push({
-        time: aligned,
-        position: isCE ? 'belowBar' : 'aboveBar',
-        color: isCE ? '#22c55e99' : '#ef444499',
-        shape: isCE ? 'arrowUp' : 'arrowDown',
-        text: sig.score.toFixed(1),
-        size: 1,
-      })
+      const existing = bestByCandle.get(aligned)
+      if (!existing || sig.score > existing.score) {
+        bestByCandle.set(aligned, {
+          score: sig.score,
+          marker: {
+            time: aligned,
+            position: isCE ? 'belowBar' : 'aboveBar',
+            color: isCE ? '#22c55e99' : '#ef444499',
+            shape: isCE ? 'arrowUp' : 'arrowDown',
+            text: sig.score.toFixed(1),
+            size: 1,
+          },
+        })
+      }
     }
+    for (const { marker } of bestByCandle.values()) markers.push(marker)
 
     // Execution samples: filled orders and exits (execute mode only)
     for (const samp of executionSamples.slice(-20)) {

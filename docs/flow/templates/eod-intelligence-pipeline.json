@@ -1,0 +1,42 @@
+{
+  "name": "EOD Intelligence Pipeline",
+  "description": "End-of-day routine: wind down TOMIC at 15:00, run EOD prediction at 16:00, send summary.",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "id": "timer_1500",
+      "type": "timer",
+      "position": {"x": 100, "y": 200},
+      "data": {"schedule": "cron", "cron": "0 15 * * 1-5", "label": "3:00 PM Weekdays"}
+    },
+    {
+      "id": "tomic_winddown",
+      "type": "tomicControl",
+      "position": {"x": 350, "y": 200},
+      "data": {"label": "Wind Down Positions", "action": "stop"}
+    },
+    {
+      "id": "timer_1600",
+      "type": "timer",
+      "position": {"x": 100, "y": 400},
+      "data": {"schedule": "cron", "cron": "0 16 * * 1-5", "label": "4:00 PM Weekdays"}
+    },
+    {
+      "id": "eod_refresh",
+      "type": "intelligenceRefresh",
+      "position": {"x": 350, "y": 400},
+      "data": {"label": "EOD Prediction Refresh", "storeVariable": "eod_intel"}
+    },
+    {
+      "id": "telegram_eod",
+      "type": "telegram",
+      "position": {"x": 600, "y": 400},
+      "data": {"label": "Send EOD Summary", "message": "End of day intelligence refresh complete. Tomorrow's outlook available."}
+    }
+  ],
+  "edges": [
+    {"id": "e1", "source": "timer_1500", "target": "tomic_winddown"},
+    {"id": "e2", "source": "timer_1600", "target": "eod_refresh"},
+    {"id": "e3", "source": "eod_refresh", "target": "telegram_eod"}
+  ]
+}

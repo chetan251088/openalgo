@@ -27,6 +27,8 @@ FLASK_TO_WS_PORT = {
 }
 FEED_MODES = {"auto", "dhan", "zerodha"}
 API_KEY_CACHE_SESSION_KEY = "_multi_broker_target_api_keys"
+CACHE_SOURCE_TARGET_INSTANCE = "target_instance"
+CACHE_SOURCE_LOCAL_DB_FALLBACK = "local_db_fallback"
 
 
 def _parse_cache_ttl_seconds() -> int:
@@ -38,6 +40,19 @@ def _parse_cache_ttl_seconds() -> int:
 
 
 API_KEY_CACHE_TTL_SECONDS = _parse_cache_ttl_seconds()
+
+
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    return value in {"1", "true", "yes", "on", "y"}
+
+
+LOCAL_DB_FALLBACK_ENABLED = _parse_bool_env(
+    "MULTI_BROKER_ALLOW_LOCAL_DB_FALLBACK", default=False
+)
 
 
 def _normalize_base_url(url: str) -> str:
@@ -60,7 +75,11 @@ def _require_session_user() -> tuple[bool, str | None]:
     return True, username
 
 
-def _read_cached_target_openalgo_apikey(broker: str, username: str | None = None) -> str | None:
+def _read_cached_target_openalgo_apikey(
+    broker: str,
+    username: str | None = None,
+    allow_local_db_fallback: bool = False,
+) -> str | None:
     if API_KEY_CACHE_TTL_SECONDS <= 0:
         return None
 
@@ -80,6 +99,16 @@ def _read_cached_target_openalgo_apikey(broker: str, username: str | None = None
     if username and cached_user and cached_user != username:
         return None
 
+    source = str(entry.get("source", "")).strip().lower()
+    if source not in {
+        CACHE_SOURCE_TARGET_INSTANCE,
+        CACHE_SOURCE_LOCAL_DB_FALLBACK,
+    }:
+        # Ignore legacy cache entries with unknown source.
+        return None
+    if source == CACHE_SOURCE_LOCAL_DB_FALLBACK and not allow_local_db_fallback:
+        return None
+
     cached_at_raw = entry.get("cached_at")
     try:
         cached_at = float(cached_at_raw)
@@ -94,13 +123,24 @@ def _read_cached_target_openalgo_apikey(broker: str, username: str | None = None
     return api_key
 
 
-def _write_cached_target_openalgo_apikey(broker: str, api_key: str, username: str | None = None) -> None:
+def _write_cached_target_openalgo_apikey(
+    broker: str,
+    api_key: str,
+    username: str | None = None,
+    source: str = CACHE_SOURCE_TARGET_INSTANCE,
+) -> None:
     if API_KEY_CACHE_TTL_SECONDS <= 0:
         return
 
     normalized_key = str(api_key).strip()
     if not normalized_key:
         return
+    normalized_source = str(source).strip().lower()
+    if normalized_source not in {
+        CACHE_SOURCE_TARGET_INSTANCE,
+        CACHE_SOURCE_LOCAL_DB_FALLBACK,
+    }:
+        normalized_source = CACHE_SOURCE_TARGET_INSTANCE
 
     cache = session.get(API_KEY_CACHE_SESSION_KEY)
     if not isinstance(cache, dict):
@@ -108,6 +148,7 @@ def _write_cached_target_openalgo_apikey(broker: str, api_key: str, username: st
 
     cache[broker] = {
         "api_key": normalized_key,
+        "source": normalized_source,
         "username": str(username or ""),
         "cached_at": time.time(),
     }
@@ -145,8 +186,10 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
     Priority:
     1) Explicit env override (useful for headless deployments)
     2) Target instance `/api/websocket/apikey` using forwarded browser cookies
-    3) Local DB fallback for current user (works only in shared-DB setups)
+    3) Optional local DB fallback for current user (shared-DB only; disabled by default)
     """
+    allow_local_db_fallback = LOCAL_DB_FALLBACK_ENABLED
+
     # Optional env overrides (support both names).
     env_candidates = (
         f"MULTI_BROKER_{broker.upper()}_OPENALGO_API_KEY",
@@ -157,7 +200,11 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
         if value:
             return value
 
-    cached_key = _read_cached_target_openalgo_apikey(broker, username=username)
+    cached_key = _read_cached_target_openalgo_apikey(
+        broker,
+        username=username,
+        allow_local_db_fallback=allow_local_db_fallback,
+    )
     if cached_key:
         return cached_key
 
@@ -175,7 +222,10 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
             api_key = str(data.get("api_key", "")).strip()
             if data.get("status") == "success" and api_key:
                 _write_cached_target_openalgo_apikey(
-                    broker, api_key, username=username
+                    broker,
+                    api_key,
+                    username=username,
+                    source=CACHE_SOURCE_TARGET_INSTANCE,
                 )
                 return api_key
     except requests.RequestException:
@@ -183,13 +233,16 @@ def _resolve_target_openalgo_apikey(broker: str, base_url: str, username: str | 
     except ValueError:
         pass
 
-    # Fallback for shared-database deployments.
-    if username:
+    # Optional fallback for shared-database deployments.
+    if allow_local_db_fallback and username:
         try:
             api_key = get_api_key_for_tradingview(username)
             if api_key:
                 _write_cached_target_openalgo_apikey(
-                    broker, api_key, username=username
+                    broker,
+                    api_key,
+                    username=username,
+                    source=CACHE_SOURCE_LOCAL_DB_FALLBACK,
                 )
                 return api_key
         except Exception:

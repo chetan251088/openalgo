@@ -82,7 +82,10 @@ export function calculateMomentum(
 ): MomentumResult {
   if (ticks.length < 2) return { direction: 'flat', count: 0, velocity: 0 }
 
-  const recent = ticks.slice(-Math.max(config.entryMomentumCount, 2))
+  // +1 so we get entryMomentumCount comparisons (N ticks → N-1 diffs).
+  // Without this, count can only reach entryMomentumCount-1, making the
+  // "count >= entryMomentumCount" strong-momentum check always false.
+  const recent = ticks.slice(-Math.max(config.entryMomentumCount + 1, 2))
   let upCount = 0
   let downCount = 0
 
@@ -419,13 +422,14 @@ export function shouldEnterTrade(
     0.25,
     effectiveSensitivity * Math.max(0.1, config.sensitivityMultiplier)
   )
-  // In RANGING markets raise the bar by 1.5 pts — scalping direction trades
-  // have lower edge when price is oscillating without a clear trend.
-  // VOLATILE keeps the same bar (spikes can be tradeable).
-  // UNKNOWN gets a small +0.5 penalty (not enough data yet).
+  // Regime penalty raises the score bar in flat/unknown markets.
+  // Capped at 0.75 for RANGING because the regime detector runs on raw LTP
+  // ticks (not real candles), causing TRENDING/VOLATILE to rarely fire and
+  // RANGING to be the near-constant default — a 1.5 penalty would
+  // systematically over-block entries.  UNKNOWN gets 0.25 (insufficient data).
   const regimePenalty =
-    regime === 'RANGING' ? 1.5 :
-    regime === 'UNKNOWN' ? 0.5 :
+    regime === 'RANGING' ? 0.75 :
+    regime === 'UNKNOWN' ? 0.25 :
     0
   // Keep score-gate realistic for current scoring weights.
   const adjustedMinScore = Math.min(10, Math.max(1, config.entryMinScore / sensitivityFactor) + regimePenalty)
@@ -702,8 +706,12 @@ export function shouldEnterTrade(
 
   // Momentum score
   const expectedDir = side === 'CE' ? 'up' : 'down'
+  // Strong momentum: allow 1 "bad tick" in the window (4/5 same direction).
+  // Options LTP is noisy; requiring all ticks to align (5/5) means strong
+  // momentum almost never fires even in clearly trending conditions.
+  const strongMomentumThreshold = Math.max(2, config.entryMomentumCount - 1)
   addCheck('momentum-direction', 'Momentum alignment', momentum.direction === expectedDir, `${momentum.direction} x${momentum.count}`)
-  if (momentum.direction === expectedDir && momentum.count >= config.entryMomentumCount) {
+  if (momentum.direction === expectedDir && momentum.count >= strongMomentumThreshold) {
     score += 3
     reasons.push(`Momentum ${momentum.direction} x${momentum.count}`)
   } else if (momentum.direction === expectedDir) {
@@ -927,7 +935,7 @@ export function generateGhostSignal(
   regime: MarketRegime,
   pcr: number | undefined
 ): GhostSignal | null {
-  if (!entryDecision.enter || entryDecision.score < 4) return null
+  if (!entryDecision.enter || entryDecision.score < 7) return null
 
   return {
     id: `ghost-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,

@@ -446,6 +446,21 @@ class ExpiryParams:
 
 
 # ---------------------------------------------------------------------------
+# Intelligence Integration Parameters
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class IntelligenceParams:
+    mirofish_weight: float = 0.20        # weight in strategy selection scoring
+    rotation_weight: float = 0.25        # weight in underlying selection
+    fundamental_gate: bool = True        # block non-cleared stocks from trading
+    mirofish_confidence_min: float = 0.5 # ignore predictions below this threshold
+    rotation_leading_boost: float = 1.3  # lot multiplier for stocks in Leading sectors
+    rotation_lagging_penalty: float = 0.7 # lot multiplier for stocks in Lagging sectors
+    skip_on_conflicting_signals: bool = True  # skip when MiroFish and regime disagree
+
+
+# ---------------------------------------------------------------------------
 # Root Config — aggregates everything
 # ---------------------------------------------------------------------------
 
@@ -474,6 +489,7 @@ class TomicConfig:
     daily_plan: DailyPlanParams = field(default_factory=DailyPlanParams)
     position_manager: PositionManagerParams = field(default_factory=PositionManagerParams)
     expiry: ExpiryParams = field(default_factory=ExpiryParams)
+    intelligence: IntelligenceParams = field(default_factory=IntelligenceParams)
 
     @classmethod
     def load(cls, mode: Optional[str] = None) -> "TomicConfig":

@@ -192,7 +192,37 @@ def place_order_with_auth(
         executor.submit(async_log_order, "placeorder", original_data, error_response)
         return False, error_response, 500
 
-    if res.status == 200:
+    # Some broker modules may return a response object without `.status`,
+    # or `None` on transport failures. Normalize status safely.
+    response_status = None
+    if res is not None:
+        response_status = getattr(res, "status", None)
+        if response_status is None:
+            response_status = getattr(res, "status_code", None)
+    try:
+        response_status = int(response_status) if response_status is not None else None
+    except (TypeError, ValueError):
+        response_status = None
+
+    if response_status is None:
+        message = "Failed to place order"
+        if isinstance(response_data, dict):
+            message = (
+                response_data.get("errMsg")
+                or response_data.get("message")
+                or response_data.get("emsg")
+                or response_data.get("errorMessage")
+                or response_data.get("error")
+                or message
+            )
+        elif response_data:
+            message = str(response_data)
+
+        error_response = {"status": "error", "message": message}
+        executor.submit(async_log_order, "placeorder", original_data, error_response)
+        return False, error_response, 500
+
+    if response_status == 200:
         # Emit SocketIO event asynchronously (non-blocking)
         # Skip event emission for batch orders (they emit a summary event at the end)
         if emit_event:
@@ -222,8 +252,8 @@ def place_order_with_auth(
         )
         return True, order_response_data, 200
     else:
-        # Extract error message from response_data
-        # Different brokers use different error keys
+        # Extract error message from response_data.
+        # Different brokers use different error keys.
         message = "Failed to place order"
         if isinstance(response_data, dict):
             # Try broker-specific error formats
@@ -232,6 +262,7 @@ def place_order_with_auth(
                 response_data.get("message") or          # Generic format
                 response_data.get("emsg") or             # Alternative Kotak format
                 response_data.get("errorMessage") or     # Dhan format
+                response_data.get("error") or            # Transport and fallback format
                 "Failed to place order"
             )
             # Dhan nested error format: {"status": "failed", "data": {"DH-xxx": "msg"}}
@@ -239,10 +270,13 @@ def place_order_with_auth(
                 error_data = response_data["data"]
                 if isinstance(error_data, dict) and error_data:
                     message = next(iter(error_data.values()), message)
-        
+
+        elif response_data:
+            message = str(response_data)
+
         error_response = {"status": "error", "message": message}
         executor.submit(async_log_order, "placeorder", original_data, error_response)
-        return False, error_response, res.status if res.status != 200 else 500
+        return False, error_response, response_status if response_status != 200 else 500
 
 
 def place_order(

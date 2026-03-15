@@ -14,6 +14,7 @@ logger = get_logger(__name__)
 
 # Global httpx client for connection pooling
 _httpx_client = None
+_httpx_http1_client = None
 
 
 def get_httpx_client() -> httpx.Client:
@@ -28,11 +29,27 @@ def get_httpx_client() -> httpx.Client:
     global _httpx_client
 
     if _httpx_client is None:
-        _httpx_client = _create_http_client()
+        _httpx_client = _create_http_client(force_http2=None)
         logger.info(
             "Created HTTP client with automatic protocol negotiation (HTTP/2 preferred, HTTP/1.1 fallback)"
         )
     return _httpx_client
+
+
+def get_httpx_http1_client() -> httpx.Client:
+    """
+    Returns a dedicated HTTP/1.1 client.
+    Useful as a fallback when upstream servers intermittently terminate HTTP/2 streams.
+
+    Returns:
+        httpx.Client: A configured HTTP/1.1-only client
+    """
+    global _httpx_http1_client
+
+    if _httpx_http1_client is None:
+        _httpx_http1_client = _create_http_client(force_http2=False)
+        logger.info("Created dedicated HTTP/1.1 client for protocol-fallback retries")
+    return _httpx_http1_client
 
 
 def request(method: str, url: str, **kwargs) -> httpx.Response:
@@ -91,7 +108,7 @@ def delete(url: str, **kwargs) -> httpx.Response:
     return request("DELETE", url, **kwargs)
 
 
-def _create_http_client() -> httpx.Client:
+def _create_http_client(force_http2: Optional[bool] = None) -> httpx.Client:
     """
     Create a new HTTP client with automatic protocol negotiation and latency tracking.
     Enables both HTTP/2 and HTTP/1.1, letting httpx choose the best protocol.
@@ -138,8 +155,12 @@ def _create_http_client() -> httpx.Client:
         app_mode = os.environ.get("APP_MODE", "integrated").strip().strip("'\"")
         is_standalone = app_mode == "standalone"
 
-        # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
-        http2_enabled = not is_standalone
+        # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues,
+        # unless explicitly overridden by caller.
+        if force_http2 is None:
+            http2_enabled = not is_standalone
+        else:
+            http2_enabled = bool(force_http2)
 
         client = httpx.Client(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
@@ -156,7 +177,11 @@ def _create_http_client() -> httpx.Client:
             event_hooks={"request": [log_request], "response": [log_response]},
         )
 
-        if is_standalone:
+        if force_http2 is False:
+            logger.info("HTTP client configured in HTTP/1.1-only mode")
+        elif force_http2 is True:
+            logger.info("HTTP client configured in forced HTTP/2 mode")
+        elif is_standalone:
             logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
         else:
             logger.info("Running in integrated mode - HTTP/2 enabled for optimal performance")
@@ -173,9 +198,13 @@ def cleanup_httpx_client():
     Closes the global httpx client and releases its resources.
     Should be called when the application is shutting down.
     """
-    global _httpx_client
+    global _httpx_client, _httpx_http1_client
 
     if _httpx_client is not None:
         _httpx_client.close()
         _httpx_client = None
         logger.info("Closed HTTP client")
+    if _httpx_http1_client is not None:
+        _httpx_http1_client.close()
+        _httpx_http1_client = None
+        logger.info("Closed HTTP/1.1 fallback client")

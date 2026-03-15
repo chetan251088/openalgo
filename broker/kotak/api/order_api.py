@@ -1,6 +1,7 @@
 import json
 import os
 import urllib.parse
+from types import SimpleNamespace
 
 import httpx
 
@@ -14,7 +15,7 @@ from broker.kotak.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
-from utils.httpx_client import get_httpx_client
+from utils.httpx_client import get_httpx_client, get_httpx_http1_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -117,21 +118,46 @@ def place_order_api(data, auth_token):
     url = f"{base_url}/quick/order/rule/ms/place"
 
     try:
-        response = client.post(url, headers=headers, content=payload)
+        try:
+            response = client.post(url, headers=headers, content=payload)
+        except httpx.RemoteProtocolError as protocol_error:
+            logger.warning(
+                "Kotak placeorder HTTP/2 protocol error: %s. Retrying once over HTTP/1.1.",
+                protocol_error,
+            )
+            fallback_client = get_httpx_http1_client()
+            response = fallback_client.post(url, headers=headers, content=payload)
 
-        # Add status attribute for compatibility with the existing codebase
+        # Add status attribute for compatibility with existing service expectations
         response.status = response.status_code
 
-        response_data = json.loads(response.text)
+        try:
+            response_data = response.json()
+        except Exception:
+            response_data = {
+                "stat": "NotOk",
+                "error": "Non-JSON response from Kotak placeorder endpoint",
+                "raw": (response.text or "")[:500],
+            }
 
-        orderid = response_data["nOrdNo"] if response_data["stat"] == "Ok" else None
+        orderid = response_data.get("nOrdNo") if response_data.get("stat") == "Ok" else None
         return response, response_data, orderid
     except httpx.HTTPError as e:
         logger.error(f"HTTP error in place_order_api: {e}")
-        return None, {"stat": "NotOk", "error": str(e)}, None
+        error_response = {
+            "stat": "NotOk",
+            "error": str(e),
+            "message": str(e),
+        }
+        return SimpleNamespace(status=502, status_code=502), error_response, None
     except Exception as e:
         logger.error(f"Error in place_order_api: {e}")
-        return None, {"stat": "NotOk", "error": str(e)}, None
+        error_response = {
+            "stat": "NotOk",
+            "error": str(e),
+            "message": str(e),
+        }
+        return SimpleNamespace(status=500, status_code=500), error_response, None
 
 
 def place_smartorder_api(data, auth_token):
