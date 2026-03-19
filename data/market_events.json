@@ -1,0 +1,17 @@
+{
+  "events": [
+    {"date": "2026-04-09", "time": "10:00", "type": "major", "name": "RBI MPC Decision", "category": "rbi"},
+    {"date": "2026-06-06", "time": "10:00", "type": "major", "name": "RBI MPC Decision", "category": "rbi"},
+    {"date": "2026-08-07", "time": "10:00", "type": "major", "name": "RBI MPC Decision", "category": "rbi"},
+    {"date": "2026-10-03", "time": "10:00", "type": "major", "name": "RBI MPC Decision", "category": "rbi"},
+    {"date": "2026-12-05", "time": "10:00", "type": "major", "name": "RBI MPC Decision", "category": "rbi"},
+    {"date": "2026-05-13", "time": "17:30", "type": "major", "name": "India CPI Release", "category": "macro"},
+    {"date": "2026-05-30", "time": "17:30", "type": "major", "name": "India GDP Q4 Release", "category": "macro"},
+    {"date": "2026-05-06", "time": "23:30", "type": "major", "name": "US FOMC Decision", "category": "global"},
+    {"date": "2026-06-17", "time": "23:30", "type": "major", "name": "US FOMC Decision", "category": "global"},
+    {"date": "2026-07-29", "time": "23:30", "type": "major", "name": "US FOMC Decision", "category": "global"},
+    {"date": "2026-02-01", "time": "11:00", "type": "major", "name": "Union Budget 2026", "category": "budget"},
+    {"date": "2026-04-15", "time": "17:30", "type": "minor", "name": "India WPI Release", "category": "macro"},
+    {"date": "2026-05-01", "time": "17:30", "type": "minor", "name": "India PMI Manufacturing", "category": "macro"}
+  ]
+}

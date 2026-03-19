@@ -1,0 +1,16 @@
+{
+  "indices": [
+    {"key": "BANK", "name": "Nifty Bank", "symbol": "NIFTY BANK", "exchange": "NSE"},
+    {"key": "IT", "name": "Nifty IT", "symbol": "NIFTY IT", "exchange": "NSE"},
+    {"key": "FMCG", "name": "Nifty FMCG", "symbol": "NIFTY FMCG", "exchange": "NSE"},
+    {"key": "AUTO", "name": "Nifty Auto", "symbol": "NIFTY AUTO", "exchange": "NSE"},
+    {"key": "PHARMA", "name": "Nifty Pharma", "symbol": "NIFTY PHARMA", "exchange": "NSE"},
+    {"key": "METAL", "name": "Nifty Metal", "symbol": "NIFTY METAL", "exchange": "NSE"},
+    {"key": "PSUBANK", "name": "Nifty PSU Bank", "symbol": "NIFTY PSU BANK", "exchange": "NSE"},
+    {"key": "ENERGY", "name": "Nifty Energy", "symbol": "NIFTY ENERGY", "exchange": "NSE"},
+    {"key": "FINSERV", "name": "Nifty Financial Services", "symbol": "NIFTY FIN SERVICE", "exchange": "NSE"},
+    {"key": "REALTY", "name": "Nifty Realty", "symbol": "NIFTY REALTY", "exchange": "NSE"},
+    {"key": "CONSDUR", "name": "Nifty Consumer Durables", "symbol": "NIFTY CONSR DURBL", "exchange": "NSE"},
+    {"key": "MEDIA", "name": "Nifty Media", "symbol": "NIFTY MEDIA", "exchange": "NSE"}
+  ]
+}
