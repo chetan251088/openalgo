@@ -281,6 +281,9 @@ def create_app():
     from blueprints.intelligence import intelligence_bp
     app.register_blueprint(intelligence_bp)  # Register Intelligence service blueprint
 
+    from blueprints.market_pulse import market_pulse_bp
+    app.register_blueprint(market_pulse_bp)  # Register Market Pulse blueprint
+
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
