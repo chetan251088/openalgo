@@ -522,6 +522,11 @@ def react_command_center():
     return serve_react_app()
 
 
+@react_bp.route("/market-pulse", strict_slashes=False)
+def react_market_pulse():
+    return serve_react_app()
+
+
 # ============================================================
 # Flow Routes - Visual Workflow Automation
 # ============================================================
