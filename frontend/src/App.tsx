@@ -157,6 +157,9 @@ const TrafficDashboard = lazy(() => import('@/pages/monitoring/TrafficDashboard'
 const LatencyDashboard = lazy(() => import('@/pages/monitoring/LatencyDashboard'))
 const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
+// Market Pulse Dashboard
+const MarketPulse = lazy(() => import('@/pages/MarketPulse'))
+
 function App() {
   return (
     <AppErrorBoundary>
@@ -287,6 +290,8 @@ function App() {
                 <Route path="/scalping" element={<ScalpingDashboard />} />
                 <Route path="/scalping-v2" element={<ScalpingDashboard />} />
                 <Route path="/scalping-unified" element={<ScalpingUnifiedDashboard />} />
+                {/* Market Pulse Dashboard */}
+                <Route path="/market-pulse" element={<MarketPulse />} />
               </Route>
 
               {/* 404 Not Found */}

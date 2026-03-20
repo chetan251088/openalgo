@@ -12,6 +12,13 @@ from services.market_pulse_config import EXECUTION_SWING
 
 logger = logging.getLogger(__name__)
 
+# Screening thresholds
+NEAR_HIGH_THRESHOLD = 0.98  # Within 2% of 20d high
+NEAR_LOW_THRESHOLD = 1.02   # Within 2% of 20d low
+CHOP_BAND_WIDTH = 0.05      # ±5% around 20d SMA
+MIN_DATA_POINTS = 25        # Minimum history length required
+CONVICTION_THRESHOLD = 50   # Minimum conviction to include in ideas
+
 
 def screen_equities(
     constituent_data: dict[str, dict],
@@ -37,7 +44,7 @@ def screen_equities(
     for symbol, data in constituent_data.items():
         hist = data.get("history")
         sector = data.get("sector", "")
-        if hist is None or len(hist) < 25:
+        if hist is None or len(hist) < MIN_DATA_POINTS:
             continue
 
         closes = hist["close"]
@@ -47,7 +54,10 @@ def screen_equities(
         sma_20 = closes.tail(20).mean()
         sma_50 = closes.tail(50).mean() if len(closes) >= 50 else None
         sma_200 = closes.tail(200).mean() if len(closes) >= 200 else None
+        
+        # Compute 20d high/low outside regime blocks for consistency
         high_20d = closes.iloc[-21:-1].max() if len(closes) >= 21 else closes.max()
+        low_20d = closes.iloc[-21:-1].min() if len(closes) >= 21 else closes.min()
 
         # 5d return for relative strength
         stock_return_5d = (ltp - closes.iloc[-5]) / closes.iloc[-5] * 100 if len(closes) >= 5 else 0
@@ -58,7 +68,7 @@ def screen_equities(
 
         if regime == "uptrend":
             # Long setup: recent higher high, above SMA20/50
-            if ltp > high_20d * 0.98:  # near 20d high
+            if ltp > high_20d * NEAR_HIGH_THRESHOLD:  # near 20d high
                 conviction += 40
                 details.append("Near 20d high")
             if sma_50 and ltp > sma_50:
@@ -74,8 +84,7 @@ def screen_equities(
 
         elif regime == "downtrend":
             # Short setup: recent lower low, below SMA20/50
-            low_20d = closes.iloc[-21:-1].min() if len(closes) >= 21 else closes.min()
-            if ltp < low_20d * 1.02:
+            if ltp < low_20d * NEAR_LOW_THRESHOLD:
                 conviction += 40
                 details.append("Near 20d low")
             if sma_50 and ltp < sma_50:
@@ -87,11 +96,11 @@ def screen_equities(
 
         elif regime == "chop":
             # Range-trade setup: oscillating around SMA20
-            if sma_20 and abs(ltp - sma_20) / sma_20 < 0.05:
+            if sma_20 and abs(ltp - sma_20) / sma_20 < CHOP_BAND_WIDTH:
                 conviction = 50
                 details.append("Near SMA 20 (range bound)")
 
-        if conviction >= 50:
+        if conviction >= CONVICTION_THRESHOLD:
             ideas.append(
                 {
                     "symbol": symbol,
@@ -119,6 +128,11 @@ def select_fno_strategy(vix: float, regime: str) -> dict[str, Any]:
 
     Returns: Strategy recommendation with type, description, and risk/reward.
     """
+    if vix < 0:
+        raise ValueError("VIX cannot be negative")
+    if regime not in ("uptrend", "downtrend", "chop"):
+        raise ValueError(f"Invalid regime '{regime}'. Must be 'uptrend', 'downtrend', or 'chop'.")
+    
     if vix > 20:
         # High volatility: sell premium
         return {
