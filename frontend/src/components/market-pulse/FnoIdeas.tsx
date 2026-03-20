@@ -55,7 +55,7 @@ export function FnoIdeas({ ideas, regime, vixLevel }: FnoIdeasProps) {
                       {idea.bias}
                     </span>
                   </td>
-                  <td className="py-3 text-[#7fa2b1]">{idea.rationale}</td>
+                  <td className="py-1 text-[#7fa2b1] truncate text-ellipsis overflow-hidden max-w-[200px]">{idea.rationale}</td>
                 </tr>
               ))}
             </tbody>

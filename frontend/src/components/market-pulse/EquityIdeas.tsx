@@ -72,7 +72,7 @@ export function EquityIdeas({ ideas }: EquityIdeasProps) {
                   <td className="py-3 pr-4 text-right text-[#fca5a5]">{formatPrice(idea.stop_loss)}</td>
                   <td className="py-3 pr-4 text-right text-[#86efac]">{formatPrice(idea.target)}</td>
                   <td className="py-3 pr-4 text-[#9ac0cd]">{idea.conviction}</td>
-                  <td className="py-3 text-[#7fa2b1]">{idea.reason}</td>
+                  <td className="py-1 text-[#7fa2b1] truncate text-ellipsis overflow-hidden max-w-[200px]">{idea.reason}</td>
                 </tr>
               ))}
             </tbody>
