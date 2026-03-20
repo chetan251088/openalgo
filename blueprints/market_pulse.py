@@ -277,20 +277,77 @@ def market_pulse_api():
         # ── Step 3: Score all 5 categories ──────────────────────────
         logger.info("Computing scores")
 
-        volatility_score_data = score_volatility(vix_indicators)
-        volatility_score = volatility_score_data.get("score", 50)
+        # Extract volatility parameters
+        vix_current = vix_indicators.get("current")
+        vix_slope_5d = vix_indicators.get("slope_5d")
+        vix_percentile = vix_indicators.get("percentile_1y")
+        pcr = market_data.get("pcr")
+        volatility_score, volatility_rules = score_volatility(vix_current, vix_slope_5d, vix_percentile, pcr)
+        volatility_score_data = {"score": volatility_score, "rules": volatility_rules}
 
-        momentum_score_data = score_momentum(sector_histories, nifty_hist, constituent_data)
-        momentum_score = momentum_score_data.get("score", 50)
+        # Extract momentum parameters
+        sectors_above_20d, leadership_spread = _compute_momentum_data(sector_histories)
+        total_sectors = len(sector_histories) or 1
+        pct_above_50d, pct_above_200d, higher_highs_pct, _ = _compute_breadth_from_constituents(constituent_data, sector_histories)
+        # Count sectors with positive 5d momentum for rotation diversity
+        rotation_diversity = 0
+        for sector_hist in sector_histories.values():
+            if sector_hist is not None and len(sector_hist) >= 5:
+                hist_list = list(sector_hist) if not isinstance(sector_hist, list) else sector_hist
+                closes = [c.get("close", 0) for c in hist_list]
+                if len(closes) >= 5 and ((closes[-1] - closes[-5]) / closes[-5]) > 0:
+                    rotation_diversity += 1
+        momentum_score, momentum_rules = score_momentum(sectors_above_20d, total_sectors, leadership_spread, higher_highs_pct, rotation_diversity)
+        momentum_score_data = {"score": momentum_score, "rules": momentum_rules}
 
-        trend_score_data = score_trend(nifty_indicators, banknifty_indicators, nifty_hist)
-        trend_score = trend_score_data.get("score", 50)
+        # Extract trend parameters
+        nifty_ltp = nifty_indicators.get("ltp")
+        sma_20 = nifty_indicators.get("sma_20")
+        sma_50 = nifty_indicators.get("sma_50")
+        sma_200 = nifty_indicators.get("sma_200")
+        banknifty_ltp = banknifty_indicators.get("ltp")
+        banknifty_sma50 = banknifty_indicators.get("sma_50")
+        rsi = nifty_indicators.get("rsi_14")
+        slope_50d = nifty_indicators.get("slope_50d")
+        slope_200d = nifty_indicators.get("slope_200d")
+        trend_score, trend_rules = score_trend(nifty_ltp, sma_20, sma_50, sma_200, banknifty_ltp, banknifty_sma50, rsi, slope_50d, slope_200d)
+        trend_score_data = {"score": trend_score, "rules": trend_rules}
 
-        breadth_score_data = score_breadth(constituent_data, market_data.get("events", []))
-        breadth_score = breadth_score_data.get("score", 50)
+        # Extract breadth parameters
+        breadth_data = market_data.get("nse_breadth", {})
+        ad_ratio = breadth_data.get("ad_ratio") if breadth_data else None
+        highs_52w = breadth_data.get("highs_52w") if breadth_data else None
+        lows_52w = breadth_data.get("lows_52w") if breadth_data else None
+        breadth_score, breadth_rules = score_breadth(ad_ratio, pct_above_50d, pct_above_200d, highs_52w, lows_52w)
+        breadth_score_data = {"score": breadth_score, "rules": breadth_rules}
 
-        macro_score_data = score_macro(usdinr_indicators, vix_indicators, market_data.get("events", []))
-        macro_score = macro_score_data.get("score", 50)
+        # Extract macro parameters and find next event
+        usdinr_slope_5d = usdinr_indicators.get("slope_5d")
+        usdinr_slope_20d = usdinr_indicators.get("slope_20d")
+        # Find next event and compute hours away
+        events = market_data.get("events", [])
+        event_hours_away = 999.0
+        event_type = "none"
+        if events:
+            now = datetime.now(pytz.timezone("Asia/Kolkata"))
+            for event in events:
+                try:
+                    event_dt_str = event.get("date")
+                    if "T" in event_dt_str:
+                        event_dt = datetime.fromisoformat(event_dt_str).astimezone(pytz.timezone("Asia/Kolkata"))
+                    else:
+                        event_dt = pytz.timezone("Asia/Kolkata").localize(
+                            datetime.strptime(event_dt_str, "%Y-%m-%d").replace(hour=10, minute=30)
+                        )
+                    if event_dt > now:
+                        hours = (event_dt - now).total_seconds() / 3600
+                        if hours < event_hours_away:
+                            event_hours_away = hours
+                            event_type = "major" if event.get("severity") == "major" else "minor"
+                except Exception:
+                    pass
+        macro_score, macro_rules = score_macro(usdinr_slope_5d, usdinr_slope_20d, vix_current, event_hours_away, event_type, nifty_correlation=None)
+        macro_score_data = {"score": macro_score, "rules": macro_rules}
 
         # ── Step 4: Compute Market Quality & Decision ───────────────
         scores_dict = {
@@ -303,7 +360,7 @@ def market_pulse_api():
 
         market_quality_score = compute_market_quality(scores_dict)
         decision = get_decision(market_quality_score)
-        regime = classify_regime(nifty_indicators, banknifty_indicators)
+        regime = classify_regime(nifty_ltp, sma_20, sma_50, sma_200, slope_50d, vix_current)
 
         # ── Step 5: Track Breakouts & Execution Window ───────────────
         logger.info("Computing execution window")
@@ -323,8 +380,8 @@ def market_pulse_api():
         equity_ideas = screen_equities(constituent_data, regime, nifty_hist)
 
         # Generate F&O strategy recommendation
-        vix_current = vix_indicators.get("current_vix", 15.0)
-        fno_strategy = select_fno_strategy(vix_current, regime)
+        vix_current_fno = vix_current if vix_current is not None else 15.0
+        fno_strategy = select_fno_strategy(vix_current_fno, regime)
         fno_ideas = [
             {
                 "instrument": "NIFTY/BANKNIFTY",
@@ -333,8 +390,8 @@ def market_pulse_api():
                 "risk": fno_strategy.get("risk"),
                 "reward": fno_strategy.get("reward"),
                 "levels": fno_strategy.get("levels", {}),
-                "vix_regime": "high" if vix_current > 20 else "low/moderate",
-                "rationale": f"VIX={vix_current:.1f}, Regime={regime}",
+                "vix_regime": "high" if vix_current_fno > 20 else "low/moderate",
+                "rationale": f"VIX={vix_current_fno:.1f}, Regime={regime}",
             }
         ]
 

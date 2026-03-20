@@ -148,6 +148,7 @@ const TomicAgents = lazy(() => import('@/pages/tomic/TomicAgents'))
 const TomicRisk = lazy(() => import('@/pages/tomic/TomicRisk'))
 const OptionsSelling = lazy(() => import('@/pages/OptionsSelling'))
 const CommandCenter = lazy(() => import('@/pages/CommandCenter'))
+const MarketPulse = lazy(() => import('@/pages/MarketPulse'))
 
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
@@ -284,6 +285,7 @@ function App() {
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
+                <Route path="/market-pulse" element={<MarketPulse />} />
                 {/* Flow Editor (full-width for canvas) */}
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
                 {/* Scalping Dashboard */}
