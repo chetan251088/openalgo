@@ -21,10 +21,12 @@ Thumbs.db
 .idea/
 .claude/settings.json
 .claude/settings.local.json
+.claude/worktrees/
 .python-version
 config.ini
 .venvv
 .cloudflared/*.json
+.superpowers/
 
 #DB Files, CSV Files and Log/Tmp Files
 
@@ -90,6 +92,7 @@ out/
 !frontend/dist/docs/
 !frontend/dist/docs/**
 frontend/.cache/
+frontend/.tmp-market-pulse-build/
 *.local
 
 # Tailwind CSS output
