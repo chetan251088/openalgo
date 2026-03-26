@@ -41,7 +41,12 @@ npm run build</pre>
         )
 
     index_path = FRONTEND_DIST / "index.html"
-    return send_file(index_path, mimetype="text/html")
+    response = send_file(index_path, mimetype="text/html")
+    # Never cache the HTML shell; it must pick up the latest hashed asset references.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 # ============================================================

@@ -122,15 +122,12 @@ class IntelligenceService:
             rot_signal = self.rotation.get_cached()
 
         # 3. OpenScreener fundamentals (reads from cache file, <1s)
-        if symbols:
-            try:
-                self.screener.fetch_fundamentals(symbols)
-                fund_signal = self.screener.get_cached()
-            except Exception as e:
-                logger.warning("Screener refresh failed: %s", e)
-                errors.append(f"screener: {e}")
-                fund_signal = self.screener.get_cached()
-        else:
+        try:
+            self.screener.fetch_fundamentals(symbols or [])
+            fund_signal = self.screener.get_cached()
+        except Exception as e:
+            logger.warning("Screener refresh failed: %s", e)
+            errors.append(f"screener: {e}")
             fund_signal = self.screener.get_cached()
 
         # Pointer swap — this is the ONLY section under lock

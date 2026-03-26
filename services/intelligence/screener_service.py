@@ -46,28 +46,32 @@ class ScreenerService:
         self._promoter_min = float(os.getenv("FUNDAMENTAL_PROMOTER_MIN", "30"))
         self._fii_sell_max = float(os.getenv("FUNDAMENTAL_FII_SELL_MAX", "3"))
 
-    def fetch_fundamentals(self, symbols: list) -> dict:
+    def fetch_fundamentals(self, symbols: list | None) -> dict:
         """Load fundamentals from the sidecar cache file.
         Falls back to in-process openscreener if file is missing.
         """
+        symbols = [str(symbol).upper() for symbol in (symbols or []) if symbol]
         today = datetime.now().strftime("%Y-%m-%d")
         if self._cache_date == today and self._cache:
+            if not symbols:
+                return dict(self._cache)
             missing = [s for s in symbols if s not in self._cache]
             if not missing:
                 return {s: self._cache[s] for s in symbols if s in self._cache}
             symbols = missing
 
         # Try loading from sidecar cache file first
-        loaded = self._load_from_cache_file(symbols)
-        if loaded:
+        loaded_result = self._load_from_cache_file(symbols)
+        if loaded_result:
+            loaded, file_date = loaded_result
             logger.info("Loaded %d fundamental profiles from cache file", len(loaded))
             for sym, profile in loaded.items():
                 profile = self.apply_gate(profile)
                 loaded[sym] = profile
             self._cache.update(loaded)
-            self._cache_date = today
+            self._cache_date = file_date or today
             self._rebuild_signal()
-            return loaded
+            return dict(self._cache) if not symbols else loaded
 
         # Fallback: in-process fetch (discouraged in production)
         logger.warning(
@@ -78,7 +82,7 @@ class ScreenerService:
         )
         return self._fetch_in_process(symbols)
 
-    def _load_from_cache_file(self, symbols: list) -> Optional[dict]:
+    def _load_from_cache_file(self, symbols: list) -> Optional[tuple[dict, str]]:
         """Load from the JSON cache file written by the sidecar script."""
         if not self._cache_file.exists():
             return None
@@ -87,13 +91,15 @@ class ScreenerService:
             data = json.loads(self._cache_file.read_text(encoding="utf-8"))
             file_date = data.get("date", "")
             today = datetime.now().strftime("%Y-%m-%d")
+            all_profiles = data.get("profiles", {})
 
             if file_date != today:
                 logger.warning("Cache file is from %s, not today (%s). Data may be stale.", file_date, today)
 
             profiles = {}
-            for sym in symbols:
-                sym_data = data.get("profiles", {}).get(sym)
+            requested_symbols = symbols or sorted(all_profiles.keys())
+            for sym in requested_symbols:
+                sym_data = all_profiles.get(sym)
                 if sym_data:
                     profiles[sym] = FundamentalProfile(
                         symbol=sym,
@@ -109,13 +115,16 @@ class ScreenerService:
                 else:
                     profiles[sym] = FundamentalProfile(symbol=sym, cleared=True, block_reason="not_in_cache")
 
-            return profiles if profiles else None
+            return (profiles, file_date) if profiles else None
         except Exception as e:
             logger.error("Failed to read fundamentals cache: %s", e)
             return None
 
     def _fetch_in_process(self, symbols: list) -> dict:
         """In-process fallback using openscreener. Discouraged in production."""
+        if not symbols:
+            return dict(self._cache)
+
         profiles = {}
         try:
             from openscreener import Stock

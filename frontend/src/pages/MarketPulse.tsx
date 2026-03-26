@@ -1,30 +1,85 @@
+import { useEffect, useState } from 'react'
 import type { CategoryScore } from '@/api/market-pulse'
 import { AlertBanner } from '@/components/market-pulse/AlertBanner'
 import { EquityIdeas } from '@/components/market-pulse/EquityIdeas'
 import { FnoIdeas } from '@/components/market-pulse/FnoIdeas'
 import { HeroDecision } from '@/components/market-pulse/HeroDecision'
+import InstitutionalFlows from '@/components/market-pulse/InstitutionalFlows'
+import { KeyLevels } from '@/components/market-pulse/KeyLevels'
+import { OptionsPositioning } from '@/components/market-pulse/OptionsPositioning'
 import { RulesFiring } from '@/components/market-pulse/RulesFiring'
 import { ScoreBreakdown } from '@/components/market-pulse/ScoreBreakdown'
 import { ScorePanel } from '@/components/market-pulse/ScorePanel'
-import { SectorHeatmap } from '@/components/market-pulse/SectorHeatmap'
+import SectorHeatmap from '@/components/market-pulse/SectorHeatmap'
 import { TerminalAnalysis } from '@/components/market-pulse/TerminalAnalysis'
 import { TickerBar } from '@/components/market-pulse/TickerBar'
 import { useMarketPulse } from '@/hooks/useMarketPulse'
+import { useMarketPulseEnhanced } from '@/hooks/useMarketPulseEnhanced'
+import { IntradayContext } from '@/components/market-pulse/IntradayContext'
+import { ConfluenceBadge } from '@/components/market-pulse/ConfluenceBadge'
+import { GlobalCorrelation } from '@/components/market-pulse/GlobalCorrelation'
+import { OptionsGreeksDashboard } from '@/components/market-pulse/OptionsGreeksDashboard'
+import { AlertHistory } from '@/components/market-pulse/AlertHistory'
+import { SignalJournal } from '@/components/market-pulse/SignalJournal'
 
 export default function MarketPulse() {
   const { data, isLoading, isFetching, error, mode, setMode, refresh, secondsAgo } =
     useMarketPulse()
+  const equitySymbols = data?.equity_ideas?.map((idea) => idea.symbol) ?? []
+  const enhanced = useMarketPulseEnhanced(mode, equitySymbols)
+  const [showLoadingTroubleshoot, setShowLoadingTroubleshoot] = useState(false)
+
+  useEffect(() => {
+    if (!(isLoading && !data)) {
+      setShowLoadingTroubleshoot(false)
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowLoadingTroubleshoot(true)
+    }, 12000)
+
+    return () => window.clearTimeout(timer)
+  }, [data, isLoading])
 
   if (isLoading && !data) {
     return (
       <div className="flex h-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(8,145,178,0.18),transparent_35%),linear-gradient(180deg,#071018_0%,#09131c_40%,#0b1220_100%)] px-6 font-mono">
-        <div className="text-center">
+        <div className="max-w-xl text-center">
           <div className="text-sm uppercase tracking-[0.34em] text-[#5eead4]">
             Loading Market Pulse
           </div>
           <div className="mt-3 text-sm text-[#8db5c3]">
             Fetching quotes, breadth, event risk, and execution context.
           </div>
+          {showLoadingTroubleshoot ? (
+            <div className="mt-5 rounded-3xl border border-[#1f3340] bg-[#0d141d]/85 p-5 text-left shadow-[0_18px_60px_rgba(7,16,24,0.45)]">
+              <div className="text-[10px] uppercase tracking-[0.28em] text-[#fbbf24]">
+                Feed Delayed
+              </div>
+              <div className="mt-3 text-sm leading-relaxed text-[#d8eef6]">
+                Market Pulse is taking longer than expected to hydrate in this tab.
+                The backend may already be healthy, but the browser can still hold on to an old
+                page shell after a restart.
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => void refresh()}
+                  className="rounded-full border border-[#1f8ea8] px-4 py-2 text-[10px] uppercase tracking-[0.22em] text-[#67e8f9] transition-colors hover:bg-[#1f8ea8]/20"
+                >
+                  Retry Feed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="rounded-full border border-[#334155] px-4 py-2 text-[10px] uppercase tracking-[0.22em] text-[#9ac0cd] transition-colors hover:bg-[#334155]/20"
+                >
+                  Reload Page
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     )
@@ -85,11 +140,18 @@ export default function MarketPulse() {
             <div className="space-y-4 lg:col-span-4">
               <HeroDecision
                 decision={data.decision}
+                qualityDecision={data.quality_decision}
                 qualityScore={data.market_quality_score}
                 executionScore={data.execution_window_score}
+                directionalBias={data.directional_bias}
+              />
+              <ConfluenceBadge 
+                confluence={data.confluence} 
+                riskContext={data.risk_context} 
               />
               <TerminalAnalysis analysis={data.analysis} />
               <RulesFiring scores={data.scores} />
+              <AlertHistory data={enhanced.alerts} />
             </div>
 
             <div className="space-y-4 lg:col-span-8">
@@ -102,19 +164,35 @@ export default function MarketPulse() {
                 <ScorePanel name="Execution" data={executionPanel} />
               </div>
 
-              <SectorHeatmap sectors={data.sectors} />
+              <SectorHeatmap data={enhanced.sectors} />
               <ScoreBreakdown
                 scores={data.scores}
                 totalScore={data.market_quality_score}
               />
+              <GlobalCorrelation data={enhanced.global} />
+              {mode === 'day' && <IntradayContext data={enhanced.intraday} />}
+            </div>
+          </div>
+
+          <InstitutionalFlows data={enhanced.institutional} />
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="space-y-4">
+              <OptionsPositioning data={data.options_context} />
+              <OptionsGreeksDashboard data={enhanced.greeks} />
+            </div>
+            <div className="space-y-4">
+              <KeyLevels data={data.market_levels} />
+              <SignalJournal data={enhanced.journal} />
             </div>
           </div>
 
           <div className="grid gap-4 xl:grid-cols-2">
-            <EquityIdeas ideas={data.equity_ideas} />
+            <EquityIdeas ideas={data.equity_ideas} fundamentals={enhanced.fundamentals} />
             <FnoIdeas
               ideas={data.fno_ideas}
               regime={data.regime}
+              executionRegime={data.execution_regime}
               vixLevel={data.ticker?.INDIAVIX?.ltp}
             />
           </div>

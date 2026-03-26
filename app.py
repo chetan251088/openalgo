@@ -49,6 +49,7 @@ from blueprints.master_contract_status import (
     master_contract_status_bp,  # Import the master contract status blueprint
 )
 from blueprints.manual_trades import manual_trades_bp
+from blueprints.market_pulse import market_pulse_bp
 from blueprints.mock_replay import mock_replay_bp
 from blueprints.multi_broker import multi_broker_bp
 from blueprints.orders import orders_bp
@@ -259,6 +260,7 @@ def create_app():
     app.register_blueprint(scalping_bp)  # Register Scalping interface blueprint
     app.register_blueprint(ai_scalper_bp)
     app.register_blueprint(manual_trades_bp)
+    app.register_blueprint(market_pulse_bp)
     app.register_blueprint(mock_replay_bp)
     app.register_blueprint(multi_broker_bp)  # Register multi-broker proxy blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
@@ -384,6 +386,7 @@ def create_app():
             request.path.startswith("/static/")
             or request.path.startswith("/api/")
             or request.path.startswith("/assets/")  # React frontend assets
+            or request.path.startswith("/market-pulse/api/")
             or request.path
             in [
                 "/",

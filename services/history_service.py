@@ -1,4 +1,6 @@
 import importlib
+import os
+import threading
 import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -17,16 +19,31 @@ logger = get_logger(__name__)
 # Uses minimum interval between calls to prevent burst requests
 _last_history_call: float = 0.0
 _MIN_HISTORY_INTERVAL = 0.35  # 350ms between calls (~3 req/sec, evenly spaced)
+_HISTORY_RATE_LOCK = threading.Lock()
+_BROKER_MIN_HISTORY_INTERVAL = {
+    "zerodha": float(os.getenv("ZERODHA_HISTORY_MIN_INTERVAL", "1.0")),
+}
+_HISTORY_RETRY_ATTEMPTS = max(1, int(os.getenv("HISTORY_RETRY_ATTEMPTS", "3")))
+_HISTORY_RETRY_BASE_DELAY = float(os.getenv("HISTORY_RETRY_BASE_DELAY", "1.5"))
 
 
-def _enforce_rate_limit():
+def _enforce_rate_limit(broker: str | None = None):
     """Block until enough time has passed since the last request (~3 per second)."""
     global _last_history_call
-    now = time.monotonic()
-    elapsed = now - _last_history_call
-    if elapsed < _MIN_HISTORY_INTERVAL:
-        time.sleep(_MIN_HISTORY_INTERVAL - elapsed)
-    _last_history_call = time.monotonic()
+    broker_key = (broker or "").strip().lower()
+    min_interval = max(_MIN_HISTORY_INTERVAL, _BROKER_MIN_HISTORY_INTERVAL.get(broker_key, 0.0))
+
+    with _HISTORY_RATE_LOCK:
+        now = time.monotonic()
+        elapsed = now - _last_history_call
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _last_history_call = time.monotonic()
+
+
+def _is_history_rate_limit_error(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return "too many requests" in message or "rate limit" in message or "429" in message
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -136,8 +153,33 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
-        # Call the broker's get_history method
-        df = data_handler.get_history(symbol, exchange, interval, start_date, end_date)
+        # Call the broker's get_history method with retry/backoff on broker throttling
+        last_error = None
+        for attempt in range(1, _HISTORY_RETRY_ATTEMPTS + 1):
+            try:
+                df = data_handler.get_history(symbol, exchange, interval, start_date, end_date)
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < _HISTORY_RETRY_ATTEMPTS and _is_history_rate_limit_error(e):
+                    delay = _HISTORY_RETRY_BASE_DELAY * attempt
+                    logger.warning(
+                        "Broker history rate limited for %s %s:%s %s. Retrying in %.2fs (%d/%d)",
+                        broker,
+                        exchange,
+                        symbol,
+                        interval,
+                        delay,
+                        attempt,
+                        _HISTORY_RETRY_ATTEMPTS,
+                    )
+                    _enforce_rate_limit(broker)
+                    time.sleep(delay)
+                    continue
+                raise
+
+        if last_error and "df" not in locals():
+            raise last_error
 
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid data format returned from broker")
@@ -273,10 +315,6 @@ def get_history(
             end_date=end_date,
         )
 
-    # Source: 'api' (default) - Fetch from broker API
-    # Enforce 3 requests/second rate limit for broker history calls
-    _enforce_rate_limit()
-
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(
@@ -284,12 +322,14 @@ def get_history(
         )
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        _enforce_rate_limit(broker_name)
         return get_history_with_auth(
             AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange, interval, start_date, end_date
         )
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
+        _enforce_rate_limit(broker)
         return get_history_with_auth(
             auth_token, feed_token, broker, symbol, exchange, interval, start_date, end_date
         )

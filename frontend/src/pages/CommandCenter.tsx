@@ -104,41 +104,27 @@ export default function CommandCenter() {
   }
 
   const checkServiceHealth = useCallback(async () => {
-    const results: Record<string, ServiceHealth> = {}
-
-    for (const svc of SERVICES) {
-      if (svc.url.startsWith('ws://')) {
-        results[svc.key] = {
-          name: svc.name, url: svc.url,
-          status: 'online', latencyMs: null, lastCheck: Date.now(),
-        }
-        continue
+    try {
+      const response = await webClient.get('/intelligence/service-health')
+      if (response.data?.status === 'success' && response.data?.data?.services) {
+        setServices(response.data.data.services as Record<string, ServiceHealth>)
+        return
       }
-
-      const start = performance.now()
-      try {
-        const healthUrl = svc.key === 'mirofish'
-          ? `${svc.url}/health`
-          : svc.key === 'rotation'
-            ? `${svc.url}/api/health`
-            : `${svc.url}/health`
-
-        const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(3000) })
-        const latency = Math.round(performance.now() - start)
-        results[svc.key] = {
-          name: svc.name, url: svc.url,
-          status: resp.ok ? 'online' : 'degraded',
-          latencyMs: latency, lastCheck: Date.now(),
-        }
-      } catch {
-        results[svc.key] = {
-          name: svc.name, url: svc.url,
-          status: 'offline', latencyMs: null, lastCheck: Date.now(),
-        }
-      }
+    } catch {
+      // Fall through to a neutral placeholder state when the server-side probe fails.
     }
 
-    setServices(results)
+    const fallback: Record<string, ServiceHealth> = {}
+    for (const svc of SERVICES) {
+      fallback[svc.key] = {
+        name: svc.name,
+        url: svc.url,
+        status: 'checking',
+        latencyMs: null,
+        lastCheck: Date.now(),
+      }
+    }
+    setServices(fallback)
   }, [])
 
   const fetchTomicStatus = useCallback(async () => {
@@ -251,7 +237,7 @@ export default function CommandCenter() {
     }
   }, [rotation, mirofish, tomicStatus])
 
-  const onlineCount = Object.values(services).filter(s => s.status === 'online').length
+  const reachableCount = Object.values(services).filter(s => s.status !== 'offline').length
   const totalServices = SERVICES.length
   const positionSummary = positions[0] ?? null
 
@@ -290,8 +276,8 @@ export default function CommandCenter() {
             <CardTitle className="text-sm flex items-center gap-2">
               <Monitor className="h-4 w-4" />
               System Health
-              <Badge variant={onlineCount === totalServices ? 'default' : 'destructive'} className="ml-auto">
-                {onlineCount}/{totalServices} Online
+              <Badge variant={reachableCount === totalServices ? 'default' : 'secondary'} className="ml-auto">
+                {reachableCount}/{totalServices} Reachable
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -379,10 +365,13 @@ export default function CommandCenter() {
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Fundamental Gate</span>
               {fundamentals ? (
-                <span className="text-xs">
-                  <span className="text-green-600 font-mono">{fundamentals.clearedSymbols.length}</span> cleared /
-                  <span className="text-red-600 font-mono ml-1">{Object.keys(fundamentals.blockedSymbols).length}</span> blocked
-                </span>
+                <div className="flex items-center gap-2 text-xs">
+                  <span>
+                    <span className="text-green-600 font-mono">{fundamentals.clearedSymbols.length}</span> cleared /
+                    <span className="text-red-600 font-mono ml-1">{Object.keys(fundamentals.blockedSymbols).length}</span> blocked
+                  </span>
+                  {fundamentals.stale && <Badge variant="outline" className="text-xs text-yellow-600">STALE</Badge>}
+                </div>
               ) : (
                 <Badge variant="outline">Not loaded</Badge>
               )}

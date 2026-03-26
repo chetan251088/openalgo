@@ -4,10 +4,12 @@ import { cn } from '@/lib/utils'
 interface FnoIdeasProps {
   ideas: FnoIdea[]
   regime: string
+  executionRegime?: string
   vixLevel?: number
 }
 
-export function FnoIdeas({ ideas, regime, vixLevel }: FnoIdeasProps) {
+export function FnoIdeas({ ideas, regime, executionRegime, vixLevel }: FnoIdeasProps) {
+  const showExecutionRegime = executionRegime && executionRegime !== regime
   return (
     <section className="rounded-2xl border border-[#1f3340] bg-[#0d141d]/90 p-4 font-mono">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -15,7 +17,8 @@ export function FnoIdeas({ ideas, regime, vixLevel }: FnoIdeasProps) {
           F&O Ideas
         </span>
         <div className="text-[10px] uppercase tracking-[0.18em] text-[#6b8797]">
-          VIX {typeof vixLevel === 'number' ? vixLevel.toFixed(1) : 'n/a'} | Regime {regime}
+          VIX {typeof vixLevel === 'number' ? vixLevel.toFixed(1) : 'n/a'} | Backdrop {regime}
+          {showExecutionRegime ? ` | Session ${executionRegime}` : ''}
         </div>
       </div>
 
@@ -55,7 +58,11 @@ export function FnoIdeas({ ideas, regime, vixLevel }: FnoIdeasProps) {
                       {idea.bias}
                     </span>
                   </td>
-                  <td className="py-1 text-[#7fa2b1] truncate text-ellipsis overflow-hidden max-w-[200px]">{idea.rationale}</td>
+                  <td className="py-3 text-[#7fa2b1]">
+                    <div className="max-w-[260px] whitespace-normal leading-relaxed">
+                      {idea.rationale}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

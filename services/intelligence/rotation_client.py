@@ -55,6 +55,11 @@ class RotationClient:
         tail: int = 8,
     ) -> Optional[RotationSignal]:
         """Fetch RRG data and detect quadrant transitions."""
+        now = time.time()
+        if self._cache is not None and (now - self._cache_ts) < self._cache_ttl:
+            self._cache.stale = False
+            return self._cache
+
         try:
             with httpx.Client(timeout=15) as client:
                 resp = client.get(

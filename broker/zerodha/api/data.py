@@ -79,11 +79,12 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         # Make the request using the shared client
         try:
             response = _send_request(client)
-        except httpx.RemoteProtocolError as protocol_error:
-            # Zerodha/Kite sometimes terminates long-lived HTTP/2 streams.
+        except (httpx.RemoteProtocolError, KeyError) as protocol_error:
+            # Zerodha/Kite sometimes terminates long-lived HTTP/2 streams,
+            # which can cause either RemoteProtocolError or an internal httpx KeyError on the stream_id.
             # Retry once over a dedicated HTTP/1.1 client before failing.
             logger.warning(
-                "HTTP/2 protocol error for Zerodha endpoint %s: %s. Retrying once over HTTP/1.1.",
+                "HTTP/2 protocol/stream error for Zerodha endpoint %s: %s. Retrying once over HTTP/1.1.",
                 endpoint,
                 protocol_error,
             )

@@ -11,6 +11,11 @@ Supports two auth modes:
 
 import os
 import logging
+import socket
+import time
+from urllib.parse import urlparse
+
+import requests
 from flask import Blueprint, jsonify, request, session, current_app
 
 logger = logging.getLogger(__name__)
@@ -18,11 +23,96 @@ logger = logging.getLogger(__name__)
 intelligence_bp = Blueprint("intelligence", __name__, url_prefix="/intelligence")
 
 _SERVICE_KEY = os.getenv("INTELLIGENCE_API_KEY", "")
+_SERVICE_PROBES = [
+    {"name": "OpenAlgo (Kotak)", "url": "http://127.0.0.1:5000", "key": "kotak", "kind": "http", "health_path": "/health/status"},
+    {"name": "OpenAlgo (Dhan)", "url": "http://127.0.0.1:5001", "key": "dhan", "kind": "http", "health_path": "/health/status"},
+    {"name": "OpenAlgo (Zerodha)", "url": "http://127.0.0.1:5002", "key": "zerodha", "kind": "http", "health_path": "/health/status"},
+    {"name": "MiroFish API", "url": os.getenv("MIROFISH_URL", "http://127.0.0.1:5003"), "key": "mirofish", "kind": "http", "health_path": "/health"},
+    {"name": "Sector Rotation", "url": os.getenv("SECTOR_ROTATION_URL", "http://127.0.0.1:8000"), "key": "rotation", "kind": "http", "health_path": "/api/health"},
+    {"name": "WS Proxy (Kotak)", "url": "ws://127.0.0.1:8765", "key": "ws_kotak", "kind": "tcp"},
+    {"name": "WS Proxy (Dhan)", "url": "ws://127.0.0.1:8766", "key": "ws_dhan", "kind": "tcp"},
+    {"name": "WS Proxy (Zerodha)", "url": "ws://127.0.0.1:8767", "key": "ws_zerodha", "kind": "tcp"},
+]
 
 
 def _get_service():
     """Get the IntelligenceService from app extensions."""
     return current_app.extensions.get("intelligence_service")
+
+
+def _probe_http_service(service_def: dict) -> dict:
+    health_url = f"{service_def['url'].rstrip('/')}{service_def.get('health_path', '/health')}"
+    started_at = time.perf_counter()
+
+    try:
+        response = requests.get(health_url, timeout=3.0, allow_redirects=False)
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        status = "online" if response.status_code < 400 else "degraded"
+
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                payload = response.json()
+                payload_status = str(payload.get("status", "")).lower()
+                if payload_status in {"warn", "fail", "error"} and status == "online":
+                    status = "degraded"
+            except ValueError:
+                pass
+
+        return {
+            "name": service_def["name"],
+            "url": service_def["url"],
+            "status": status,
+            "latencyMs": latency_ms,
+            "lastCheck": int(time.time() * 1000),
+            "httpStatus": response.status_code,
+        }
+    except requests.RequestException as exc:
+        return {
+            "name": service_def["name"],
+            "url": service_def["url"],
+            "status": "offline",
+            "latencyMs": None,
+            "lastCheck": int(time.time() * 1000),
+            "error": str(exc),
+        }
+
+
+def _probe_tcp_service(service_def: dict) -> dict:
+    parsed = urlparse(service_def["url"])
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+
+    if port is None:
+        return {
+            "name": service_def["name"],
+            "url": service_def["url"],
+            "status": "offline",
+            "latencyMs": None,
+            "lastCheck": int(time.time() * 1000),
+            "error": "Missing port in service definition",
+        }
+
+    started_at = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=2.0):
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+        return {
+            "name": service_def["name"],
+            "url": service_def["url"],
+            "status": "online",
+            "latencyMs": latency_ms,
+            "lastCheck": int(time.time() * 1000),
+        }
+    except OSError as exc:
+        return {
+            "name": service_def["name"],
+            "url": service_def["url"],
+            "status": "offline",
+            "latencyMs": None,
+            "lastCheck": int(time.time() * 1000),
+            "error": str(exc),
+        }
 
 
 def _require_auth():
@@ -236,6 +326,34 @@ def intelligence_health():
     return jsonify({
         "status": "success",
         "data": service.get_source_health(),
+    })
+
+
+@intelligence_bp.route("/service-health", methods=["GET"])
+def service_health():
+    """Server-side health checks for all Command Center dependencies.
+
+    Command Center runs in the browser, where cross-port checks on localhost are
+    brittle due to CORS and host mismatch between localhost/127.0.0.1. Probe the
+    local services from the backend instead and return a normalized status map.
+    """
+    auth_err = _require_auth()
+    if auth_err:
+        return auth_err
+
+    results = {}
+    for service_def in _SERVICE_PROBES:
+        if service_def["kind"] == "tcp":
+            result = _probe_tcp_service(service_def)
+        else:
+            result = _probe_http_service(service_def)
+        results[service_def["key"]] = result
+
+    return jsonify({
+        "status": "success",
+        "data": {
+            "services": results,
+        },
     })
 
 
