@@ -77,7 +77,9 @@ def _fetch_history_for_strength(symbol: str, exchange: str) -> dict[str, Any]:
         return cached
 
     try:
-        from services.history_service import get_history_with_auth
+        from services.history_service import get_history
+        import pandas as pd
+        
         api_key = _get_api_key()
         if not api_key:
             return {}
@@ -85,15 +87,29 @@ def _fetch_history_for_strength(symbol: str, exchange: str) -> dict[str, Any]:
         end = date.today()
         start = end - timedelta(days=365)
 
-        df = get_history_with_auth(
+        success, response_data, _ = get_history(
             symbol=symbol,
             exchange=exchange,
             interval="D",
             start_date=start.isoformat(),
             end_date=end.isoformat(),
+            api_key=api_key,
         )
 
-        if df is None or df.empty:
+        if not success or not response_data or "data" not in response_data:
+            return {}
+            
+        df = pd.DataFrame(response_data["data"])
+        if df.empty:
+            return {}
+
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["high"] = pd.to_numeric(df["high"], errors="coerce")
+        df["low"] = pd.to_numeric(df["low"], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+        df = df.dropna(subset=["close"]).reset_index(drop=True)
+
+        if df.empty:
             return {}
 
         closes = df["close"].tolist()

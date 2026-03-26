@@ -5,7 +5,8 @@ import os
 
 from cachetools import TTLCache
 from cryptography.fernet import Fernet
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine
+from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -58,19 +59,85 @@ class Settings(Base):
     security_repeat_offender_limit = Column(Integer, default=2)  # Bans before permanent ban
 
 
+SETTINGS_SCHEMA_COLUMNS = [
+    ("smtp_server", "VARCHAR(255)"),
+    ("smtp_port", "INTEGER"),
+    ("smtp_username", "VARCHAR(255)"),
+    ("smtp_password_encrypted", "TEXT"),
+    ("smtp_use_tls", "BOOLEAN DEFAULT 1"),
+    ("smtp_from_email", "VARCHAR(255)"),
+    ("smtp_helo_hostname", "VARCHAR(255)"),
+    ("security_auto_ban_enabled", "BOOLEAN DEFAULT 0"),
+    ("security_404_threshold", "INTEGER DEFAULT 100"),
+    ("security_404_ban_duration", "INTEGER DEFAULT 0"),
+    ("security_api_threshold", "INTEGER DEFAULT 100"),
+    ("security_api_ban_duration", "INTEGER DEFAULT 0"),
+    ("security_repeat_offender_limit", "INTEGER DEFAULT 2"),
+]
+
+
+def _ensure_settings_schema():
+    """
+    Bring older settings tables forward to the current schema.
+
+    `create_all()` only creates missing tables; it does not add newly introduced
+    columns to an existing table. We repair that here so upgrades do not depend
+    on running a separate manual migration step first.
+    """
+    inspector = inspect(engine)
+    if "settings" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("settings")}
+    missing_columns = [
+        (column_name, column_def)
+        for column_name, column_def in SETTINGS_SCHEMA_COLUMNS
+        if column_name not in existing_columns
+    ]
+
+    if not missing_columns:
+        return
+
+    with engine.begin() as conn:
+        for column_name, column_def in missing_columns:
+            conn.execute(text(f"ALTER TABLE settings ADD COLUMN {column_name} {column_def}"))
+
+    logger.info(
+        "Settings DB: Added missing schema columns: %s",
+        ", ".join(column_name for column_name, _ in missing_columns),
+    )
+
+
+def _get_or_create_settings_row():
+    """Fetch the singleton settings row, auto-repairing schema drift if needed."""
+    try:
+        settings = Settings.query.first()
+    except OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+        db_session.rollback()
+        logger.warning("Settings DB schema drift detected. Repairing settings table columns.")
+        _ensure_settings_schema()
+        settings = Settings.query.first()
+
+    if not settings:
+        settings = Settings(analyze_mode=False)
+        db_session.add(settings)
+        db_session.commit()
+
+    return settings
+
+
 def init_db():
     """Initialize the settings database"""
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Settings DB", logger)
+    _ensure_settings_schema()
 
     # Create default settings only if no settings exist (with race condition protection)
     try:
-        if not Settings.query.first():
-            logger.debug("Settings DB: Creating default configuration (Live Mode)")
-            default_settings = Settings(analyze_mode=False)
-            db_session.add(default_settings)
-            db_session.commit()
+        _get_or_create_settings_row()
     except Exception as e:
         db_session.rollback()
         logger.debug(f"Settings DB: Default config may already exist (race condition): {e}")
@@ -85,11 +152,7 @@ def get_analyze_mode():
         return _settings_cache[cache_key]
 
     # Cache miss - query database
-    settings = Settings.query.first()
-    if not settings:
-        settings = Settings(analyze_mode=False)  # Default to Live Mode
-        db_session.add(settings)
-        db_session.commit()
+    settings = _get_or_create_settings_row()
 
     # Store in cache
     _settings_cache[cache_key] = settings.analyze_mode
@@ -98,12 +161,8 @@ def get_analyze_mode():
 
 def set_analyze_mode(mode: bool):
     """Set analyze mode setting"""
-    settings = Settings.query.first()
-    if not settings:
-        settings = Settings(analyze_mode=mode)
-        db_session.add(settings)
-    else:
-        settings.analyze_mode = mode
+    settings = _get_or_create_settings_row()
+    settings.analyze_mode = mode
     db_session.commit()
 
     # Invalidate cache after update
@@ -142,9 +201,7 @@ def _decrypt_password(encrypted_password: str) -> str:
 
 def get_smtp_settings():
     """Get SMTP configuration"""
-    settings = Settings.query.first()
-    if not settings:
-        return None
+    settings = _get_or_create_settings_row()
 
     return {
         "smtp_server": settings.smtp_server,
@@ -169,10 +226,7 @@ def set_smtp_settings(
     smtp_helo_hostname=None,
 ):
     """Set SMTP configuration"""
-    settings = Settings.query.first()
-    if not settings:
-        settings = Settings(analyze_mode=False)
-        db_session.add(settings)
+    settings = _get_or_create_settings_row()
 
     if smtp_server is not None:
         settings.smtp_server = smtp_server
@@ -202,20 +256,7 @@ def get_security_settings():
         return _settings_cache[cache_key]
 
     # Cache miss - query database
-    settings = Settings.query.first()
-    if not settings:
-        # Create with defaults
-        settings = Settings(
-            analyze_mode=False,
-            security_auto_ban_enabled=False,
-            security_404_threshold=100,
-            security_404_ban_duration=0,
-            security_api_threshold=100,
-            security_api_ban_duration=0,
-            security_repeat_offender_limit=2,
-        )
-        db_session.add(settings)
-        db_session.commit()
+    settings = _get_or_create_settings_row()
 
     result = {
         "auto_ban_enabled": bool(settings.security_auto_ban_enabled) if settings.security_auto_ban_enabled is not None else False,
@@ -240,10 +281,7 @@ def set_security_settings(
     repeat_offender_limit=None,
 ):
     """Set security configuration"""
-    settings = Settings.query.first()
-    if not settings:
-        settings = Settings(analyze_mode=False)
-        db_session.add(settings)
+    settings = _get_or_create_settings_row()
 
     if auto_ban_enabled is not None:
         settings.security_auto_ban_enabled = auto_ban_enabled
