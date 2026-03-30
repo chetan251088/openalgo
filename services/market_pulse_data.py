@@ -53,9 +53,13 @@ _options_context_cache_ts: float = 0
 _delivery_cache: dict[str, Any] | None = None
 _delivery_cache_ts: float = 0
 _intraday_history_cache: dict[tuple[str, str, str], tuple[float, pd.DataFrame | None]] = {}
+_daily_history_cache: dict[tuple[str, str], tuple[float, pd.DataFrame | None]] = {}
 _history_source_cache: dict[tuple[str, str, str], str] = {}
 _PCR_CACHE_TTL_SECONDS = _int_env("MARKET_PULSE_PCR_CACHE_TTL_SECONDS", 300)
 _DAY_BASE_CACHE_TTL_SECONDS = _int_env("MARKET_PULSE_DAY_BASE_CACHE_TTL_SECONDS", 300)
+# Daily candles don't change during the session — cache for 1 hour by default.
+# Only the latest (today's) candle can shift intraday; previous candles are immutable.
+_DAILY_HISTORY_CACHE_TTL_SECONDS = _int_env("MARKET_PULSE_DAILY_HISTORY_CACHE_TTL", 3600)
 _INSTITUTIONAL_CACHE_TTL_SECONDS = _int_env(
     "MARKET_PULSE_INSTITUTIONAL_CACHE_TTL_SECONDS",
     900,
@@ -72,7 +76,7 @@ _INTRADAY_CACHE_TTL_SECONDS = _int_env("MARKET_PULSE_INTRADAY_CACHE_TTL_SECONDS"
 _INTRADAY_CONTEXT_WORKERS = max(1, _int_env("MARKET_PULSE_INTRADAY_WORKERS", 6))
 _INTRADAY_LOOKBACK_DAYS = _int_env("MARKET_PULSE_INTRADAY_LOOKBACK_DAYS", 7)
 _INTRADAY_INTERVAL = os.getenv("MARKET_PULSE_INTRADAY_INTERVAL", "5m").strip() or "5m"
-_HISTORY_FETCH_WORKERS = max(1, _int_env("MARKET_PULSE_HISTORY_WORKERS", 12))
+_HISTORY_FETCH_WORKERS = max(1, _int_env("MARKET_PULSE_HISTORY_WORKERS", 3))
 _HISTORY_SOURCE_MODE = _history_source_env()
 _DELIVERY_AVG_WINDOW = max(3, _int_env("MARKET_PULSE_DELIVERY_AVG_WINDOW", 10))
 _FII_DII_HISTORY_URL = os.getenv(
@@ -811,7 +815,17 @@ def _select_day_constituent_history_symbols(
 
 
 def _fetch_history(symbol: str, exchange: str, days: int = 200) -> pd.DataFrame | None:
-    """Fetch historical OHLCV, preferring Historify/DuckDB when configured."""
+    """Fetch historical OHLCV, preferring Historify/DuckDB when configured.
+
+    Results are cached per (symbol, exchange) for _DAILY_HISTORY_CACHE_TTL_SECONDS
+    (default 1 hour) so repeated market-pulse refresh cycles don't re-hit the
+    broker API for data that cannot have changed.
+    """
+    cache_key = (symbol, exchange)
+    cached_ts, cached_df = _daily_history_cache.get(cache_key, (0.0, None))
+    if cached_df is not None and (time.time() - cached_ts) < _DAILY_HISTORY_CACHE_TTL_SECONDS:
+        return cached_df
+
     try:
         from services.history_service import get_history
 
@@ -867,6 +881,7 @@ def _fetch_history(symbol: str, exchange: str, days: int = 200) -> pd.DataFrame 
                         )
                         continue
                     _history_source_cache[source_key] = source
+                    _daily_history_cache[cache_key] = (time.time(), df)
                     return df
 
             last_error = data.get("message") if isinstance(data, dict) else None
@@ -886,15 +901,19 @@ def _fetch_history_batch(
     if not jobs:
         return results
 
+    # Per-job timeout: each history fetch must complete within this many seconds.
+    # Prevents a single slow/hung broker call from stalling the entire batch.
+    _JOB_TIMEOUT = float(os.getenv("MARKET_PULSE_HISTORY_JOB_TIMEOUT", "20"))
+
     with ThreadPoolExecutor(max_workers=min(_HISTORY_FETCH_WORKERS, len(jobs))) as pool:
         future_map = {
             pool.submit(_fetch_history, symbol, exchange, days): key
             for key, symbol, exchange, days in jobs
         }
-        for future in as_completed(future_map):
+        for future in as_completed(future_map, timeout=_JOB_TIMEOUT * len(jobs)):
             key = future_map[future]
             try:
-                results[key] = future.result()
+                results[key] = future.result(timeout=_JOB_TIMEOUT)
             except Exception as e:
                 logger.warning("Parallel history fetch failed for %s - %s", key, e)
                 results[key] = None

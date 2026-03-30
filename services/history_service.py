@@ -21,24 +21,35 @@ _last_history_call: float = 0.0
 _MIN_HISTORY_INTERVAL = 0.35  # 350ms between calls (~3 req/sec, evenly spaced)
 _HISTORY_RATE_LOCK = threading.Lock()
 _BROKER_MIN_HISTORY_INTERVAL = {
-    "zerodha": float(os.getenv("ZERODHA_HISTORY_MIN_INTERVAL", "1.0")),
+    "zerodha": float(os.getenv("ZERODHA_HISTORY_MIN_INTERVAL", "1.5")),
 }
 _HISTORY_RETRY_ATTEMPTS = max(1, int(os.getenv("HISTORY_RETRY_ATTEMPTS", "3")))
 _HISTORY_RETRY_BASE_DELAY = float(os.getenv("HISTORY_RETRY_BASE_DELAY", "1.5"))
 
 
 def _enforce_rate_limit(broker: str | None = None):
-    """Block until enough time has passed since the last request (~3 per second)."""
+    """Block until enough time has passed since the last request (~3 per second).
+
+    Uses slot-reservation pattern: the lock is held only long enough to read and
+    advance _last_history_call, then released before sleeping.  This lets multiple
+    worker threads sleep concurrently (pipelined) instead of serialising behind the
+    lock, which previously turned every sleep into a stall for all other threads.
+    """
     global _last_history_call
     broker_key = (broker or "").strip().lower()
     min_interval = max(_MIN_HISTORY_INTERVAL, _BROKER_MIN_HISTORY_INTERVAL.get(broker_key, 0.0))
 
     with _HISTORY_RATE_LOCK:
         now = time.monotonic()
-        elapsed = now - _last_history_call
-        if elapsed < min_interval:
-            time.sleep(min_interval - elapsed)
-        _last_history_call = time.monotonic()
+        # Determine when this call is allowed to proceed
+        ready_at = max(now, _last_history_call + min_interval)
+        # Reserve this slot so the next caller queues after it
+        _last_history_call = ready_at
+        sleep_secs = ready_at - now
+
+    # Sleep OUTSIDE the lock so other threads can reserve their own slots concurrently
+    if sleep_secs > 0:
+        time.sleep(sleep_secs)
 
 
 def _is_history_rate_limit_error(error: Exception | str) -> bool:

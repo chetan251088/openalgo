@@ -52,19 +52,39 @@ def _get_session() -> requests.Session | None:
     return _session
 
 
+# Track which endpoints have returned 404 so we warn once, then stay quiet
+_dead_endpoints: set[str] = set()
+
+
 def _nse_get(path: str) -> dict | None:
-    """Make a GET request to NSE API endpoint."""
+    """Make a GET request to NSE API endpoint.
+
+    404 behaviour: warns once per process lifetime (endpoint moved/removed),
+    then silently returns None to avoid log spam.
+    """
     global _last_failure_time, _session
     sess = _get_session()
     if sess is None:
         return None
-        
+
     try:
-        resp = sess.get(f"{_NSE_BASE}{path}", timeout=3) # Fail fast
+        resp = sess.get(f"{_NSE_BASE}{path}", timeout=3)
         if resp.status_code == 200:
+            # If it was previously dead and came back, re-enable warnings
+            _dead_endpoints.discard(path)
             return resp.json()
-        logger.warning("NSE %s returned status %d", path, resp.status_code)
-        # Only trigger cooldown for actual blocks/rate-limits/server errors, not 404 Not Found
+        if resp.status_code == 404:
+            if path not in _dead_endpoints:
+                logger.warning(
+                    "NSE endpoint gone (404): %s — update market_pulse_nse.py or "
+                    "market_pulse_institutional.py if this data is needed",
+                    path,
+                )
+                _dead_endpoints.add(path)
+            # else: already warned, stay silent
+        else:
+            logger.warning("NSE %s returned status %d", path, resp.status_code)
+        # Only trigger cooldown for blocks/rate-limits/server errors, not 404
         if resp.status_code in (401, 403, 429, 502, 503, 504):
             _last_failure_time = time.time()
             _session = None

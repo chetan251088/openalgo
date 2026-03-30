@@ -7,6 +7,7 @@ Uses DuckDB for lightweight, serverless persistence.
 
 import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -19,21 +20,36 @@ _DB_PATH = os.getenv(
     os.path.join(os.path.dirname(__file__), "..", "db", "market_pulse_journal.duckdb"),
 )
 
+_conn = None
+_conn_lock = threading.Lock()
 _db_initialized = False
 
 
 def _get_db():
-    """Get DuckDB connection, creating schema if needed."""
-    global _db_initialized
+    """Get or create a persistent DuckDB connection (singleton per process)."""
+    global _conn, _db_initialized
     import duckdb
+
+    if _conn is not None:
+        return _conn
 
     db_dir = os.path.dirname(os.path.abspath(_DB_PATH))
     os.makedirs(db_dir, exist_ok=True)
 
-    conn = duckdb.connect(_DB_PATH)
+    # Retry a few times in case another process briefly holds the lock
+    last_exc = None
+    for attempt in range(5):
+        try:
+            _conn = duckdb.connect(_DB_PATH)
+            break
+        except duckdb.IOException as exc:
+            last_exc = exc
+            time.sleep(0.3 * (attempt + 1))
+    else:
+        raise last_exc
 
     if not _db_initialized:
-        conn.execute("""
+        _conn.execute("""
             CREATE TABLE IF NOT EXISTS signals (
                 signal_id VARCHAR PRIMARY KEY,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -54,7 +70,7 @@ def _get_db():
                 market_context TEXT       -- JSON blob of full context
             )
         """)
-        conn.execute("""
+        _conn.execute("""
             CREATE TABLE IF NOT EXISTS outcomes (
                 outcome_id VARCHAR PRIMARY KEY,
                 signal_id VARCHAR NOT NULL,
@@ -70,7 +86,7 @@ def _get_db():
         """)
         _db_initialized = True
 
-    return conn
+    return _conn
 
 
 def log_signal(
@@ -94,37 +110,37 @@ def log_signal(
     signal_id = str(uuid.uuid4())[:12]
 
     try:
-        conn = _get_db()
-        conn.execute(
-            """
-            INSERT INTO signals (
-                signal_id, timestamp, symbol, signal_type, conviction,
-                entry, stop_loss, target, risk_reward, ltp,
-                sector, reason, regime, quality_score, execution_score,
-                mode, market_context
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                signal_id,
-                datetime.now(),
-                symbol,
-                signal_type,
-                conviction,
-                entry,
-                stop_loss,
-                target,
-                risk_reward,
-                ltp,
-                sector,
-                reason,
-                regime,
-                quality_score,
-                execution_score,
-                mode,
-                str(market_context) if market_context else None,
-            ],
-        )
-        conn.close()
+        with _conn_lock:
+            conn = _get_db()
+            conn.execute(
+                """
+                INSERT INTO signals (
+                    signal_id, timestamp, symbol, signal_type, conviction,
+                    entry, stop_loss, target, risk_reward, ltp,
+                    sector, reason, regime, quality_score, execution_score,
+                    mode, market_context
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    signal_id,
+                    datetime.now(),
+                    symbol,
+                    signal_type,
+                    conviction,
+                    entry,
+                    stop_loss,
+                    target,
+                    risk_reward,
+                    ltp,
+                    sector,
+                    reason,
+                    regime,
+                    quality_score,
+                    execution_score,
+                    mode,
+                    str(market_context) if market_context else None,
+                ],
+            )
         logger.info("Signal logged: %s %s %s @ %s", signal_id, conviction, signal_type, symbol)
         return signal_id
     except Exception as e:
@@ -143,28 +159,28 @@ def log_outcome(
 ) -> bool:
     """Log an outcome for a signal."""
     try:
-        conn = _get_db()
-        outcome_id = str(uuid.uuid4())[:12]
-        conn.execute(
-            """
-            INSERT INTO outcomes (
-                outcome_id, signal_id, outcome_date,
-                exit_price, pnl_pct, hit_target, hit_sl, bars_held, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                outcome_id,
-                signal_id,
-                datetime.now(),
-                exit_price,
-                pnl_pct,
-                hit_target,
-                hit_sl,
-                bars_held,
-                notes,
-            ],
-        )
-        conn.close()
+        with _conn_lock:
+            conn = _get_db()
+            outcome_id = str(uuid.uuid4())[:12]
+            conn.execute(
+                """
+                INSERT INTO outcomes (
+                    outcome_id, signal_id, outcome_date,
+                    exit_price, pnl_pct, hit_target, hit_sl, bars_held, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    outcome_id,
+                    signal_id,
+                    datetime.now(),
+                    exit_price,
+                    pnl_pct,
+                    hit_target,
+                    hit_sl,
+                    bars_held,
+                    notes,
+                ],
+            )
         return True
     except Exception as e:
         logger.exception("Failed to log outcome: %s", e)
@@ -190,16 +206,16 @@ def auto_log_ideas(
 
         # Dedup: check if we already logged this symbol today
         try:
-            conn = _get_db()
-            existing = conn.execute(
-                """
-                SELECT COUNT(*) FROM signals
-                WHERE symbol = ? AND signal_type = ?
-                AND CAST(timestamp AS DATE) = CURRENT_DATE
-                """,
-                [idea["symbol"], idea["signal"]],
-            ).fetchone()
-            conn.close()
+            with _conn_lock:
+                conn = _get_db()
+                existing = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM signals
+                    WHERE symbol = ? AND signal_type = ?
+                    AND CAST(timestamp AS DATE) = CURRENT_DATE
+                    """,
+                    [idea["symbol"], idea["signal"]],
+                ).fetchone()
 
             if existing and existing[0] > 0:
                 continue  # Already logged today
@@ -233,24 +249,24 @@ def get_signal_history(
 ) -> list[dict[str, Any]]:
     """Get recent signal history with outcomes."""
     try:
-        conn = _get_db()
-        rows = conn.execute(
-            """
-            SELECT
-                s.signal_id, s.timestamp, s.symbol, s.signal_type,
-                s.conviction, s.entry, s.stop_loss, s.target,
-                s.risk_reward, s.ltp, s.sector, s.reason,
-                s.regime, s.quality_score, s.mode,
-                o.exit_price, o.pnl_pct, o.hit_target, o.hit_sl, o.bars_held
-            FROM signals s
-            LEFT JOIN outcomes o ON s.signal_id = o.signal_id
-            WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
-            ORDER BY s.timestamp DESC
-            LIMIT ?
-            """,
-            [days, limit],
-        ).fetchall()
-        conn.close()
+        with _conn_lock:
+            conn = _get_db()
+            rows = conn.execute(
+                """
+                SELECT
+                    s.signal_id, s.timestamp, s.symbol, s.signal_type,
+                    s.conviction, s.entry, s.stop_loss, s.target,
+                    s.risk_reward, s.ltp, s.sector, s.reason,
+                    s.regime, s.quality_score, s.mode,
+                    o.exit_price, o.pnl_pct, o.hit_target, o.hit_sl, o.bars_held
+                FROM signals s
+                LEFT JOIN outcomes o ON s.signal_id = o.signal_id
+                WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+                """,
+                [days, limit],
+            ).fetchall()
 
         columns = [
             "signal_id", "timestamp", "symbol", "signal_type",
@@ -268,60 +284,59 @@ def get_signal_history(
 def get_win_rate_stats(days: int = 30) -> dict[str, Any]:
     """Compute win-rate statistics by regime, sector, etc."""
     try:
-        conn = _get_db()
+        with _conn_lock:
+            conn = _get_db()
 
-        # Overall stats
-        overall = conn.execute(
-            """
-            SELECT
-                COUNT(*) as total,
-                COUNT(o.outcome_id) as with_outcome,
-                SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN o.hit_sl THEN 1 ELSE 0 END) as losses,
-                AVG(o.pnl_pct) as avg_pnl
-            FROM signals s
-            LEFT JOIN outcomes o ON s.signal_id = o.signal_id
-            WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
-            AND s.conviction = 'HIGH'
-            """,
-            [days],
-        ).fetchone()
+            # Overall stats
+            overall = conn.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(o.outcome_id) as with_outcome,
+                    SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN o.hit_sl THEN 1 ELSE 0 END) as losses,
+                    AVG(o.pnl_pct) as avg_pnl
+                FROM signals s
+                LEFT JOIN outcomes o ON s.signal_id = o.signal_id
+                WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
+                AND s.conviction = 'HIGH'
+                """,
+                [days],
+            ).fetchone()
 
-        # By regime
-        by_regime = conn.execute(
-            """
-            SELECT
-                s.regime,
-                COUNT(*) as total,
-                SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
-                AVG(o.pnl_pct) as avg_pnl
-            FROM signals s
-            LEFT JOIN outcomes o ON s.signal_id = o.signal_id
-            WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
-            AND s.conviction = 'HIGH'
-            GROUP BY s.regime
-            """,
-            [days],
-        ).fetchall()
+            # By regime
+            by_regime = conn.execute(
+                """
+                SELECT
+                    s.regime,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
+                    AVG(o.pnl_pct) as avg_pnl
+                FROM signals s
+                LEFT JOIN outcomes o ON s.signal_id = o.signal_id
+                WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
+                AND s.conviction = 'HIGH'
+                GROUP BY s.regime
+                """,
+                [days],
+            ).fetchall()
 
-        # By sector
-        by_sector = conn.execute(
-            """
-            SELECT
-                s.sector,
-                COUNT(*) as total,
-                SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
-                AVG(o.pnl_pct) as avg_pnl
-            FROM signals s
-            LEFT JOIN outcomes o ON s.signal_id = o.signal_id
-            WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
-            AND s.conviction = 'HIGH'
-            GROUP BY s.sector
-            """,
-            [days],
-        ).fetchall()
-
-        conn.close()
+            # By sector
+            by_sector = conn.execute(
+                """
+                SELECT
+                    s.sector,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN o.hit_target THEN 1 ELSE 0 END) as wins,
+                    AVG(o.pnl_pct) as avg_pnl
+                FROM signals s
+                LEFT JOIN outcomes o ON s.signal_id = o.signal_id
+                WHERE s.timestamp >= CURRENT_DATE - (? * INTERVAL '1 DAY')
+                AND s.conviction = 'HIGH'
+                GROUP BY s.sector
+                """,
+                [days],
+            ).fetchall()
 
         total = overall[0] if overall else 0
         with_outcome = overall[1] if overall else 0

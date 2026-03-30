@@ -79,6 +79,7 @@ from blueprints.tomic import (
     set_tomic_runtime,
     tomic_bp,  # Import the TOMIC multi-agent blueprint
 )
+from blueprints.signal_engine import signal_engine_bp  # Import Signal Engine blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from cors import cors  # Import the CORS instance
@@ -282,6 +283,9 @@ def create_app():
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(tomic_bp)  # Register TOMIC multi-agent trading blueprint
+    app.register_blueprint(signal_engine_bp)  # Register Signal Engine blueprint
+    from blueprints.signal_engine import init_signal_engine
+    init_signal_engine(app)  # Restore AUTO mode if active before restart
 
     from blueprints.intelligence import intelligence_bp
     app.register_blueprint(intelligence_bp)  # Register Intelligence service blueprint

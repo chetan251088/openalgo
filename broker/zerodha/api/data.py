@@ -456,11 +456,24 @@ class BrokerData:
             # Initialize empty list to store DataFrames
             dfs = []
 
-            # Process data in 60-day chunks
+            # Chunk size depends on resolution:
+            #   Daily/weekly/monthly → Zerodha allows up to 2000 days per request.
+            #   Intraday (minute/hourly) → Zerodha enforces a 60-day limit per request.
+            if resolution == "day":
+                chunk_days = 2000
+            else:
+                chunk_days = 59
+
+            first_chunk = True
             current_start = start_date
             while current_start <= end_date:
-                # Calculate chunk end date (60 days or remaining period)
-                current_end = min(current_start + timedelta(days=59), end_date)
+                # Rate-limit between chunks (not before the first — caller already did that)
+                if not first_chunk:
+                    time.sleep(0.5)
+                first_chunk = False
+
+                # Calculate chunk end date
+                current_end = min(current_start + timedelta(days=chunk_days), end_date)
 
                 # Format dates for API call
                 from_str = current_start.strftime("%Y-%m-%d+00:00:00")

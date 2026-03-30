@@ -2,6 +2,7 @@ import {
   BarChart3,
   Bell,
   BookOpen,
+  BrainCircuit,
   ClipboardList,
   Code2,
   Database,
@@ -42,6 +43,7 @@ export const navItems: NavItem[] = [
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
   { href: '/scalping', label: 'Scalping', icon: Zap },
+  { href: '/signal-engine', label: 'Signal Engine', icon: BrainCircuit },
 ]
 
 // Items shown in mobile bottom navigation
@@ -84,8 +86,7 @@ export const externalLinks = {
 // Shared utility to check if a route is active
 // Uses startsWith for routes with nested pages (like /strategy/*)
 export function isActiveRoute(pathname: string, href: string): boolean {
-  if (href === '/strategy') {
-    return pathname.startsWith('/strategy')
-  }
+  if (href === '/strategy') return pathname.startsWith('/strategy')
+  if (href === '/signal-engine') return pathname.startsWith('/signal-engine')
   return pathname === href
 }

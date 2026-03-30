@@ -5,10 +5,13 @@ Fetches FII/DII daily cash-market flows, F&O participant-wise OI,
 streak counters, flow strength, and 45-day heatmap from NSE APIs.
 
 Data sources:
-  - NSE /api/fiidiiTradeReact  (daily FII/DII cash flows)
-  - NSE /api/reports           (F&O participant-wise OI)
+  - NSE /api/fiidiiTradeReact          (daily FII/DII cash flows)
+  - NSE /api/daily-reports?key=FO      (get current participant OI CSV URL)
+  - nsearchives.nseindia.com           (download fao_participant_oi_*.csv)
 """
 
+import csv
+import io
 import logging
 import os
 import time
@@ -16,6 +19,8 @@ import threading
 from collections import deque
 from datetime import datetime, date
 from typing import Any
+
+import requests as _requests
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ _CACHE_TTL = max(15, int(os.getenv("MARKET_PULSE_INST_CACHE_TTL", "1800")))  # 3
 # 45-day ring buffer for heatmap (persists in-memory across requests)
 _daily_flow_history: deque[dict[str, Any]] = deque(maxlen=45)
 _history_initialized = False
+
 
 
 def _is_market_hours() -> bool:
@@ -243,8 +249,97 @@ def _compute_flow_strength(fii_net: float, dii_net: float) -> float:
 
 # ── F&O Participant-wise OI ──────────────────────────────────────
 
+_NSE_ARCHIVES_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.nseindia.com/",
+    "Accept": "*/*",
+}
+
+
+def _get_participant_oi_csv_url() -> str | None:
+    """Query /api/daily-reports?key=FO to get the latest participant OI CSV URL."""
+    data = _nse_get("/api/daily-reports?key=FO")
+    if not isinstance(data, dict):
+        return None
+    # CurrentDay has intraday data; PreviousDay has the last complete trading day
+    for section in ("CurrentDay", "PreviousDay"):
+        for item in data.get(section, []):
+            if item.get("fileKey") == "FO-PARTICIPANTWISE-OI":
+                path = item.get("filePath", "")
+                name = item.get("fileActlName", "")
+                if path and name:
+                    return path + name
+    return None
+
+
+def _download_participant_oi_csv(url: str) -> str | None:
+    """Download participant OI CSV from nsearchives (no NSE session required)."""
+    try:
+        r = _requests.get(url, headers=_NSE_ARCHIVES_HEADERS, timeout=15)
+        if r.status_code == 200:
+            return r.text
+        logger.debug("nsearchives %s returned %d", url, r.status_code)
+    except Exception as e:
+        logger.warning("Failed to download participant OI CSV: %s", e)
+    return None
+
+
+def _parse_participant_oi_csv(csv_text: str) -> dict[str, Any] | None:
+    """Parse NSE participant OI CSV into our unified format.
+
+    CSV columns (after skipping title row):
+      0: Client Type
+      1: Future Index Long    2: Future Index Short
+      3: Future Stock Long    4: Future Stock Short
+      5-12: Options (call/put long/short)
+      13: Total Long  14: Total Short
+    """
+    try:
+        reader = csv.reader(io.StringIO(csv_text))
+        by_client: dict[str, list[str]] = {}
+        for row in reader:
+            if not row:
+                continue
+            client = row[0].strip().strip('"').upper()
+            if client in ("FII", "FII/FPI", "DII", "CLIENT", "PRO", "TOTAL"):
+                by_client[client] = row
+
+        fii_row = by_client.get("FII") or by_client.get("FII/FPI")
+        dii_row = by_client.get("DII")
+        if not fii_row and not dii_row:
+            return None
+
+        def _make_futures(row: list[str], long_idx: int, short_idx: int) -> dict:
+            lng = int(float(row[long_idx].strip().replace(",", "") or 0))
+            sht = int(float(row[short_idx].strip().replace(",", "") or 0))
+            return {"long": lng, "short": sht, "ls_ratio": round(lng / max(sht, 1), 2)}
+
+        result: dict[str, Any] = {}
+        if fii_row and len(fii_row) >= 5:
+            result["fii_index_futures"] = _make_futures(fii_row, 1, 2)
+            result["fii_stock_futures"] = _make_futures(fii_row, 3, 4)
+            if len(fii_row) >= 15:
+                result["fii_total_long"] = int(float(fii_row[13].strip().replace(",", "") or 0))
+                result["fii_total_short"] = int(float(fii_row[14].strip().replace(",", "") or 0))
+        if dii_row and len(dii_row) >= 5:
+            result["dii_index_futures"] = _make_futures(dii_row, 1, 2)
+            result["dii_stock_futures"] = _make_futures(dii_row, 3, 4)
+
+        return result if result else None
+
+    except Exception as e:
+        logger.warning("Failed to parse participant OI CSV: %s", e)
+        return None
+
+
 def fetch_participant_oi() -> dict[str, Any]:
-    """Fetch FII/DII participant-wise open interest from NSE F&O reports.
+    """Fetch FII/DII participant-wise open interest from NSE F&O CSV reports.
+
+    Flow:
+      1. GET /api/daily-reports?key=FO  →  find fao_participant_oi_*.csv URL
+      2. Download CSV from nsearchives.nseindia.com  (no session needed)
+      3. Parse CSV
 
     Returns: {
         fii_index_futures: {long, short, ls_ratio},
@@ -261,115 +356,39 @@ def fetch_participant_oi() -> dict[str, Any]:
         "fii_index_futures": {"long": 0, "short": 0, "ls_ratio": 0},
         "fii_stock_futures": {"long": 0, "short": 0, "ls_ratio": 0},
         "dii_index_futures": {"long": 0, "short": 0, "ls_ratio": 0},
+        "dii_stock_futures": {"long": 0, "short": 0, "ls_ratio": 0},
         "sentiment": "Unavailable",
         "sentiment_score": 50,
         "available": False,
     }
 
     try:
-        # NSE participant-wise OI endpoint
-        data = _nse_get("/api/reports?archives=%5B%7B%22name%22%3A%22F%26O%20-%20Pair%20wise%20Open%20Interest%22%7D%5D")
-
-        if data is None:
-            # Try alternative endpoint
-            data = _nse_get("/api/reports?archives=%5B%7B%22name%22%3A%22FO%20Participant%20wise%20Open%20Interest%22%7D%5D")
-
-        if data is None:
-            # Try the direct participant OI endpoint
-            data = _nse_get("/api/participant-wise-open-interest")
-
-        if data is None:
-            logger.warning("All participant OI endpoints returned None")
+        csv_url = _get_participant_oi_csv_url()
+        if not csv_url:
+            logger.warning("Could not resolve participant OI CSV URL from /api/daily-reports")
             _set_cache("participant_oi", result)
             return result
 
-        # Parse the response — structure varies by endpoint
-        parsed = _parse_participant_oi(data)
+        csv_text = _download_participant_oi_csv(csv_url)
+        if not csv_text:
+            logger.warning("Failed to download participant OI CSV: %s", csv_url)
+            _set_cache("participant_oi", result)
+            return result
+
+        parsed = _parse_participant_oi_csv(csv_text)
         if parsed:
             result.update(parsed)
             result["available"] = True
-
-            # Compute sentiment from FII futures L/S ratio
             fii_ls = result["fii_index_futures"]["ls_ratio"]
             result["sentiment"], result["sentiment_score"] = _compute_fno_sentiment(fii_ls)
+        else:
+            logger.warning("Participant OI CSV parsed empty from: %s", csv_url)
 
     except Exception as e:
         logger.exception("Error fetching participant OI: %s", e)
 
     _set_cache("participant_oi", result)
     return result
-
-
-def _parse_participant_oi(data: Any) -> dict[str, Any] | None:
-    """Parse NSE participant OI data into our unified format."""
-    try:
-        # The data can come as list or dict with nested structure
-        rows = []
-        if isinstance(data, list):
-            rows = data
-        elif isinstance(data, dict):
-            rows = data.get("data", [])
-            if not rows and "aaData" in data:
-                rows = data["aaData"]
-
-        if not rows:
-            return None
-
-        result = {}
-        for row in rows:
-            if isinstance(row, dict):
-                client_type = str(row.get("clientType", row.get("Client_Type", ""))).upper().strip()
-                # Map client types
-                if "FII" in client_type or "FPI" in client_type:
-                    prefix = "fii"
-                elif "DII" in client_type:
-                    prefix = "dii"
-                else:
-                    continue
-
-                # Index Futures
-                fut_long = _parse_crore(row.get("futIdxLong", row.get("Future_Index_Long", 0)))
-                fut_short = _parse_crore(row.get("futIdxShort", row.get("Future_Index_Short", 0)))
-
-                result[f"{prefix}_index_futures"] = {
-                    "long": int(fut_long),
-                    "short": int(fut_short),
-                    "ls_ratio": round(fut_long / max(fut_short, 1), 2),
-                }
-
-                # Stock Futures
-                stk_long = _parse_crore(row.get("futStkLong", row.get("Future_Stock_Long", 0)))
-                stk_short = _parse_crore(row.get("futStkShort", row.get("Future_Stock_Short", 0)))
-
-                result[f"{prefix}_stock_futures"] = {
-                    "long": int(stk_long),
-                    "short": int(stk_short),
-                    "ls_ratio": round(stk_long / max(stk_short, 1), 2),
-                }
-
-            elif isinstance(row, list) and len(row) >= 10:
-                # Array format: [client_type, fut_idx_long, fut_idx_short, ...]
-                client_type = str(row[0]).upper().strip()
-                if "FII" in client_type or "FPI" in client_type:
-                    prefix = "fii"
-                elif "DII" in client_type:
-                    prefix = "dii"
-                else:
-                    continue
-
-                fut_long = _parse_crore(row[1])
-                fut_short = _parse_crore(row[2])
-                result[f"{prefix}_index_futures"] = {
-                    "long": int(fut_long),
-                    "short": int(fut_short),
-                    "ls_ratio": round(fut_long / max(fut_short, 1), 2),
-                }
-
-        return result if result else None
-
-    except Exception as e:
-        logger.warning("Failed to parse participant OI: %s", e)
-        return None
 
 
 def _compute_fno_sentiment(fii_ls_ratio: float) -> tuple[str, int]:

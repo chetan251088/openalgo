@@ -19,8 +19,10 @@ import { IntradayContext } from '@/components/market-pulse/IntradayContext'
 import { ConfluenceBadge } from '@/components/market-pulse/ConfluenceBadge'
 import { GlobalCorrelation } from '@/components/market-pulse/GlobalCorrelation'
 import { OptionsGreeksDashboard } from '@/components/market-pulse/OptionsGreeksDashboard'
+import { OptionsSimulator } from '@/components/market-pulse/OptionsSimulator'
 import { AlertHistory } from '@/components/market-pulse/AlertHistory'
 import { SignalJournal } from '@/components/market-pulse/SignalJournal'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 export default function MarketPulse() {
   const { data, isLoading, isFetching, error, mode, setMode, refresh, secondsAgo } =
@@ -178,8 +180,22 @@ export default function MarketPulse() {
 
           <div className="grid gap-4 xl:grid-cols-2">
             <div className="space-y-4">
-              <OptionsPositioning data={data.options_context} />
-              <OptionsGreeksDashboard data={enhanced.greeks} />
+              <Tabs defaultValue="positioning" className="w-full">
+                <TabsList className="w-full grid grid-cols-3 mb-2">
+                  <TabsTrigger value="positioning">Positioning</TabsTrigger>
+                  <TabsTrigger value="greeks">Greeks</TabsTrigger>
+                  <TabsTrigger value="simulator">Simulator</TabsTrigger>
+                </TabsList>
+                <TabsContent value="positioning">
+                  <OptionsPositioning data={data.options_context} />
+                </TabsContent>
+                <TabsContent value="greeks">
+                  <OptionsGreeksDashboard data={enhanced.greeks} />
+                </TabsContent>
+                <TabsContent value="simulator">
+                  <OptionsSimulator vixLevel={data.ticker?.INDIAVIX?.ltp} />
+                </TabsContent>
+              </Tabs>
             </div>
             <div className="space-y-4">
               <KeyLevels data={data.market_levels} />

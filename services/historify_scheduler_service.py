@@ -108,6 +108,7 @@ class HistorifyScheduler:
 
             active_schedules = get_active_schedules()
             restored_count = 0
+            catchup_schedules = []
 
             for schedule in active_schedules:
                 try:
@@ -121,14 +122,79 @@ class HistorifyScheduler:
                         restored_count += 1
                         logger.debug(f"Restored schedule: {schedule['name']}")
 
+                    # Check if this schedule missed a run while the app was off
+                    if self._schedule_needs_catchup(schedule):
+                        catchup_schedules.append(schedule)
+
                 except Exception as e:
                     logger.warning(f"Failed to restore schedule {schedule['id']}: {e}")
 
             if restored_count > 0:
                 logger.info(f"Restored {restored_count} Historify schedules")
 
+            # Trigger catch-up runs in background after a short delay
+            # so the app has time to fully initialize before downloading data
+            if catchup_schedules:
+                logger.info(
+                    f"Scheduling catch-up for {len(catchup_schedules)} missed "
+                    f"Historify schedule(s) (app was offline)"
+                )
+                t = threading.Thread(
+                    target=self._run_catchup,
+                    args=(catchup_schedules,),
+                    daemon=True,
+                    name="historify-catchup",
+                )
+                t.start()
+
         except Exception as e:
             logger.exception(f"Error restoring schedules: {e}")
+
+    def _schedule_needs_catchup(self, schedule: dict[str, Any]) -> bool:
+        """
+        Return True if the schedule missed a run because the app was offline.
+
+        Rules:
+        - daily schedule: missed if last_run_at is more than 25 hours ago (or never ran)
+        - interval schedule: always catch up immediately (treat first fire normally)
+        """
+        try:
+            schedule_type = schedule.get("schedule_type")
+            last_run_at = schedule.get("last_run_at")
+
+            if schedule_type == "daily":
+                if last_run_at is None:
+                    # Never ran — run now if it's past today's scheduled time
+                    time_str = schedule.get("time_of_day", "16:15")
+                    hour, minute = map(int, time_str.split(":"))
+                    from zoneinfo import ZoneInfo
+                    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+                    scheduled_today = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    return now_ist >= scheduled_today
+
+                # Parse last_run_at (may be datetime or string)
+                if isinstance(last_run_at, str):
+                    last_run_at = datetime.fromisoformat(last_run_at)
+                age = datetime.now() - last_run_at.replace(tzinfo=None)
+                return age > timedelta(hours=25)
+
+        except Exception as e:
+            logger.debug(f"Could not determine catch-up need for schedule {schedule.get('id')}: {e}")
+        return False
+
+    def _run_catchup(self, schedules: list[dict[str, Any]]) -> None:
+        """Run catch-up executions for schedules that were missed."""
+        import time
+        # Wait for app to be ready before downloading
+        time.sleep(30)
+        for schedule in schedules:
+            try:
+                logger.info(
+                    f"[catch-up] Running missed schedule: {schedule['name']} (id={schedule['id']})"
+                )
+                execute_schedule(schedule["id"])
+            except Exception as e:
+                logger.warning(f"[catch-up] Failed for schedule {schedule['id']}: {e}")
 
     def _add_schedule_job(self, schedule: dict[str, Any]) -> str | None:
         """Add a schedule to APScheduler based on its configuration"""
